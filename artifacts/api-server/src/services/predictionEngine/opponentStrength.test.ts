@@ -160,31 +160,55 @@ test("resolveOpponentStrength (live path) merges Elo history recorded under an o
     cutoffAt: new Date(Date.UTC(2025, 0, 1, 11, 30, 0)),
   };
 
-  const insertedMatches = await db.insert(historicalMatchesTable).values([oldRow, newRow]).returning({ id: historicalMatchesTable.id });
+  let insertedMatches: Array<{ id: number }> = [];
+  let snapshot: { id: number } | undefined;
+  try {
+    insertedMatches = await db.insert(historicalMatchesTable).values([oldRow, newRow]).returning({ id: historicalMatchesTable.id });
+  } catch (err) {
+    const code = (err as { cause?: { code?: string } })?.cause?.code;
+    if (code === "ENOTFOUND" || code === "ECONNREFUSED") {
+      t.skip(`DB unavailable for integration test (${code})`);
+      return;
+    }
+    throw err;
+  }
   // Real eloOverall snapshot stored under the OLD alias id, timestamped well before the fixture
   // match we'll resolve below -- this is exactly the kind of row a canonical-id-only query would
   // silently miss.
-  const [snapshot] = await db
-    .insert(matchFeatureSnapshotsTable)
-    .values({
-      matchId: insertedMatches[0].id,
-      playerId: ALIAS_OPPONENT_ID,
-      featureName: "eloOverall",
-      featureValue: 1610,
-      sourceTimestamp: new Date(Date.UTC(2024, 0, 1, 12, 0, 0)),
-      matchCutoffAt: oldRow.cutoffAt,
-      existedBeforeCutoff: true,
-    })
-    .returning({ id: matchFeatureSnapshotsTable.id });
+  try {
+    [snapshot] = await db
+      .insert(matchFeatureSnapshotsTable)
+      .values({
+        matchId: insertedMatches[0].id,
+        playerId: ALIAS_OPPONENT_ID,
+        featureName: "eloOverall",
+        featureValue: 1610,
+        sourceTimestamp: new Date(Date.UTC(2024, 0, 1, 12, 0, 0)),
+        matchCutoffAt: oldRow.cutoffAt,
+        existedBeforeCutoff: true,
+      })
+      .returning({ id: matchFeatureSnapshotsTable.id });
+  } catch (err) {
+    const code = (err as { cause?: { code?: string } })?.cause?.code;
+    if (code === "ENOTFOUND" || code === "ECONNREFUSED") {
+      t.skip(`DB unavailable for integration test (${code})`);
+      return;
+    }
+    throw err;
+  }
 
   t.after(async () => {
-    await db.delete(matchFeatureSnapshotsTable).where(inArray(matchFeatureSnapshotsTable.id, [snapshot.id]));
-    await db.delete(historicalMatchesTable).where(
-      inArray(
-        historicalMatchesTable.id,
-        insertedMatches.map((m) => m.id),
-      ),
-    );
+    if (snapshot) {
+      await db.delete(matchFeatureSnapshotsTable).where(inArray(matchFeatureSnapshotsTable.id, [snapshot.id]));
+    }
+    if (insertedMatches.length > 0) {
+      await db.delete(historicalMatchesTable).where(
+        inArray(
+          historicalMatchesTable.id,
+          insertedMatches.map((m) => m.id),
+        ),
+      );
+    }
     invalidatePlayerIdentityCacheForTests();
   });
 

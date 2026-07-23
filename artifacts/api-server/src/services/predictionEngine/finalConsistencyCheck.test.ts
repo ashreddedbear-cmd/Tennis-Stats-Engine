@@ -142,6 +142,7 @@ test("rule 4 tolerates High Disagreement/High risk as long as Elite is correctly
       modelAgreement: "HighDisagreement",
       upsetRisk: "HIGH",
       upsetRiskBreakdownTier: "HIGH",
+      recommendation: "HIGH_RISK",
       disagreementNote: "HIGHDISAGREEMENT: some real note explaining the conflicting models.",
     }),
   );
