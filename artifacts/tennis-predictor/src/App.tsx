@@ -24,6 +24,9 @@ const ForceSignalPage = lazy(() => import('@/pages/ForceSignal'));
 const LaunchAuditPage = lazy(() => import('@/pages/LaunchAudit'));
 const PaymentsPage = lazy(() => import('@/pages/Payments'));
 const AdminLoginPage = lazy(() => import('@/pages/AdminLogin'));
+const TermsOfServicePage = lazy(() => import('@/pages/TermsOfService'));
+const PrivacyPolicyPage = lazy(() => import('@/pages/PrivacyPolicy'));
+const ResponsibleGamblingPage = lazy(() => import('@/pages/ResponsibleGambling'));
 
 const queryClient = new QueryClient();
 
@@ -57,6 +60,10 @@ function Router() {
           <Route path="/payments/billing" component={PaymentsPage} />
           <Route path="/payments/admin" component={PaymentsPage} />
           <Route path="/admin/login" component={AdminLoginPage} />
+          <Route path="/terms" component={TermsOfServicePage} />
+          <Route path="/privacy" component={PrivacyPolicyPage} />
+          <Route path="/responsible-gambling" component={ResponsibleGamblingPage} />
+          <Route path="/disclaimer" component={ResponsibleGamblingPage} />
           <Route component={NotFound} />
         </Switch>
       </Suspense>

@@ -32,6 +32,9 @@ const MOBILE_MORE_LINKS = [
   { href: "/backtesting", label: "Backtest", icon: FlaskConical, exact: false },
   { href: "/shadow-replay", label: "Paper Trading", icon: Ghost, exact: false },
   { href: "/launch-audit", label: "Launch Audit", icon: ShieldCheck, exact: false },
+  { href: "/terms", label: "Terms", icon: ShieldCheck, exact: false },
+  { href: "/privacy", label: "Privacy", icon: ShieldCheck, exact: false },
+  { href: "/responsible-gambling", label: "Disclaimer", icon: ShieldCheck, exact: false },
 ] as const
 
 function isActive(href: string, location: string, exact: boolean) {
@@ -382,6 +385,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <div className="app-container text-center text-[0.6875rem] font-mono text-muted-foreground/60 flex flex-col items-center gap-1.5">
           <p className="font-bold tracking-[0.18em] text-muted-foreground/80">TENNIS MATRIX AI v1.0.0</p>
           <p className="max-w-md leading-relaxed">PROBABILITIES CALIBRATED DAILY. USE AT OWN RISK. DATA IS FOR ANALYTICAL PURPOSES ONLY.</p>
+          <div className="pt-1.5 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-[0.65rem]">
+            <Link href="/terms" className="hover:text-primary transition-colors">TERMS OF SERVICE</Link>
+            <Link href="/privacy" className="hover:text-primary transition-colors">PRIVACY POLICY</Link>
+            <Link href="/responsible-gambling" className="hover:text-primary transition-colors">RESPONSIBLE GAMBLING / DISCLAIMER</Link>
+          </div>
         </div>
       </footer>
     </div>
