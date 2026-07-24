@@ -211,7 +211,7 @@ test("Uchijima identity: resolvePlayerProfileForPrediction succeeds via reverse-
   assert.equal(resolution.resolvedPlayerId, "provider-moyuka-only");
 });
 
-test("Uchijima identity: historical-only record with no provider match at all returns graceful null", async (t) => {
+test("Uchijima identity: historical-only record with no provider match at all falls back to historical profile", async (t) => {
   const noMatchProvider: TennisDataProvider = {
     name: "fake-no-match",
     getStatus: () => ({ provider: "fake", connected: true, lastSuccessfulCallAt: null, lastError: null }),
@@ -236,6 +236,9 @@ test("Uchijima identity: historical-only record with no provider match at all re
   });
 
   const resolution = await resolvePlayerProfileForPrediction(noMatchProvider, MAIKO_HIST_ID);
-  assert.equal(resolution.profile, null, "Profile must be null when genuinely not resolvable");
-  assert.ok(resolution.detail, "Must provide a detail message explaining what is missing");
+  assert.ok(resolution.profile, "Historical-only fallback profile should be returned");
+  assert.equal(resolution.profile!.id, MAIKO_HIST_ID);
+  assert.equal(resolution.profile!.name, "Maiko Uchijima");
+  assert.equal(resolution.profile!.source, "historical-match");
+  assert.equal(resolution.detail, null);
 });

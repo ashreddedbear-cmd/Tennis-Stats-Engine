@@ -550,11 +550,34 @@ export async function resolvePlayerProfileForPrediction(
     }
   }
 
-  const reason = exactNameCandidates.length > 1
-    ? `Historical player ID ${requestedPlayerId} (\"${sighting.name}\") maps to multiple live players; choose the exact player from Search.`
-    : `Historical player ID ${requestedPlayerId} (\"${sighting.name}\") is not provider-resolvable; select a live player record instead.`;
+  if (exactNameCandidates.length > 1) {
+    return {
+      profile: null,
+      resolvedPlayerId: requestedPlayerId,
+      detail: `Historical player ID ${requestedPlayerId} (\"${sighting.name}\") maps to multiple live players; choose the exact player from Search.`,
+    };
+  }
 
-  return { profile: null, resolvedPlayerId: requestedPlayerId, detail: reason };
+  // Noncritical identity data gap fallback: when the provider has no resolvable ID at all,
+  // proceed with a historical-only player profile instead of hard-blocking prediction.
+  // This keeps Maiko/Moyuka-style ITF matchups runnable with lower confidence/data quality.
+  const historicalOnlyProfile: PlayerProfile = {
+    id: requestedPlayerId,
+    name: sighting.name,
+    fullName: null,
+    countryCode: null,
+    currentRank: null,
+    tour: sighting.tour,
+    age: null,
+    plays: null,
+    source: "historical-match",
+  };
+
+  logger.warn(
+    { requestedPlayerId, sightingName: sighting.name, sightingTour: sighting.tour },
+    "Falling back to historical-only player profile for prediction because no provider-resolvable ID was found",
+  );
+  return { profile: historicalOnlyProfile, resolvedPlayerId: requestedPlayerId, detail: null };
 }
 
 /**
