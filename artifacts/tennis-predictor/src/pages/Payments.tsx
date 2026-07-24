@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useLocation } from "wouter";
+import { Link, useLocation } from "wouter";
 import { AlertCircle, BadgeDollarSign, CheckCircle2, CreditCard, ExternalLink, ShieldCheck, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -148,6 +148,9 @@ export default function PaymentsPage() {
                       <Sparkles className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} /> Refresh status
                     </Button>
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    By continuing, you agree to the <Link href="/terms" className="text-primary hover:underline">Terms of Service</Link> and acknowledge the <Link href="/privacy" className="text-primary hover:underline">Privacy Policy</Link> and <Link href="/cookies" className="text-primary hover:underline">Cookie Policy</Link>.
+                  </p>
                 </CardContent>
               </Card>
 
@@ -199,6 +202,9 @@ export default function PaymentsPage() {
                       <Sparkles className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} /> Refresh status
                     </Button>
                   </div>
+                  <p className="text-xs text-muted-foreground">
+                    Billing and invoices are processed through Stripe. Review <Link href="/terms" className="text-primary hover:underline">Terms</Link> and <Link href="/privacy" className="text-primary hover:underline">Privacy</Link>.
+                  </p>
                 </CardContent>
               </Card>
 

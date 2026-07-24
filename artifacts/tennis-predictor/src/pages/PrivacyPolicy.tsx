@@ -29,14 +29,15 @@ export default function PrivacyPolicyPage() {
           <CardDescription>Operational data is used to deliver predictions and core features.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm text-muted-foreground leading-relaxed">
-          <p>
-            We may process user-provided inputs, selected match parameters, and interaction events
-            required to run prediction, history, and audit features.
-          </p>
-          <p>
-            We may process technical metadata such as request timing, non-sensitive diagnostics, and
-            service health information to maintain reliability.
-          </p>
+          <p>We may process the following data categories:</p>
+          <p>• Name, email, and account profile information.</p>
+          <p>• Authentication/session information and security logs.</p>
+          <p>• Subscription, trial status, and billing status metadata.</p>
+          <p>• Stripe customer and subscription identifiers.</p>
+          <p>• Prediction usage, prediction history, and interaction events.</p>
+          <p>• Notification preferences and support messages.</p>
+          <p>• Device/browser information, IP address, and cookie-related data.</p>
+          <p>• Legal acceptance records for terms and privacy acknowledgments.</p>
         </CardContent>
       </Card>
 
@@ -49,6 +50,10 @@ export default function PrivacyPolicyPage() {
           <p>
             We do not sell personal data. Data handling is limited to product operation,
             troubleshooting, security, and lawful compliance obligations.
+          </p>
+          <p>
+            We may use data for abuse prevention, duplicate-account protection, fraud checks,
+            account recovery, and service auditability.
           </p>
         </CardContent>
       </Card>
@@ -70,6 +75,10 @@ export default function PrivacyPolicyPage() {
             No internet service can be guaranteed 100% secure, but we continuously improve
             protective controls and monitoring.
           </p>
+          <p>
+            Payment-card details are processed by Stripe. Tennis Matrix AI does not store full
+            payment-card numbers, CVC values, or full card track data directly.
+          </p>
         </CardContent>
       </Card>
 
@@ -90,7 +99,7 @@ export default function PrivacyPolicyPage() {
       </Card>
 
       <p className="text-xs text-muted-foreground text-center">
-        Review our <Link href="/terms" className="text-primary hover:underline">Terms of Service</Link> and <Link href="/responsible-gambling" className="text-primary hover:underline">Responsible Gambling / Disclaimer</Link>.
+        Review our <Link href="/terms" className="text-primary hover:underline">Terms of Service</Link>, <Link href="/cookies" className="text-primary hover:underline">Cookie Policy</Link>, and <Link href="/responsible-gambling" className="text-primary hover:underline">Responsible Gambling / Disclaimer</Link>.
       </p>
     </div>
   )

@@ -11,6 +11,15 @@ import Home from '@/pages/Home';
 import PredictBuilderPage from '@/pages/PredictBuilder';
 import HistoryPage from '@/pages/History';
 import PredictionLogPage from '@/pages/PredictionLog';
+import PortalHomePage from '@/pages/PortalHome';
+import PortalPricingPage from '@/pages/PortalPricing';
+import PortalAboutPage from '@/pages/PortalAbout';
+import PortalFAQPage from '@/pages/PortalFAQ';
+import PortalContactPage from '@/pages/PortalContact';
+import PortalLoginPage from '@/pages/PortalLogin';
+import PortalSignupPage from '@/pages/PortalSignup';
+import PortalAccountPage from '@/pages/PortalAccount';
+import CookiePolicyPage from '@/pages/CookiePolicy';
 
 // Lazy-loaded because they pull in recharts (a large charting library) -- keeping them out of
 // the main bundle means the home/predict-builder flow (the common path) doesn't pay for a chart
@@ -44,7 +53,17 @@ function Router() {
     <Layout>
       <Suspense fallback={<PageFallback />}>
         <Switch>
-          <Route path="/" component={Home} />
+          <Route path="/" component={PortalHomePage} />
+          <Route path="/app" component={Home} />
+          <Route path="/pricing" component={PortalPricingPage} />
+          <Route path="/about" component={PortalAboutPage} />
+          <Route path="/faq" component={PortalFAQPage} />
+          <Route path="/contact" component={PortalContactPage} />
+          <Route path="/login" component={PortalLoginPage} />
+          <Route path="/signup" component={PortalSignupPage} />
+          <Route path="/account" component={PortalAccountPage} />
+          <Route path="/billing" component={PortalAccountPage} />
+          <Route path="/cookies" component={CookiePolicyPage} />
           <Route path="/predict" component={PredictBuilderPage} />
           <Route path="/predictions/:id" component={PredictionResultView} />
           <Route path="/history" component={HistoryPage} />

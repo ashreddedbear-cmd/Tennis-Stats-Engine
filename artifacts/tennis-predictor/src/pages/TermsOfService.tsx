@@ -34,6 +34,10 @@ export default function TermsOfServicePage() {
         <CardContent className="space-y-3 text-sm text-muted-foreground leading-relaxed">
           <p>You must use the service in compliance with applicable laws and regulations.</p>
           <p>
+            Tennis Matrix AI provides informational tennis analysis and predictions only. It is not
+            a sportsbook and does not place bets for users.
+          </p>
+          <p>
             You agree not to misuse, disrupt, reverse engineer, or attempt unauthorized access to
             the platform or related systems.
           </p>
@@ -57,6 +61,10 @@ export default function TermsOfServicePage() {
             models and historical data. They are not guarantees of future results.
           </p>
           <p>
+            Profits are not guaranteed. Users may lose money. Past results never guarantee future
+            performance.
+          </p>
+          <p>
             You are solely responsible for any decisions or actions you take based on platform
             output.
           </p>
@@ -67,6 +75,20 @@ export default function TermsOfServicePage() {
               advice.
             </p>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="glass-panel border-border">
+        <CardHeader>
+          <CardTitle className="text-lg">Prohibited Conduct</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm text-muted-foreground leading-relaxed">
+          <p>The following actions are prohibited:</p>
+          <p>• Scraping, bulk extraction, or automated exfiltration of platform data.</p>
+          <p>• Reselling, redistributing, or sublicensing model output or proprietary data.</p>
+          <p>• Sharing paid accounts outside approved Team seats.</p>
+          <p>• Reverse engineering or bypassing plan restrictions and access controls.</p>
+          <p>• Payment fraud, chargeback abuse, trial abuse, or unauthorized access attempts.</p>
         </CardContent>
       </Card>
 
@@ -87,11 +109,15 @@ export default function TermsOfServicePage() {
             We may revise these terms from time to time. Continued use after changes are posted
             constitutes acceptance of the updated terms.
           </p>
+          <p>
+            Payment-card data is handled by Stripe. Tennis Matrix AI does not store full payment
+            card information directly.
+          </p>
         </CardContent>
       </Card>
 
       <p className="text-xs text-muted-foreground text-center">
-        Also review our <Link href="/privacy" className="text-primary hover:underline">Privacy Policy</Link> and <Link href="/responsible-gambling" className="text-primary hover:underline">Responsible Gambling / Disclaimer</Link>.
+        Also review our <Link href="/privacy" className="text-primary hover:underline">Privacy Policy</Link>, <Link href="/cookies" className="text-primary hover:underline">Cookie Policy</Link>, and <Link href="/responsible-gambling" className="text-primary hover:underline">Responsible Gambling / Disclaimer</Link>.
       </p>
     </div>
   )

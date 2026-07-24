@@ -10,7 +10,7 @@ import { MatrixRain } from "./MatrixRain"
 import { History, PlaySquare, ClipboardList, LineChart, Menu, X, LayoutDashboard, Moon, Sun, FlaskConical, Zap, Ghost, ShieldCheck } from "lucide-react"
 
 const NAV_LINKS = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard, exact: true },
+  { href: "/app", label: "Dashboard", icon: LayoutDashboard, exact: true },
   { href: "/predict", label: "Run Model", icon: PlaySquare, exact: false },
   { href: "/history", label: "History", icon: History, exact: false },
   { href: "/evaluation/log", label: "Prediction Log", icon: ClipboardList, exact: false },
@@ -21,10 +21,35 @@ const NAV_LINKS = [
 ]
 
 const MOBILE_PRIMARY_TABS = [
-  { href: "/", label: "Home", icon: LayoutDashboard, exact: true },
+  { href: "/app", label: "Home", icon: LayoutDashboard, exact: true },
   { href: "/predict", label: "Run Model", icon: PlaySquare, exact: false },
   { href: "/history", label: "History", icon: History, exact: false },
 ] as const
+
+const PUBLIC_NAV_LINKS = [
+  { href: "/", label: "Home" },
+  { href: "/pricing", label: "Pricing" },
+  { href: "/about", label: "About" },
+  { href: "/faq", label: "FAQ" },
+  { href: "/contact", label: "Contact" },
+] as const
+
+function isPublicPortalPath(location: string) {
+  return location === "/"
+    || location.startsWith("/pricing")
+    || location.startsWith("/about")
+    || location.startsWith("/faq")
+    || location.startsWith("/contact")
+    || location.startsWith("/login")
+    || location.startsWith("/signup")
+    || location.startsWith("/account")
+    || location.startsWith("/billing")
+    || location.startsWith("/privacy")
+    || location.startsWith("/terms")
+    || location.startsWith("/cookies")
+    || location.startsWith("/responsible-gambling")
+    || location.startsWith("/disclaimer")
+}
 
 const MOBILE_MORE_LINKS = [
   { href: "/evaluation/log", label: "Log", icon: ClipboardList, exact: false },
@@ -203,6 +228,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   }, [location])
 
   const isForceSignalActive = location.startsWith("/force-signal")
+  const isPublicPortalRoute = isPublicPortalPath(location)
   const dateTag = useMemo(() => {
     const now = new Date()
     const yyyy = now.getFullYear()
@@ -210,6 +236,96 @@ export function Layout({ children }: { children: React.ReactNode }) {
     const dd = String(now.getDate()).padStart(2, "0")
     return `${yyyy}-${mm}-${dd}`
   }, [])
+
+  if (isPublicPortalRoute) {
+    return (
+      <div className="min-h-[100dvh] flex flex-col bg-background text-foreground font-sans overflow-x-hidden selection:bg-primary/20 selection:text-primary">
+        <div className="fixed inset-0 pointer-events-none z-[-2] bg-[linear-gradient(180deg,_hsl(var(--background))_0%,_hsl(var(--background))_100%)]" />
+        <div className="fixed inset-0 pointer-events-none z-[-1] bg-[radial-gradient(ellipse_70%_45%_at_top,_hsl(var(--primary)/0.08),_transparent_55%)]" />
+
+        <header className="sticky top-0 z-50 w-full border-b border-border/70 bg-background/90 backdrop-blur-xl supports-[backdrop-filter]:bg-background/75 shadow-sm shadow-black/30">
+          <div className="app-container min-h-[3.75rem] py-2.5 flex items-center justify-between gap-2">
+            <Link href="/" className="flex items-center gap-2.5 font-display font-bold tracking-tight text-[1.05rem] hover:opacity-80 transition-opacity shrink-0">
+              <div className="w-8 h-8 text-accent">
+                <TennisMatrixLogo />
+              </div>
+              <span className="uppercase tracking-[0.16em] text-emerald-300">TENNIS MATRIX AI</span>
+            </Link>
+
+            <nav className="hidden md:flex items-center gap-6 text-[0.8125rem] font-medium">
+              {PUBLIC_NAV_LINKS.map(({ href, label }) => {
+                const active = location === href || (href !== "/" && location.startsWith(href))
+                return (
+                  <Link key={href} href={href} className={`relative py-1 transition-all hover:text-primary ${active ? "text-primary" : "text-muted-foreground"}`}>
+                    {label}
+                    {active && <span className="absolute -bottom-[0.65rem] left-0 w-full h-[2px] bg-primary rounded-t-full shadow-[0_0_10px_hsl(var(--primary)/0.8)]" />}
+                  </Link>
+                )
+              })}
+            </nav>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <Link href="/login" className="hidden sm:inline-flex items-center px-3 py-1.5 rounded-lg border border-border/60 text-xs font-mono font-bold tracking-widest text-muted-foreground hover:text-foreground hover:bg-secondary">Log In</Link>
+              <Link href="/signup" className="inline-flex items-center px-3 py-1.5 rounded-lg border border-primary/40 bg-primary/10 text-primary text-xs font-mono font-bold tracking-widest hover:bg-primary/20">Get Started</Link>
+              <ThemeToggle />
+              <button
+                className="md:hidden p-2 rounded-lg hover:bg-secondary transition-colors text-muted-foreground hover:text-foreground"
+                onClick={() => setMobileOpen((o) => !o)}
+                aria-label={mobileOpen ? "Close menu" : "Open menu"}
+              >
+                {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+              </button>
+            </div>
+          </div>
+
+          {mobileOpen && (
+            <div className="md:hidden border-t border-border/50 bg-background/95 backdrop-blur-xl">
+              <nav className="app-container py-3 flex flex-col gap-1">
+                {PUBLIC_NAV_LINKS.map(({ href, label }) => {
+                  const active = location === href || (href !== "/" && location.startsWith(href))
+                  return (
+                    <Link
+                      key={href}
+                      href={href}
+                      onClick={() => setMobileOpen(false)}
+                      className={`px-3 py-2.5 rounded-lg text-sm font-medium ${active ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-secondary hover:text-foreground"}`}
+                    >
+                      {label}
+                    </Link>
+                  )
+                })}
+                <div className="grid grid-cols-2 gap-2 border-t border-border/50 mt-2 pt-2">
+                  <Link href="/login" onClick={() => setMobileOpen(false)} className="px-3 py-2.5 rounded-lg text-sm text-center font-medium text-muted-foreground hover:bg-secondary hover:text-foreground">Log In</Link>
+                  <Link href="/signup" onClick={() => setMobileOpen(false)} className="px-3 py-2.5 rounded-lg text-sm text-center font-medium bg-primary/10 text-primary">Get Started</Link>
+                </div>
+              </nav>
+            </div>
+          )}
+        </header>
+
+        <main className="flex-1 app-container py-8 md:py-10 flex flex-col">
+          {children}
+        </main>
+
+        <footer className="border-t border-border/40 py-6 bg-secondary/20">
+          <div className="app-container text-center text-[0.72rem] font-mono text-muted-foreground/80 flex flex-col items-center gap-2">
+            <p className="font-bold tracking-[0.16em] text-muted-foreground/90">TENNIS MATRIX AI</p>
+            <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5">
+              <Link href="/privacy" className="hover:text-primary transition-colors">Privacy Policy</Link>
+              <Link href="/terms" className="hover:text-primary transition-colors">Terms of Service</Link>
+              <Link href="/cookies" className="hover:text-primary transition-colors">Cookie Policy</Link>
+              <Link href="/pricing" className="hover:text-primary transition-colors">Pricing</Link>
+              <Link href="/about" className="hover:text-primary transition-colors">About</Link>
+              <Link href="/faq" className="hover:text-primary transition-colors">FAQ</Link>
+              <Link href="/contact" className="hover:text-primary transition-colors">Contact</Link>
+              <a href="https://x.com/TennisMatrixAI" target="_blank" rel="noreferrer" className="hover:text-primary transition-colors">X</a>
+              <a href="https://instagram.com/TennisMatrixAI" target="_blank" rel="noreferrer" className="hover:text-primary transition-colors">Instagram</a>
+            </div>
+          </div>
+        </footer>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-[100dvh] flex flex-col bg-background text-foreground font-sans overflow-x-hidden selection:bg-primary/20 selection:text-primary">
@@ -224,7 +340,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <div className="app-container min-h-[3.75rem] py-2.5 flex items-center justify-between gap-2">
 
           {/* Logo */}
-          <Link href="/" className="flex items-center gap-2.5 font-display font-bold tracking-tight text-[1.05rem] hover:opacity-80 transition-opacity shrink-0">
+          <Link href="/app" className="flex items-center gap-2.5 font-display font-bold tracking-tight text-[1.05rem] hover:opacity-80 transition-opacity shrink-0">
             <div className="w-8 h-8 text-accent">
               <TennisMatrixLogo />
             </div>
