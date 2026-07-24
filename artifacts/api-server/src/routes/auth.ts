@@ -10,7 +10,31 @@ import {
 const router: IRouter = Router();
 
 router.get("/auth/status", (req, res): void => {
-  res.json(GetAdminAuthStatusResponse.parse({ authenticated: isAdminSessionCookieValid(req.signedCookies) }));
+  const authenticated = isAdminSessionCookieValid(req.signedCookies);
+  // Single-owner system: authenticated users are owners
+  const role = authenticated ? 'owner' : 'user';
+  res.json({ 
+    authenticated, 
+    role,
+    // Include permission hints for frontend to know capability levels
+    permissions: authenticated ? {
+      canRunAudits: true,
+      canViewLogs: true,
+      canRetrySafeJobs: true,
+      canManageAlerts: true,
+      canRunPerformanceTests: true,
+      canRunDestructiveRollback: true,
+      canRunDestructiveRepairs: true,
+    } : {
+      canRunAudits: false,
+      canViewLogs: false,
+      canRetrySafeJobs: false,
+      canManageAlerts: false,
+      canRunPerformanceTests: false,
+      canRunDestructiveRollback: false,
+      canRunDestructiveRepairs: false,
+    }
+  });
 });
 
 router.post("/auth/login", (req, res): void => {
