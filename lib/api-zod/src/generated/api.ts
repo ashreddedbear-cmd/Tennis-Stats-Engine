@@ -148,33 +148,6 @@ export const GetPlayerMatchesResponseItem = zod.object({
 })
 export const GetPlayerMatchesResponse = zod.array(GetPlayerMatchesResponseItem)
 
-/**
- * Cached aggregate performance stats for one player, derived from `historical_matches` and
- * `match_feature_snapshots`. Null fields indicate that data is genuinely absent (e.g. a player
- * with no Hard-court matches has a null `eloHard`), never fabricated defaults.
- * The endpoint returns HTTP 404 when no stats row exists yet for this player.
- */
-export const GetPlayerStatsParams = zod.object({
-  "playerId": zod.string()
-})
-
-export const GetPlayerStatsResponse = zod.object({
-  "playerId": zod.string(),
-  "computedAt": zod.coerce.date(),
-  "overallElo": zod.number().nullable(),
-  "eloHard": zod.number().nullable(),
-  "eloClay": zod.number().nullable(),
-  "eloGrass": zod.number().nullable(),
-  "eloIndoorHard": zod.number().nullable(),
-  "matchesPlayed": zod.number().int(),
-  "winRateLast100": zod.number().nullable().describe('Win rate (0-1) over the most recent 100 matches. Null when no history is on record.'),
-  "gameShareLast100": zod.number().nullable().describe('Average share of games won (0-1) over the most recent 100 matches. Null when no game-margin data is stored.'),
-  "serveRatingProxy": zod.number().nullable().describe('Serve dominance proxy (0-100, 50 = tour average), derived from game score margins. Null when fewer than 5 sets of real score data exist.'),
-  "returnRatingProxy": zod.number().nullable().describe('Return dominance proxy (0-100). Same as serveRatingProxy until point-level data is available.'),
-  "surfaceStats": zod.record(zod.string(), zod.object({ "wins": zod.number().int(), "losses": zod.number().int() })).nullable().describe('Win/loss count by surface (Hard/Clay/Grass/IndoorHard). Null when no surface-tagged matches exist.'),
-  "opponentStrengthAvg": zod.number().nullable().describe('Average Elo of opponents over the most recent 50 matches, from pre-match snapshots. Null when no opponent Elo data is available in the historical store.')
-})
-
 
 /**
  * Returns a rolling now-forward window of matches with a start time at or after the current instant, sorted soonest-first, regardless of which calendar day (UTC) they fall on. The window auto-extends further out when the near-term days are sparse, so the result is capped by `limit` rather than by a fixed clock/day boundary. Use `offset` together with `hasMore` in the response to page further into the window on busy days (e.g. Challenger/ITF days with 50+ matches before noon).
@@ -262,8 +235,8 @@ export const RecognizeMatchupScreenshotBody = zod.object({
   "imageBase64": zod.string().describe('Base64-encoded image data (a data URL such as \"data:image\/png;base64,...\" or raw base64 -- both accepted). PNG\/JPEG\/WEBP screenshots only.')
 })
 
-// Shared player/event object shapes used in both the top-level result and per-matchup entries.
-const _ScreenshotPlayerMatchShape = zod.object({
+export const RecognizeMatchupScreenshotResponse = zod.object({
+  "player1": zod.object({
   "recognizedName": zod.string().nullable().describe('The player name as read off the screenshot, before any lookup. Null if vision AI could not distinguish a second player.'),
   "player": zod.union([zod.object({
   "id": zod.string(),
@@ -273,28 +246,24 @@ const _ScreenshotPlayerMatchShape = zod.object({
   "tour": zod.string().nullish(),
   "source": zod.enum(['live-standings', 'historical-match']).optional().describe('How this player was found. \"live-standings\" means they\'re in the current ATP\/WTA standings feed (rank\/tour are live). \"historical-match\" means they were found only in our own previously-fetched real match history -- a genuinely real player, but rank\/tour here reflect their last known match, not a live ranking. Omitted for legacy rows.')
 }),zod.null()]).describe('The confidently-matched player from the existing player search, or null if the recognized name had no confident match.')
-})
-
-const _ScreenshotEventMatchShape = zod.object({
+}),
+  "player2": zod.object({
+  "recognizedName": zod.string().nullable().describe('The player name as read off the screenshot, before any lookup. Null if vision AI could not distinguish a second player.'),
+  "player": zod.union([zod.object({
+  "id": zod.string(),
+  "name": zod.string(),
+  "countryCode": zod.string().nullable(),
+  "currentRank": zod.number().nullish(),
+  "tour": zod.string().nullish(),
+  "source": zod.enum(['live-standings', 'historical-match']).optional().describe('How this player was found. \"live-standings\" means they\'re in the current ATP\/WTA standings feed (rank\/tour are live). \"historical-match\" means they were found only in our own previously-fetched real match history -- a genuinely real player, but rank\/tour here reflect their last known match, not a live ranking. Omitted for legacy rows.')
+}),zod.null()]).describe('The confidently-matched player from the existing player search, or null if the recognized name had no confident match.')
+}),
+  "event": zod.object({
   "recognizedName": zod.string().nullable().describe('The event\/tournament name as read off the screenshot. Null if none was found.'),
   "surface": zod.union([zod.enum(['Hard', 'Clay', 'Grass', 'IndoorHard']),zod.null()]),
   "level": zod.union([zod.enum(['GrandSlam', 'Masters1000', 'ATP500', 'ATP250', 'WTA1000', 'WTA500', 'WTA250', 'Challenger', 'ITF', 'Other']),zod.null()])
-})
-
-const _ScreenshotMatchupEntryShape = zod.object({
-  "player1": _ScreenshotPlayerMatchShape,
-  "player2": _ScreenshotPlayerMatchShape,
-  "event": _ScreenshotEventMatchShape,
-  "resolved": zod.boolean().describe('True when both players in this entry were confidently resolved to real players.'),
-  "warnings": zod.array(zod.string()).describe('Per-matchup warnings for anything not confidently resolved in this entry.')
-})
-
-export const RecognizeMatchupScreenshotResponse = zod.object({
-  "player1": _ScreenshotPlayerMatchShape,
-  "player2": _ScreenshotPlayerMatchShape,
-  "event": _ScreenshotEventMatchShape,
-  "warnings": zod.array(zod.string()).describe('Human-readable notes on anything not confidently recognized or matched -- the user should fill these in manually.'),
-  "matchups": zod.array(_ScreenshotMatchupEntryShape).optional().describe('All matchups extracted from the screenshot. matchups[0] is the same as the top-level player1/player2/event. Present when the image contained at least one matchup.')
+}),
+  "warnings": zod.array(zod.string()).describe('Human-readable notes on anything not confidently recognized or matched -- the user should fill these in manually.')
 })
 
 
@@ -318,12 +287,6 @@ export const ListPredictionsResponseItem = zod.object({
   "player2Name": zod.string(),
   "surface": zod.enum(['Hard', 'Clay', 'Grass', 'IndoorHard']),
   "tournamentName": zod.string().nullish(),
-  "strategyId": zod.string().nullish(),
-  "strategyVersion": zod.string().nullish(),
-  "calibrationVersion": zod.string().nullish(),
-  "externalFixtureId": zod.string().nullish(),
-  "snapshotCapturedAt": zod.coerce.date().nullish(),
-  "inputSnapshotHash": zod.string().nullish(),
   "predictedWinnerName": zod.string(),
   "calibratedProbability": zod.number(),
   "predictedWinnerProbability": zod.number().describe('The predicted winner\'s own win probability (always >= 50) -- see the field doc on Prediction. Use this for display instead of calibratedProbability.'),
@@ -360,12 +323,6 @@ export const CreatePredictionResponse = zod.object({
   "matchFormat": zod.enum(['BestOf3', 'BestOf5']),
   "tournamentLevel": zod.union([zod.enum(['GrandSlam', 'Masters1000', 'ATP500', 'ATP250', 'WTA1000', 'WTA500', 'WTA250', 'Challenger', 'ITF', 'Other']),zod.null()]).optional(),
   "tournamentName": zod.string().nullish(),
-  "strategyId": zod.string().nullish(),
-  "strategyVersion": zod.string().nullish(),
-  "calibrationVersion": zod.string().nullish(),
-  "externalFixtureId": zod.string().nullish(),
-  "snapshotCapturedAt": zod.coerce.date().nullish(),
-  "inputSnapshotHash": zod.string().nullish(),
   "predictedWinnerId": zod.string(),
   "predictedWinnerName": zod.string(),
   "calibratedProbability": zod.number().describe('Calibrated win probability for player 1, 0-100'),
@@ -822,8 +779,6 @@ export const GetPredictionResponse = zod.object({
   "label": zod.enum(['Low', 'Moderate', 'High'])
 }).optional().describe('Per-matchup count of prior matches each player has on the relevant surface, labeled Low\/Moderate\/High. Absent on predictions made before this field existed.')
 }).describe('Full module-by-module output of the prediction engine'),
-  /** Task #32: full pipeline + decision-chain trace; null on predictions made before this field existed. */
-  "decisionTrace": zod.unknown().nullish().describe('Full auditable trace of every pipeline stage and decision-chain rule (Task #32). Null on predictions made before this field existed.'),
   "actualWinnerId": zod.string().nullish(),
   "actualWinnerName": zod.string().nullish(),
   "createdAt": zod.coerce.date(),
@@ -1172,17 +1127,13 @@ export const runWalkForwardBodyWarmupFractionMax = 0.95;
 
 export const RunWalkForwardBody = zod.object({
   "foldCount": zod.number().min(1).max(runWalkForwardBodyFoldCountMax).optional(),
-  "warmupFraction": zod.number().min(runWalkForwardBodyWarmupFractionMin).max(runWalkForwardBodyWarmupFractionMax).optional(),
-  /** Task #12: when true (default for the dashboard Run Walk-Forward button), calibration and specialist weights are frozen. */
-  "evaluationOnly": zod.boolean().optional()
+  "warmupFraction": zod.number().min(runWalkForwardBodyWarmupFractionMin).max(runWalkForwardBodyWarmupFractionMax).optional()
 })
 
 export const RunWalkForwardResponse = zod.object({
   "foldsRun": zod.number(),
   "foldIds": zod.array(zod.number()),
-  "skippedNoEligibleMatches": zod.boolean(),
-  /** Task #12: true when this was an evaluation-only run (frozen weights), false when it was a full optimizer/training run. */
-  "evaluationOnly": zod.boolean()
+  "skippedNoEligibleMatches": zod.boolean()
 })
 
 
@@ -1198,8 +1149,7 @@ export const ListEvaluationPredictionsQueryParams = zod.object({
   "runKind": zod.enum(['historical_test', 'paper_trade', 'live', 'paper_trade_shadow']).optional(),
   "segment": zod.enum(['validation', 'test']).optional(),
   "status": zod.enum(['pending', 'graded', 'void', 'missed']).optional(),
-  "limit": zod.coerce.number().min(1).max(listEvaluationPredictionsQueryLimitMax).default(listEvaluationPredictionsQueryLimitDefault),
-  "offset": zod.coerce.number().min(0).default(0),
+  "limit": zod.coerce.number().min(1).max(listEvaluationPredictionsQueryLimitMax).default(listEvaluationPredictionsQueryLimitDefault)
 })
 
 export const ListEvaluationPredictionsResponseItem = zod.object({
@@ -1639,16 +1589,29 @@ export const RunHistoricalBackfillCycleResponse = zod.object({
   "featureRowsInserted": zod.number(),
   "byTour": zod.record(zod.string(), zod.number()),
   "bySurface": zod.record(zod.string(), zod.number()),
-  "byYear": zod.record(zod.string(), zod.number()).describe('Newly-inserted match count by calendar year (YYYY).'),
   "earliestImportedMatchDate": zod.string().nullable(),
   "latestImportedMatchDate": zod.string().nullable(),
-  "dateGapsOver30Days": zod.array(zod.object({
-    "fromDate": zod.string(),
-    "toDate": zod.string(),
-    "dayCount": zod.number(),
-  })).describe('Date gaps of more than 30 consecutive days found in the full historical_matches store as of this run.'),
   "durationMs": zod.number()
 }).nullish()
+})
+
+
+/**
+ * @summary Fire a targeted historical backfill for a specific date range in the background and return immediately
+ */
+
+
+
+export const RunHistoricalBackfillRangeBody = zod.object({
+  "dateStart": zod.string().describe('First date to backfill, inclusive (YYYY-MM-DD).'),
+  "dateStop": zod.string().describe('Last date to backfill, inclusive (YYYY-MM-DD).'),
+  "chunkDays": zod.number().min(1).optional().describe('Provider chunk window in days. Defaults to 5 (the safe limit for busy periods).')
+})
+
+export const RunHistoricalBackfillRangeResponse = zod.object({
+  "started": zod.boolean(),
+  "dateStart": zod.string(),
+  "dateStop": zod.string()
 })
 
 
@@ -1683,33 +1646,7 @@ export const ListHistoricalBackfillJobRunsResponse = zod.array(ListHistoricalBac
 export const GetHistoricalDataFreshnessResponse = zod.object({
   "latestCoveredDate": zod.string().nullable().describe('Most recent scheduledStartAt date already stored in historical_matches (YYYY-MM-DD), or null if the table is empty.'),
   "daysBehind": zod.number().nullable().describe('Whole days between latestCoveredDate and today (UTC). Null when latestCoveredDate is null.'),
-  "asOf": zod.coerce.date(),
-  "matchesMissingOpponentRank": zod.number().nullable().describe('Decided, non-cancelled matches where both player1_rank and player2_rank are null. Null when the table is empty.'),
-  "matchesMissingSurface": zod.number().nullable().describe('Decided, non-cancelled matches where surface is null.'),
-  "dateGapsOver30Days": zod.array(zod.object({
-    "fromDate": zod.string(),
-    "toDate": zod.string(),
-    "dayCount": zod.number(),
-  })).describe('Consecutive date gaps exceeding 30 days in the full historical_matches coverage.'),
+  "asOf": zod.coerce.date()
 })
 
-export const GetRankingVerificationResponse = zod.object({
-  "computedAt": zod.string(),
-  "totalProviderRankings": zod.number().describe('Total ATP + WTA players returned by the live provider standings feed.'),
-  "totalStoredPlayers": zod.number().describe('Total players in master_players.'),
-  "discrepancies": zod.array(zod.object({
-    "playerId": zod.string(),
-    "playerName": zod.string(),
-    "storedRank": zod.number().nullable().describe('Stored currentRank in master_players, or null when not yet set.'),
-    "providerRank": zod.number().describe('Current rank from the live provider standings.'),
-    "gapPlaces": zod.number().describe('Absolute difference between stored and provider rank (or providerRank when stored is null).'),
-  })).describe('Players with a stored vs. live rank gap exceeding 10 places, sorted largest-gap-first.'),
-})
 
-// ── Hand-written schemas moved to lib/api-zod/src/manual.ts (Task #66) ───────────────────────────
-//
-// RunOptimizerBody, RunOptimizerResponse, PatternSegmentItem, GetLatestPatternAnalysisResponse,
-// ThresholdEvalEntryItem, GetLatestThresholdEvaluationResponse, RunHistoricalBackfillRangeBody,
-// RunHistoricalBackfillRangeResponse are now defined in ../manual.ts and re-exported from
-// index.ts. They were removed from here because `clean: true` in orval.config.ts wipes this
-// entire file on every codegen run, silently deleting any hand-written additions.

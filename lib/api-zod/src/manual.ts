@@ -116,31 +116,6 @@ export const GetLatestThresholdEvaluationResponse = zod
   })
   .nullable();
 
-// ── Task #44: Targeted historical-backfill range ──────────────────────────────────────────────────
-
-/**
- * Request body for POST /evaluation/historical-backfill/run-range.
- * Fires runHistoricalBackfill for the explicit [dateStart, dateStop] window in the background
- * and returns immediately -- designed for closing known coverage gaps (e.g. 2020–2025) where
- * the window is too long for a synchronous HTTP response.
- */
-export const RunHistoricalBackfillRangeBody = zod.object({
-  dateStart: zod.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("First date to backfill, inclusive (YYYY-MM-DD)."),
-  dateStop: zod.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("Last date to backfill, inclusive (YYYY-MM-DD)."),
-  chunkDays: zod
-    .number()
-    .int()
-    .min(1)
-    .optional()
-    .describe("Provider chunk window in days. Defaults to 5 (the safe limit for busy periods)."),
-});
-
-export const RunHistoricalBackfillRangeResponse = zod.object({
-  started: zod.boolean(),
-  dateStart: zod.string(),
-  dateStop: zod.string(),
-});
-
 // ── Task #38: Seed player_stats from historical match data ────────────────────────────────────────
 
 /**
@@ -384,99 +359,6 @@ export const GetBackfillLiveProgressResponse = zod.object({
   activeDateRange: zod.object({ dateStart: zod.string(), dateStop: zod.string() }).nullable(),
   lastCompletedStatus: zod.string().nullable(),
   lastCompletedAt: zod.string().nullable(),
-});
-
-// ── Task #? Payments v2 ───────────────────────────────────────────────────────
-
-export const PaymentEntitlements = zod.object({
-  predictionHistory: zod.boolean(),
-  walkForward: zod.boolean(),
-  shadowReplay: zod.boolean(),
-  optimizer: zod.boolean(),
-  competitiveBalance: zod.boolean(),
-  evidenceReliability: zod.boolean(),
-  developerAnalytics: zod.boolean(),
-  eliteRecommendations: zod.boolean(),
-  alerts: zod.boolean(),
-  teamWorkspace: zod.boolean(),
-});
-
-export const PaymentWebhookEventSummary = zod.object({
-  id: zod.number(),
-  stripeEventId: zod.string(),
-  eventType: zod.string(),
-  livemode: zod.boolean(),
-  processingStatus: zod.string(),
-  stripeCustomerId: zod.string().nullable(),
-  stripeSubscriptionId: zod.string().nullable(),
-  errorMessage: zod.string().nullable(),
-  receivedAt: zod.coerce.date(),
-  processedAt: zod.coerce.date().nullable(),
-  createdAt: zod.coerce.date(),
-});
-
-export const PaymentsStatusAccount = zod.object({
-  id: zod.number(),
-  accountKey: zod.string(),
-  displayName: zod.string(),
-  stripeCustomerId: zod.string().nullable(),
-  stripeSubscriptionId: zod.string().nullable(),
-  stripePriceId: zod.string().nullable(),
-  planKey: zod.string().nullable(),
-  planName: zod.string().nullable(),
-  subscriptionStatus: zod.string().nullable(),
-  accessGrantedAt: zod.coerce.date().nullable(),
-  currentPeriodStartAt: zod.coerce.date().nullable(),
-  currentPeriodEndAt: zod.coerce.date().nullable(),
-  trialEndAt: zod.coerce.date().nullable(),
-  canceledAt: zod.coerce.date().nullable(),
-  cancelAtPeriodEnd: zod.boolean(),
-  entitlementSnapshot: zod.record(zod.boolean()),
-  metadata: zod.record(zod.string(), zod.unknown()),
-  lastWebhookEventId: zod.string().nullable(),
-  lastCheckoutSessionId: zod.string().nullable(),
-  createdAt: zod.coerce.date(),
-  updatedAt: zod.coerce.date(),
-});
-
-export const GetPaymentsStatusResponse = zod.object({
-  featureFlagEnabled: zod.boolean(),
-  configured: zod.boolean(),
-  active: zod.boolean(),
-  account: PaymentsStatusAccount.nullable(),
-  entitlements: PaymentEntitlements,
-  stripe: zod.object({
-    priceId: zod.string().nullable(),
-    webhookSecretConfigured: zod.boolean(),
-    secretKeyConfigured: zod.boolean(),
-    planKey: zod.string(),
-    planName: zod.string(),
-  }),
-  recentWebhookEvents: zod.array(PaymentWebhookEventSummary),
-});
-
-export const CreatePaymentsCheckoutSessionBody = zod.object({
-  returnPath: zod.string().optional(),
-  customerEmail: zod.string().email().optional(),
-});
-
-export const CreatePaymentsCheckoutSessionResponse = zod.object({
-  sessionId: zod.string(),
-  url: zod.string().nullable(),
-});
-
-export const CreateBillingPortalSessionBody = zod.object({
-  returnPath: zod.string().optional(),
-});
-
-export const CreateBillingPortalSessionResponse = zod.object({
-  url: zod.string(),
-});
-
-export const PaymentsWebhookResponse = zod.object({
-  received: zod.boolean(),
-  processed: zod.boolean(),
-  duplicate: zod.boolean().optional(),
 });
 
 export const GetEvaluationPredictionStatsQueryParams = zod.object({

@@ -273,30 +273,12 @@ export interface ScreenshotEventMatch {
   level: TournamentLevel | null;
 }
 
-/** A single matchup entry extracted from a screenshot (one of potentially many on the same image). */
-export interface ScreenshotMatchupEntry {
-  player1: ScreenshotPlayerMatch;
-  player2: ScreenshotPlayerMatch;
-  event: ScreenshotEventMatch;
-  /** True when both players in this entry were confidently resolved to real players. */
-  resolved: boolean;
-  /** Per-matchup warnings — filled when one or both players could not be resolved. */
-  warnings: string[];
-}
-
 export interface ScreenshotMatchupResult {
   player1: ScreenshotPlayerMatch;
   player2: ScreenshotPlayerMatch;
   event: ScreenshotEventMatch;
   /** Human-readable notes on anything not confidently recognized or matched -- the user should fill these in manually. */
   warnings: string[];
-  /**
-   * All matchups extracted from this screenshot (including the primary player1/player2/event).
-   * Present when the image contained more than one match card. Each entry carries its own
-   * resolved flag so partially-unrecognised matchups are handled individually rather than
-   * failing the whole screenshot.
-   */
-  matchups?: ScreenshotMatchupEntry[];
 }
 
 export interface PredictionRequest {
@@ -976,16 +958,12 @@ export interface RunWalkForwardRequest {
      * @maximum 0.95
      */
   warmupFraction?: number;
-  /** Task #12: when true (default for dashboard), calibration/specialist weights are frozen. */
-  evaluationOnly?: boolean;
 }
 
 export interface WalkForwardSummary {
   foldsRun: number;
   foldIds: number[];
   skippedNoEligibleMatches: boolean;
-  /** Task #12: true = evaluation-only (frozen weights), false = training mode. */
-  evaluationOnly: boolean;
 }
 
 export interface EvaluationPrediction {
@@ -1352,24 +1330,30 @@ export interface HistoricalBackfillCycleResult {
   summary?: HistoricalBackfillCycleSummary | null;
 }
 
-export interface HistoricalDataFreshnessGap {
-  fromDate: string;
-  toDate: string;
-  dayCount: number;
-}
-
 export interface HistoricalDataFreshness {
   /** Most recent scheduledStartAt date already stored in historical_matches (YYYY-MM-DD), or null if the table is empty. */
   latestCoveredDate: string | null;
   /** Whole days between latestCoveredDate and today (UTC). Null when latestCoveredDate is null. */
   daysBehind: number | null;
   asOf: string;
-  /** Decided, non-cancelled matches where both player1_rank and player2_rank are null. */
-  matchesMissingOpponentRank?: number | null;
-  /** Decided, non-cancelled matches where surface is null. */
-  matchesMissingSurface?: number | null;
-  /** Consecutive date gaps exceeding 30 days in the full historical_matches coverage. */
-  dateGapsOver30Days?: HistoricalDataFreshnessGap[];
+}
+
+export interface RunHistoricalBackfillRangeRequest {
+  /** First date to backfill, inclusive (YYYY-MM-DD). */
+  dateStart: string;
+  /** Last date to backfill, inclusive (YYYY-MM-DD). */
+  dateStop: string;
+  /**
+     * Provider chunk window in days. Defaults to 5 (the safe limit for busy periods).
+     * @minimum 1
+     */
+  chunkDays?: number;
+}
+
+export interface RunHistoricalBackfillRangeResult {
+  started: boolean;
+  dateStart: string;
+  dateStop: string;
 }
 
 export interface RunAblationAnalysisRequest {
@@ -1525,68 +1509,4 @@ export type ListHistoricalBackfillJobRunsParams = {
  */
 limit?: number;
 };
-
-// ── Task #12: Continuous outcome-learning types ──────────────────────────────────────────────────
-
-export type EvidenceStrength = 'Strong' | 'Moderate' | 'Weak' | 'Insufficient';
-
-export interface PatternSegment {
-  dimension: string;
-  value: string;
-  n: number;
-  correct: number;
-  accuracy: number | null;
-  logLoss: number | null;
-  brier: number | null;
-  ece: number | null;
-  ciLow: number | null;
-  ciHigh: number | null;
-  evidenceStrength: EvidenceStrength;
-}
-
-export interface PatternAnalysisRun {
-  id: number;
-  totalAnalyzed: number;
-  segments: PatternSegment[];
-  runKindsIncluded: string[];
-  createdAt: string;
-}
-
-export type ThresholdClassification = 'Deploy' | 'Continue shadow' | 'Needs more data' | 'Reject' | 'Investigate';
-
-export interface ThresholdEvalEntry {
-  tierId: string;
-  tierLabel: string;
-  currentValue: number | string;
-  candidateValue: number | string;
-  isWidening: boolean;
-  affectedN: number;
-  currentAccuracy: number | null;
-  candidateAccuracy: number | null;
-  currentLogLoss: number | null;
-  candidateLogLoss: number | null;
-  accuracyDelta: number | null;
-  logLossDelta: number | null;
-  classification: ThresholdClassification;
-  note: string;
-}
-
-export interface ThresholdEvaluationRun {
-  id: number;
-  totalGraded: number;
-  thresholds: ThresholdEvalEntry[];
-  createdAt: string;
-}
-
-export interface OptimizerRunSummary {
-  candidateConfigId: number;
-  thresholdEvaluationId: number;
-  walkForward: {
-    foldsRun: number;
-    foldIds: number[];
-    skippedNoEligibleMatches: boolean;
-    fallbackRate: number;
-    warnings: string[];
-  };
-}
 

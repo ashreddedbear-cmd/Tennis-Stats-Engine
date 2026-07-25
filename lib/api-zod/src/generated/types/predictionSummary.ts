@@ -18,18 +18,6 @@ export interface PredictionSummary {
   surface: Surface;
   /** @nullable */
   tournamentName?: string | null;
-  /** @nullable */
-  strategyId?: string | null;
-  /** @nullable */
-  strategyVersion?: string | null;
-  /** @nullable */
-  calibrationVersion?: string | null;
-  /** @nullable */
-  externalFixtureId?: string | null;
-  /** @nullable */
-  snapshotCapturedAt?: Date | null;
-  /** @nullable */
-  inputSnapshotHash?: string | null;
   predictedWinnerName: string;
   calibratedProbability: number;
   /** The predicted winner's own win probability (always >= 50) -- see the field doc on Prediction. Use this for display instead of calibratedProbability. */

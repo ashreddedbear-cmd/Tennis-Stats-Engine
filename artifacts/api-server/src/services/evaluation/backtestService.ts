@@ -12,7 +12,7 @@
  *  - All predictions stored in backtest_predictions, linked by backtest_run_id
  *  - DELETE on a run never touches backtest_predictions rows (soft-delete only)
  */
-import { db, historicalMatchesTable, calibrationModelsTable, backtestRunsTable, backtestPredictionsTable } from "@workspace/db";
+import { db, historicalMatchesTable, calibrationModelsTable, backtestRunsTable, backtestPredictionsTable, candidateConfigsTable } from "@workspace/db";
 import { asc, and, gte, lte, eq, isNull } from "drizzle-orm";
 import { scoreHistoricalMatch, type HistoricalScoringContext } from "./historicalScoring";
 import { computeSegmentMetrics, computeCalibrationBuckets } from "./metrics";

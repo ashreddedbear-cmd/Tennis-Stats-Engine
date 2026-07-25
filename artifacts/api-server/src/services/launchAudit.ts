@@ -509,7 +509,7 @@ async function runCalibrationChecks(): Promise<LaunchAuditFinding[]> {
   try {
     // Check for an active calibration model
     const activeModels = await db
-      .select({ id: calibrationModelsTable.id, method: calibrationModelsTable.method, foldId: calibrationModelsTable.foldId })
+      .select({ id: calibrationModelsTable.id, method: calibrationModelsTable.method, fittedAt: calibrationModelsTable.fittedAt })
       .from(calibrationModelsTable)
       .where(eq(calibrationModelsTable.active, true))
       .limit(1);
@@ -523,7 +523,7 @@ async function runCalibrationChecks(): Promise<LaunchAuditFinding[]> {
       status: hasActive ? 'Pass' : 'Warning',
       severity: hasActive ? 'Informational' : 'Medium',
       evidence: hasActive
-        ? `Active model: method=${activeModel?.method}, foldId=${activeModel?.foldId}`
+        ? `Active model: method=${activeModel?.method}, fittedAt=${activeModel?.fittedAt?.toISOString() ?? 'unknown'}`
         : 'No active calibration model — probabilities are uncalibrated',
       expectedResult: 'Active calibration model present',
       actualResult: hasActive ? `Active model (id=${activeModel?.id})` : 'No active model',

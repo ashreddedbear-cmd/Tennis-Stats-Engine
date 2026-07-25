@@ -66,9 +66,15 @@ router.post('/launch-audit/providers/test', requireAdmin, async (_req, res): Pro
  */
 router.post('/launch-audit/providers/:name/test', requireAdmin, (req, res): void => {
   try {
-    const card = testProviderByName(req.params.name);
+    const providerName = Array.isArray(req.params.name) ? req.params.name[0] : req.params.name;
+    if (!providerName) {
+      res.status(400).json({ error: 'Provider name is required' });
+      return;
+    }
+
+    const card = testProviderByName(providerName);
     if (!card) {
-      res.status(404).json({ error: `Provider "${req.params.name}" not found` });
+      res.status(404).json({ error: `Provider "${providerName}" not found` });
       return;
     }
     res.json({ provider: card, testedAt: new Date().toISOString() });

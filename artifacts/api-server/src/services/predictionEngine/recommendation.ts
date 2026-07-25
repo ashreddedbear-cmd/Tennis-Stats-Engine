@@ -102,7 +102,6 @@ export function computeRecommendation(
   // intuition while preserving the stricter STRONG_RECOMMENDATION gate above.
   if (
     margin >= HIGH_PROBABILITY_MARGIN_FLOOR &&
-    upsetRisk !== "EXTREME" &&
     modelAgreement !== "Mixed" &&
     modelAgreement !== "HighDisagreement"
   )
