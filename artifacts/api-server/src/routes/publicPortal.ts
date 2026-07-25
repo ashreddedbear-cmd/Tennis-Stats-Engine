@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import { logger } from "../lib/logger";
+import { db, legalConsentsTable, supportTicketsTable } from "@workspace/db";
 
 const router: IRouter = Router();
 
@@ -51,19 +52,41 @@ router.post("/public/contact", (req, res): void => {
     return;
   }
 
-  logger.info(
-    {
-      event: "portal2_contact",
-      name,
-      email,
-      ip,
-      userAgent: req.get("user-agent") ?? "unknown",
-      messageLength: message.length,
-    },
-    "Portal 2 contact request received",
-  );
+  void (async () => {
+    const userAgent = req.get("user-agent") ?? "unknown";
+    const [ticket] = await db
+      .insert(supportTicketsTable)
+      .values({
+        category: "contact",
+        name,
+        email,
+        subject: "Portal 2 contact form",
+        message,
+        status: "open",
+        sourceIp: ip,
+        userAgent,
+        metadata: { destination: "TennisMatrixAi@hotmail.com" },
+      })
+      .returning({ id: supportTicketsTable.id });
 
-  res.json({ ok: true });
+    logger.info(
+      {
+        event: "portal2_contact",
+        ticketId: ticket?.id ?? null,
+        name,
+        email,
+        ip,
+        userAgent,
+        messageLength: message.length,
+      },
+      "Portal 2 contact request received",
+    );
+
+    res.json({ ok: true, ticketId: ticket?.id ?? null });
+  })().catch((error: unknown) => {
+    logger.error({ error }, "Unable to persist contact ticket");
+    res.status(500).json({ error: "Unable to record support ticket" });
+  });
 });
 
 router.post("/public/legal-consent", (req, res): void => {
@@ -91,20 +114,36 @@ router.post("/public/legal-consent", (req, res): void => {
     return;
   }
 
-  logger.info(
-    {
-      event: "portal2_legal_consent",
+  void (async () => {
+    const userAgent = req.get("user-agent") ?? "unknown";
+    await db.insert(legalConsentsTable).values({
       context,
       email,
-      agreedTerms,
-      agreedPrivacy,
-      ip,
-      userAgent: req.get("user-agent") ?? "unknown",
-    },
-    "Portal 2 legal consent tracked",
-  );
+      agreedTerms: "true",
+      agreedPrivacy: "true",
+      sourceIp: ip,
+      userAgent,
+      metadata: { materialChangePolicy: "reaccept-material-only" },
+    });
 
-  res.json({ ok: true });
+    logger.info(
+      {
+        event: "portal2_legal_consent",
+        context,
+        email,
+        agreedTerms,
+        agreedPrivacy,
+        ip,
+        userAgent,
+      },
+      "Portal 2 legal consent tracked",
+    );
+
+    res.json({ ok: true });
+  })().catch((error: unknown) => {
+    logger.error({ error }, "Unable to persist legal consent");
+    res.status(500).json({ error: "Unable to record legal consent" });
+  });
 });
 
 router.post("/public/account-requests", (req, res): void => {
@@ -129,17 +168,37 @@ router.post("/public/account-requests", (req, res): void => {
   }
   duplicateWindow.set(dedupeKey, now);
 
-  logger.info(
-    {
-      event: "portal2_account_request",
-      requestType,
-      ip,
-      userAgent: req.get("user-agent") ?? "unknown",
-    },
-    "Portal 2 account request received",
-  );
+  void (async () => {
+    const userAgent = req.get("user-agent") ?? "unknown";
+    const [ticket] = await db
+      .insert(supportTicketsTable)
+      .values({
+        category: "account-request",
+        requestType,
+        subject: requestType,
+        status: "open",
+        sourceIp: ip,
+        userAgent,
+        metadata: { adminProcessed: true },
+      })
+      .returning({ id: supportTicketsTable.id });
 
-  res.json({ ok: true });
+    logger.info(
+      {
+        event: "portal2_account_request",
+        ticketId: ticket?.id ?? null,
+        requestType,
+        ip,
+        userAgent,
+      },
+      "Portal 2 account request received",
+    );
+
+    res.json({ ok: true, ticketId: ticket?.id ?? null });
+  })().catch((error: unknown) => {
+    logger.error({ error }, "Unable to persist account request");
+    res.status(500).json({ error: "Unable to record account request" });
+  });
 });
 
 export default router;

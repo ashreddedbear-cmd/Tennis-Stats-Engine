@@ -11,6 +11,7 @@ export default function PortalContactPage() {
   const [message, setMessage] = useState("")
   const [state, setState] = useState<"idle" | "loading" | "success" | "error">("idle")
   const [error, setError] = useState("")
+  const [ticketId, setTicketId] = useState<number | null>(null)
 
   const onSubmit = async (event: FormEvent) => {
     event.preventDefault()
@@ -26,7 +27,9 @@ export default function PortalContactPage() {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.error ?? "Unable to send message")
       }
+      const payload = await res.json().catch(() => ({ ok: true }))
       setState("success")
+      setTicketId(typeof payload.ticketId === "number" ? payload.ticketId : null)
       setName("")
       setEmail("")
       setMessage("")
@@ -42,12 +45,14 @@ export default function PortalContactPage() {
         <p className="text-xs font-mono font-bold tracking-[0.2em] uppercase text-muted-foreground">Contact</p>
         <h1 className="text-3xl sm:text-5xl font-display font-bold">Contact and support</h1>
         <p className="text-sm sm:text-base text-muted-foreground">Need help with account, billing, or product usage? Send a message and our team will follow up.</p>
+        <p className="text-xs text-muted-foreground">Support inbox: TennisMatrixAi@hotmail.com</p>
+        <p className="text-xs text-muted-foreground">Privacy requests: privacy@tennismatrixai.com (until live, use TennisMatrixAi@hotmail.com)</p>
       </section>
 
       <Card className="glass-panel">
         <CardHeader>
           <CardTitle>Send a message</CardTitle>
-          <CardDescription>Rate limited and validated for abuse protection.</CardDescription>
+          <CardDescription>Rate limited and validated for abuse protection. CAPTCHA is enforced through deployment security controls.</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={onSubmit} className="space-y-3">
@@ -70,7 +75,7 @@ export default function PortalContactPage() {
             )}
             {state === "success" && (
               <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-primary flex items-center gap-2">
-                <CheckCircle2 className="h-4 w-4" /> Message received. We will follow up by email.
+                <CheckCircle2 className="h-4 w-4" /> Message received{ticketId ? ` (Ticket #${ticketId})` : ""}. We will follow up by email.
               </div>
             )}
             <Button type="submit" disabled={state === "loading"} className="w-full sm:w-auto">

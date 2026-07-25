@@ -18,6 +18,7 @@ export default function PortalAboutPage() {
             <p>Probability-based predictions and analysis across ATP and WTA fixtures.</p>
             <p>Historical testing tools including backtesting, shadow replay, and walk-forward evaluation.</p>
             <p>Decision-support context such as confidence, disagreement, and calibration views.</p>
+            <p>Public metrics focus on validated methodology and model calibration rather than promotional ROI claims.</p>
           </CardContent>
         </Card>
         <Card className="glass-panel">
@@ -26,6 +27,7 @@ export default function PortalAboutPage() {
             <p>We are not a sportsbook and do not place bets for users.</p>
             <p>We do not guarantee outcomes, profits, or performance.</p>
             <p>Users are fully responsible for their own decisions and risk management.</p>
+            <p>Recent wins or parlay posts are not published on the official product site.</p>
           </CardContent>
         </Card>
       </div>

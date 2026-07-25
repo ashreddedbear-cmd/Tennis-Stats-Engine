@@ -55,6 +55,10 @@ export default function PrivacyPolicyPage() {
             We may use data for abuse prevention, duplicate-account protection, fraud checks,
             account recovery, and service auditability.
           </p>
+          <p>
+            Analytics are limited to Google Analytics. Meta Pixel, X tracking pixels, and
+            session-replay scripts are not enabled.
+          </p>
         </CardContent>
       </Card>
 
@@ -95,6 +99,19 @@ export default function PrivacyPolicyPage() {
             Continued use of the service after updates are posted indicates acceptance of the
             revised policy.
           </p>
+          <p>
+            Users may be notified by email when material privacy or policy changes occur.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card className="glass-panel border-border">
+        <CardHeader>
+          <CardTitle className="text-lg">Privacy Contact</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm text-muted-foreground leading-relaxed">
+          <p>Primary support address: TennisMatrixAi@hotmail.com</p>
+          <p>Privacy request address: privacy@tennismatrixai.com (until active, use support address).</p>
         </CardContent>
       </Card>
 

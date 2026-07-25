@@ -22,6 +22,9 @@ export default function TermsOfServicePage() {
           These terms govern your use of TENNIS MATRIX AI. By accessing or using the platform,
           you agree to these terms.
         </p>
+        <p className="text-xs text-muted-foreground leading-relaxed mt-2">
+          Tennis Matrix AI is operated as a sole proprietorship in Georgia, United States.
+        </p>
       </section>
 
       <Card className="glass-panel border-border">
@@ -33,6 +36,7 @@ export default function TermsOfServicePage() {
         </CardHeader>
         <CardContent className="space-y-3 text-sm text-muted-foreground leading-relaxed">
           <p>You must use the service in compliance with applicable laws and regulations.</p>
+          <p>You must be at least 18 years old to create or use an account.</p>
           <p>
             Tennis Matrix AI provides informational tennis analysis and predictions only. It is not
             a sportsbook and does not place bets for users.
@@ -113,6 +117,30 @@ export default function TermsOfServicePage() {
             Payment-card data is handled by Stripe. Tennis Matrix AI does not store full payment
             card information directly.
           </p>
+          <p>
+            Governing law is the State of Georgia.
+          </p>
+          <p>
+            Subscriptions are non-refundable. Standard cancellations do not qualify for refund.
+            Billing errors (for example duplicate charges) may be reviewed for exception when
+            reported within 48 hours.
+          </p>
+          <p>
+            We may email users about policy updates. Re-acceptance is required for material
+            changes (pricing terms, liability/arbitration, or data-use/privacy scope) but not for
+            typographical or formatting edits.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card className="glass-panel border-border">
+        <CardHeader>
+          <CardTitle className="text-lg">Support and Notices</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm text-muted-foreground leading-relaxed">
+          <p>Support contact: TennisMatrixAi@hotmail.com</p>
+          <p>Privacy requests: privacy@tennismatrixai.com (until available, use support contact).</p>
+          <p>Business mailing address is maintained for legal notices and billing correspondence.</p>
         </CardContent>
       </Card>
 
