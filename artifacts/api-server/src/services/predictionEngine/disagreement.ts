@@ -104,6 +104,9 @@ export interface WeightedDisagreement {
   weightedStdDev: number;
   /** % of the vote's total effective weight backing whichever player has the most support -- 100 means every meaningfully-weighted model points the same direction; near 50 means the vote is split. This is a DIRECTIONAL measure, not a margin-from-50 one: three models clustered at 52/53/55 for the same player score 100 here, not ~53 (spec Part A.E). */
   leadingSupportPercent: number;
+  /** % of the vote's total effective weight specifically backing player 1 (0–100, player-1-relative, can be below 50).
+   * Use normalizeSupportToWinner() before displaying this on any card or export -- never show it raw. */
+  player1SupportPercent: number;
   /** True only when at least two of the three validated core models each carry a meaningful weight share AND point at different players. */
   coreModelsConflict: boolean;
   /** Every model carrying a meaningful weight share, sorted by weight descending -- the models actually capable of driving the reading. Used to build the human-readable explanation. Empty when modelAgreement is "Strong". */
@@ -129,7 +132,7 @@ export function computeWeightedDisagreement(models: DisagreementModelInput[]): W
   // the entire fallback weight to player 2). Report a neutral, no-conflict reading instead of
   // inventing a leader.
   if (models.length === 0 || totalWeightRaw === 0) {
-    return { modelAgreement: "Strong", weightedStdDev: 0, leadingSupportPercent: 50, coreModelsConflict: false, conflictingModels: [] };
+    return { modelAgreement: "Strong", weightedStdDev: 0, leadingSupportPercent: 50, player1SupportPercent: 50, coreModelsConflict: false, conflictingModels: [] };
   }
   const totalWeight = totalWeightRaw;
 
@@ -195,6 +198,7 @@ export function computeWeightedDisagreement(models: DisagreementModelInput[]): W
     modelAgreement,
     weightedStdDev: Math.round(weightedStdDev * 10) / 10,
     leadingSupportPercent: Math.round(leadingSupportPercent * 10) / 10,
+    player1SupportPercent: Math.round((player1Support / totalWeight) * 1000) / 10,
     coreModelsConflict,
     conflictingModels,
   };
@@ -218,6 +222,19 @@ export function computeMatchupCloseness(finalProbability: number): MatchupClosen
  * a genuinely different situation from real directional conflict, and must read that way -- never
  * phrased so it implies the models are in disagreement about who wins.
  */
+/**
+ * Converts a player-1-relative support percentage to the predicted winner's perspective.
+ * Always call this before showing agreement on any card, export, or admin view -- never display
+ * player1SupportPercent directly when the predicted winner may be player2.
+ */
+export function normalizeSupportToWinner(
+  player1SupportPercent: number,
+  player1Id: string,
+  predictedWinnerId: string,
+): number {
+  return predictedWinnerId === player1Id ? player1SupportPercent : 100 - player1SupportPercent;
+}
+
 export function buildDisagreementNote(disagreement: WeightedDisagreement, player1Name: string, player2Name: string): string | null {
   if (disagreement.modelAgreement === "Strong" || disagreement.conflictingModels.length === 0) return null;
 

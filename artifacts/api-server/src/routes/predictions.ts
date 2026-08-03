@@ -226,7 +226,6 @@ router.post("/predictions", async (req, res): Promise<void> => {
       headToHead,
       player1OpponentElo: player1OpponentStrength.lookup,
       player2OpponentElo: player2OpponentStrength.lookup,
-      requestNonce: integrity.requestId,
     });
 
     output.engine.warnings.push(`REQUEST_ID:${integrity.requestId}`);

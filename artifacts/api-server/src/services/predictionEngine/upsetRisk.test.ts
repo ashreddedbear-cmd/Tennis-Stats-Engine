@@ -8,6 +8,7 @@ function disagreement(overrides: Partial<WeightedDisagreement> = {}): WeightedDi
     modelAgreement: "Strong",
     weightedStdDev: 2,
     leadingSupportPercent: 90,
+    player1SupportPercent: 90,
     coreModelsConflict: false,
     conflictingModels: [],
     ...overrides,
