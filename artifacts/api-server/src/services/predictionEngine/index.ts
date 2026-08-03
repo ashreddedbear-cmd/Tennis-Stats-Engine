@@ -6,7 +6,7 @@ import { computeMatchLoadRecoveryModule } from "./matchLoadRecovery";
 import { computeAvailabilityModule } from "./availability";
 import { computeStyleMatchupModule } from "./styleMatchup";
 import { computeHeadToHeadModule } from "./headToHead";
-import { computeDataQuality, computeSurfaceSampleDepth, computeMatchupDifficultySignal, adjustDataQualityForMatchupDifficulty, dataQualityLabelForScore, MODULE_IMPORTANCE, ENSEMBLE_WEIGHT_PRIOR, EXCLUDED_FROM_ENSEMBLE, EXCLUDED_FROM_DATA_QUALITY, CONFIDENCE_SHRINK, TOUR_RELIABILITY_DISCOUNT, LOW_SURFACE_SAMPLE_DISCOUNT } from "./dataQuality";
+import { computeDataQuality, computeSurfaceSampleDepth, MODULE_IMPORTANCE, ENSEMBLE_WEIGHT_PRIOR, EXCLUDED_FROM_ENSEMBLE, EXCLUDED_FROM_DATA_QUALITY, CONFIDENCE_SHRINK, TOUR_RELIABILITY_DISCOUNT, LOW_SURFACE_SAMPLE_DISCOUNT } from "./dataQuality";
 import { buildEnsemble, edgeToProbability, worseAgreement, type ModelVote } from "./ensemble";
 import { computeWeightedDisagreement, computeMatchupCloseness, buildDisagreementNote, AGREEMENT_ORDER, type MatchupCloseness } from "./disagreement";
 import { calibrateProbability } from "./calibration";
@@ -17,7 +17,6 @@ import { deriveServicePointEstimate, runMatchSimulation, deriveMatchSeed, type M
 import { applyTieBreaker } from "./tieBreakers";
 import { computeEliteTier, voteFavorsPlayer1 } from "./eliteTier";
 import { checkFinalConsistency } from "./finalConsistencyCheck";
-import { computeBuilderScore, computeCrossEngineAgreement } from "../parlayBuilder/builderScoringService";
 import type { PredictionEngineInput } from "./types";
 import type { WeatherConditions } from "./weather";
 
@@ -49,6 +48,15 @@ export interface EngineBreakdown {
    */
   disclosures: string[];
   warnings: string[];
+  /**
+   * Structural coverage gaps: data that is unavailable for structural reasons (a player has
+   * no recorded match history, a venue isn't in our coverage, an external feed isn't connected)
+   * rather than because the model evidence is thin. Unlike `warnings`, these don't increase
+   * upset risk -- they explain WHY certain signals fall back to global defaults. Grouped by
+   * root cause so one missing player doesn't produce a wall of identical-root bullets.
+   * Absent on predictions made before this field existed.
+   */
+  coverageGaps: string[];
   availabilityNote: string;
   conditionsNote: string;
   weather: WeatherConditions | null;
@@ -77,8 +85,6 @@ export interface EngineBreakdown {
   modelConflict: boolean;
   /** Concise, always-non-null-when-modelConflict-is-true explanation of which metrics favored the other side and which stage of the pipeline (general calibration, segment specialist, or simulator) flipped the final pick. Null when there's no conflict. */
   modelConflictNote: string | null;
-  /** Rank-parity / Elo-gap fallback signal used to adjust trust for structural matchup competitiveness (independent of data richness). */
-  matchupDifficulty: ReturnType<typeof computeMatchupDifficultySignal>;
   /**
    * True when the raw ensemble landed within `TIE_BAND` of a coin flip — signals a genuinely
    * close matchup. The old directional cascade (Serve & Return → Surface Elo → …) was removed
@@ -135,14 +141,6 @@ export interface EngineOutput {
   engine: EngineBreakdown;
   /** Task #32: full auditable trace of every intermediate pipeline stage and decision-chain rule. */
   decisionTrace: DecisionTrace;
-  /**
-   * Cross-engine agreement: does the parlay builder VALIDATE the engine's own predicted winner?
-   * true  — builder decision is KEEP or BORDERLINE (doesn't disagree with the engine's pick)
-   * false — builder decision is REMOVE (evidence favors the opponent)
-   * null  — builder returned DATA_UNAVAILABLE (not enough data to decide; not a disagreement)
-   * Never merged into the underlying probability or grade — surfaced as a separate signal only.
-   */
-  crossEngineAgreement: boolean | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,10 +179,6 @@ export interface DecisionTrace {
     calibrationMethod: "fitted" | "fallback";
     /** Shrink factor applied by the fallback (1.0 if fitted calibration was used instead). */
     fallbackShrinkFactor: number;
-    dataQualityBase: number;
-    dataQualityAdjusted: number;
-    matchupDifficultyDecisiveness: number;
-    matchupDifficultySource: "rank-gap" | "elo-gap-fallback";
     afterCalibration: number;
     specialistWeight: number;
     afterSpecialist: number;
@@ -239,47 +233,59 @@ function buildRecommendationTrace(
   calibratedProbability: number,
   dataQuality: number,
   dataQualityLabel: string,
-  upsetRisk: string,
   modelAgreement: string,
   result: string,
   tieBreakerApplied: boolean,
+  coreSignalsAlign: boolean,
 ): DecisionTrace["recommendation"] {
   const margin = Math.abs(calibratedProbability - 50);
   const rules: Array<{ rule: string; matched: boolean; decided: boolean }> = [];
 
   const r1 = dataQualityLabel === "Poor" || dataQuality < 25;
-  rules.push({ rule: `DQ < 25 or label "Poor" → DO_NOT_RECOMMEND (DQ=${dataQuality}, label="${dataQualityLabel}")`, matched: r1, decided: r1 });
+  rules.push({ rule: `DQ < 25 or label "Poor" → INSUFFICIENT_EDGE (DQ=${dataQuality}, label="${dataQualityLabel}")`, matched: r1, decided: r1 });
   if (r1) return { result, margin, rulesChecked: rules };
 
   const r1b = tieBreakerApplied;
-  rules.push({ rule: `tieBreakerApplied → NO_STRONG_SIGNAL (raw ensemble within TIE_BAND of 50, no validated directional edge)`, matched: r1b, decided: r1b });
+  rules.push({ rule: `tieBreakerApplied → INSUFFICIENT_EDGE (raw ensemble within TIE_BAND of 50, no validated directional edge)`, matched: r1b, decided: r1b });
   if (r1b) return { result, margin, rulesChecked: rules };
 
   const r2 = margin < 8 && (modelAgreement === "Mixed" || modelAgreement === "HighDisagreement");
-  rules.push({ rule: `margin < 8 AND (Mixed|HighDisagreement) → NO_STRONG_SIGNAL (margin=${margin.toFixed(1)}, agreement="${modelAgreement}")`, matched: r2, decided: r2 });
+  rules.push({ rule: `margin < 8 AND (Mixed|HighDisagreement) → INSUFFICIENT_EDGE (margin=${margin.toFixed(1)}, agreement="${modelAgreement}")`, matched: r2, decided: r2 });
   if (r2) return { result, margin, rulesChecked: rules };
 
-  const r3 = upsetRisk === "EXTREME";
-  rules.push({ rule: `upsetRisk === "EXTREME" → HIGH_RISK`, matched: r3, decided: r3 });
+  const r3 = margin >= 35 && dataQuality >= 45 && modelAgreement === "Strong" && coreSignalsAlign;
+  rules.push({ rule: `margin ≥ 35 AND DQ ≥ 45 AND Strong AND coreSignalsAlign → HIGHEST_CONFIDENCE (margin=${margin.toFixed(1)}, DQ=${dataQuality}, coreSignalsAlign=${coreSignalsAlign})`, matched: r3, decided: r3 });
   if (r3) return { result, margin, rulesChecked: rules };
 
-  const r4 = margin >= 26 && dataQuality >= 50 && upsetRisk === "LOW" && modelAgreement === "Strong";
-  rules.push({ rule: `margin ≥ 26 AND DQ ≥ 50 AND LOW upset risk AND Strong agreement → STRONG_RECOMMENDATION (margin=${margin.toFixed(1)}, DQ=${dataQuality}, agreement="${modelAgreement}")`, matched: r4, decided: r4 });
+  const r4 = margin >= 26 && dataQuality >= 50 && modelAgreement === "Strong" && coreSignalsAlign;
+  rules.push({ rule: `margin ≥ 26 AND DQ ≥ 50 AND Strong AND coreSignalsAlign → HIGHEST_CONFIDENCE (margin=${margin.toFixed(1)}, DQ=${dataQuality}, agreement="${modelAgreement}")`, matched: r4, decided: r4 });
   if (r4) return { result, margin, rulesChecked: rules };
 
-  const r5 = margin >= 12 && (upsetRisk === "LOW" || upsetRisk === "MODERATE") && modelAgreement !== "Mixed" && modelAgreement !== "HighDisagreement";
-  rules.push({ rule: `margin ≥ 12 AND LOW/MODERATE AND not Mixed/HighDisagreement → MODERATE_LEAN (margin=${margin.toFixed(1)}, agreement="${modelAgreement}")`, matched: r5, decided: r5 });
+  const r5 = margin >= 20 && modelAgreement === "Strong";
+  rules.push({ rule: `margin ≥ 20 AND Strong → HIGH_CONFIDENCE (margin=${margin.toFixed(1)}, agreement="${modelAgreement}")`, matched: r5, decided: r5 });
   if (r5) return { result, margin, rulesChecked: rules };
 
-  const r6 = margin >= 9 && (upsetRisk === "LOW" || upsetRisk === "MODERATE") && modelAgreement !== "Mixed" && modelAgreement !== "HighDisagreement";
-  rules.push({ rule: `margin ≥ 9 AND LOW/MODERATE AND not Mixed/HighDisagreement → MODERATE_LEAN (margin=${margin.toFixed(1)}, agreement="${modelAgreement}")`, matched: r6, decided: r6 });
+  const r6 = margin >= 12 && (modelAgreement === "Strong" || modelAgreement === "Moderate");
+  rules.push({ rule: `margin ≥ 12 AND (Strong|Moderate) → HIGH_CONFIDENCE (margin=${margin.toFixed(1)}, agreement="${modelAgreement}")`, matched: r6, decided: r6 });
   if (r6) return { result, margin, rulesChecked: rules };
 
-  const r7 = margin >= 40 && upsetRisk !== "EXTREME" && modelAgreement !== "Mixed" && modelAgreement !== "HighDisagreement";
-  rules.push({ rule: `margin ≥ 40 AND upsetRisk ≠ EXTREME AND not Mixed/HighDisagreement → MODERATE_LEAN (high-confidence guardrail)`, matched: r7, decided: r7 });
+  const r7 = margin >= 9 && modelAgreement === "Strong";
+  rules.push({ rule: `margin ≥ 9 AND Strong → HIGH_CONFIDENCE (margin=${margin.toFixed(1)}, agreement="${modelAgreement}")`, matched: r7, decided: r7 });
   if (r7) return { result, margin, rulesChecked: rules };
 
-  rules.push({ rule: `fallthrough → HIGH_RISK`, matched: true, decided: true });
+  const r8 = margin >= 40 && modelAgreement !== "Mixed" && modelAgreement !== "HighDisagreement";
+  rules.push({ rule: `margin ≥ 40 AND not Mixed/HighDisagreement → HIGH_CONFIDENCE (high-confidence guardrail, margin=${margin.toFixed(1)})`, matched: r8, decided: r8 });
+  if (r8) return { result, margin, rulesChecked: rules };
+
+  const r9 = margin >= 9 && modelAgreement === "Moderate";
+  rules.push({ rule: `margin ≥ 9 AND Moderate → MODERATE_CONFIDENCE (margin=${margin.toFixed(1)})`, matched: r9, decided: r9 });
+  if (r9) return { result, margin, rulesChecked: rules };
+
+  const r10 = margin >= 12;
+  rules.push({ rule: `margin ≥ 12 (Mixed|HighDisagreement with real margin) → MODERATE_CONFIDENCE (margin=${margin.toFixed(1)})`, matched: r10, decided: r10 });
+  if (r10) return { result, margin, rulesChecked: rules };
+
+  rules.push({ rule: `fallthrough → LOW_CONFIDENCE`, matched: true, decided: true });
   return { result, margin, rulesChecked: rules };
 }
 
@@ -358,7 +364,7 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
   const recentForm = computeRecentFormModule(input.player1Matches, input.player2Matches, input.surface, player1OpponentElo, player2OpponentElo);
   const fatigue = computeFatigueModule(input.player1Matches, input.player2Matches, input.asOfDate);
   const matchLoadRecovery = computeMatchLoadRecoveryModule(input.player1Matches, input.player2Matches, input.asOfDate);
-  const availability = computeAvailabilityModule(input.player1Matches, input.player2Matches, input.tournamentName ?? null);
+  const availability = computeAvailabilityModule(input.player1Matches, input.player2Matches, input.tournamentName ?? null, new Date(), input.webResearch ?? null);
   const styleMatchup = computeStyleMatchupModule(input.player1Matches, input.player2Matches);
   const headToHead = computeHeadToHeadModule(input.headToHead, input.surface);
 
@@ -447,6 +453,59 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     },
   ];
 
+  // Market Consensus module — computed separately from the historical feature modules.
+  //
+  // The market module is NOT pushed into `moduleEdges` (whose element type is a closed literal
+  // union over historical feature keys) because:
+  //   (a) TypeScript infers the union from the array literal and would reject "marketOdds";
+  //   (b) the market module is architecturally distinct — it is a live external signal, not a
+  //       historical data feature, and is always excluded from the Data Quality blend.
+  //
+  // When absent (no odds configured, provider down, matchup not listed, or ablation override),
+  // marketConsensusInput is null and the ensemble is identical to predictions without odds.
+  // Absence does NOT synthesize a 50/50 neutral vote (that adds meaningless noise).
+  //
+  // Orientation: player1DecimalOdds / player2DecimalOdds are player-1-relative (same convention
+  // as every other engine input), so normP1 maps directly to player1Edge without name-matching.
+  //
+  // Task #21 (2026-07-31): excluded from the ensemble pending the ≥200 paper_trade paired-row
+  // reliability bar. The 2026-07-31 ablation run produced n=180 paper_trade pairs (just short of
+  // the required 200). Directional signals are promising — Δacc +0.5pp, Δlog-loss −0.014, market
+  // correct 69.6% when it disagrees with the model — but the sample is too small to declare a
+  // confirmed net positive. "marketOdds" is in EXCLUDED_FROM_ENSEMBLE until re-validated at ≥200.
+  // See docs/audit-market-consensus-ablation.md and scripts/auditMarketConsensusAblation.ts.
+  let marketConsensusInput: { name: string; player1Edge: number; reliability: number; weightPrior: number } | null = null;
+  // Task #21: honor the global EXCLUDED_FROM_ENSEMBLE gate for "marketOdds" whenever no explicit
+  // per-call ablation set is provided (i.e. every live, paper-trade, and non-ablation call). An
+  // explicitly-provided `excludedModels` (even an empty Set) signals ablation mode — the caller
+  // takes responsibility for which modules are active, so the global gate is bypassed for that
+  // call only. This lets the dedicated market-odds ablation script test both "with odds" and
+  // "without odds" arms independently via `excludedModels`, while standard live calls always
+  // respect the global exclusion.
+  const marketGloballyExcluded = excludedModels == null && EXCLUDED_FROM_ENSEMBLE.has("marketOdds");
+  if (
+    input.marketOdds != null &&
+    !marketGloballyExcluded &&
+    !excludedModels?.has("marketOdds") &&
+    input.marketOdds.player1DecimalOdds > 1 &&
+    input.marketOdds.player2DecimalOdds > 1
+  ) {
+    const rawP1 = 1 / input.marketOdds.player1DecimalOdds;
+    const rawP2 = 1 / input.marketOdds.player2DecimalOdds;
+    const totalImplied = rawP1 + rawP2;
+    // Vig-normalize: remove the bookmaker's over-round so the two sides sum to 1.
+    const normP1 = totalImplied > 0 ? rawP1 / totalImplied : 0.5;
+    // Inverse of edgeToProbability(edge) = 1 / (1 + exp(-edge/12)) * 100.
+    // Solved: edge = 12 * ln(normP1 / (1 - normP1)), with normP1 in [0, 1].
+    const marketEdge = normP1 > 0 && normP1 < 1 ? 12 * Math.log(normP1 / (1 - normP1)) : 0;
+    marketConsensusInput = {
+      name: "Market Consensus",
+      player1Edge: marketEdge,
+      reliability: 80,
+      weightPrior: 0.5, // modest supplemental vote; below the three core signal modules
+    };
+  }
+
   // Task #111 root-cause fix: the Data Quality blend must draw from every module NOT in
   // `EXCLUDED_FROM_DATA_QUALITY` (currently just Head-to-Head), independent of which modules are
   // excluded from the ensemble VOTE. Before this fix, `moduleEdges` below was pre-filtered by
@@ -464,7 +523,12 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
   // turns a module off should not silently keep counting toward Data Quality either.
   const allModuleEdgesForDataQuality = moduleEdges.filter((m) => !excludedModels?.has(m.key) && !EXCLUDED_FROM_DATA_QUALITY.has(m.key));
 
-  const ensembleModuleEdges = moduleEdges.filter((m) => !excludedModels?.has(m.key) && !EXCLUDED_FROM_ENSEMBLE.has(m.key));
+  const ensembleModuleEdges = [
+    ...moduleEdges.filter((m) => !excludedModels?.has(m.key) && !EXCLUDED_FROM_ENSEMBLE.has(m.key)),
+    // Market Consensus is excluded from EXCLUDED_FROM_DATA_QUALITY but NOT from the ensemble vote —
+    // add it here (after the feature-module filter) only when real odds are present.
+    ...(marketConsensusInput ? [marketConsensusInput] : []),
+  ];
   const { models: featureModels, ensembleProbability: rawEnsembleProbability, modelAgreement: featureAgreement } = buildEnsemble(ensembleModuleEdges);
   // Recomputed (pure, deterministic) so we keep the full weighted-disagreement breakdown --
   // stddev/support/conflicting models -- for the disagreement explanation below, not just the
@@ -498,16 +562,30 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
   // (it still votes in the ensemble above) -- see `EXCLUDED_FROM_DATA_QUALITY`'s rationale: the
   // common "no prior meetings" case isn't a fixable data gap, so it shouldn't be able to drag the
   // score down.
-  const { score: baseDataQuality } = computeDataQuality(
-    allModuleEdgesForDataQuality.map((m) => ({ reliability: m.reliability, importance: m.importance })),
+  // Detect zero-history players before the DQ blend -- needed both for the structural-gap
+  // floor below and for the warning-grouping pass later.
+  const p1ZeroHistory = input.player1Matches.length === 0;
+  const p2ZeroHistory = input.player2Matches.length === 0;
+
+  // Structural gap floor: when a player has zero recorded match history, surfaceElo, recentForm,
+  // and serveReturn all collapse to their individual reliability floors (~0-10) for the SAME root
+  // cause, compounding into a catastrophic DQ score (e.g. 24%) even when the opponent is
+  // well-documented and the engine still has a valid opinion from rankings/tour context. Cap the
+  // combined drag by flooring each of those three modules at ZERO_HISTORY_MODULE_FLOOR so one
+  // structural data gap doesn't count five times in the weighted blend.
+  const ZERO_HISTORY_MODULE_FLOOR = 40;
+  const { score: dataQuality, label: dataQualityLabel } = computeDataQuality(
+    allModuleEdgesForDataQuality.map((m) => {
+      let reliability = m.reliability;
+      if (
+        (p1ZeroHistory || p2ZeroHistory) &&
+        (m.key === "surfaceElo" || m.key === "recentForm" || m.key === "serveReturn")
+      ) {
+        reliability = Math.max(reliability, ZERO_HISTORY_MODULE_FLOOR);
+      }
+      return { reliability, importance: m.importance };
+    }),
   );
-  const matchupDifficulty = computeMatchupDifficultySignal({
-    player1Rank: input.player1.currentRank,
-    player2Rank: input.player2.currentRank,
-    surfaceEloEdge: rawEloEdge,
-  });
-  const dataQuality = adjustDataQualityForMatchupDifficulty(baseDataQuality, matchupDifficulty);
-  const dataQualityLabel = dataQualityLabelForScore(dataQuality);
 
   // Requirement 2 of this phase: expose the surface sample-depth count that `surfaceElo.ts`
   // already tracks internally, so a low-sample surface matchup is visibly flagged rather than
@@ -578,7 +656,11 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
   const usingRealCalibration = !generalEnsembleExcluded && (input.activeCalibration?.length ?? 0) > 0;
   const segmentTour = segment?.segmentKey.split("-")[0] ?? null;
   const tourDiscount = !specialistApplied && !usingRealCalibration && segmentTour ? TOUR_RELIABILITY_DISCOUNT[segmentTour] ?? 1 : 1;
-  const surfaceSampleDiscount = !specialistApplied && surfaceSampleDepth.label === "Low" ? LOW_SURFACE_SAMPLE_DISCOUNT : 1;
+  // Task #33: also skip the surface-sample noise discount when real isotonic calibration is active —
+  // the pooled calibration knots are fitted on raw_probability → actual_outcome across the full
+  // corpus and already account for per-match data sparsity at scale. Applying the ×0.75 shrink on
+  // top double-corrects and contributes to systematic underconfidence in low-sample-surface matches.
+  const surfaceSampleDiscount = !specialistApplied && !usingRealCalibration && surfaceSampleDepth.label === "Low" ? LOW_SURFACE_SAMPLE_DISCOUNT : 1;
   const reliabilityDiscount = Math.round(tourDiscount * surfaceSampleDiscount * 1000) / 1000;
   const preSimulatorProbability = reliabilityDiscount < 1
     ? Math.round((50 + (blendedProbability - 50) * reliabilityDiscount) * 10) / 10
@@ -622,9 +704,17 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
   const simulatorWeight = simulatorAdoptedGlobally ? Math.round(simulatorAdoption!.weight! * simulatorScopeScale * 1000) / 1000 : 0;
   const simulatorApplied = simulatorWeight > 0;
 
-  const calibratedProbability = simulatorApplied
+  const calibratedProbabilityRaw = simulatorApplied
     ? Math.round((simulatorWeight * simulation.player1WinProbability + (1 - simulatorWeight) * preSimulatorProbability) * 10) / 10
     : preSimulatorProbability;
+  // Hard gate: the engine can never claim 0 % or 100 % certainty.
+  // Bounds are [0.6, 99.4] so that the downstream toFixed(0) display (used for the
+  // "WIN PROBABILITY" headline) rounds to at most "99%" in both directions:
+  //   player1 wins → calibratedProbability → toFixed(0) ≤ 99
+  //   player2 wins → 100 - calibratedProbability ≤ 99.4 → toFixed(0) ≤ 99
+  // This also guards the path where simulatorApplied=false and preSimulatorProbability
+  // is extreme, which the simulator's own safeRate clamp cannot reach.
+  const calibratedProbability = Math.max(0.6, Math.min(99.4, calibratedProbabilityRaw));
 
   const models: ModelVote[] = [...featureModels];
   models.push({
@@ -743,7 +833,18 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     tournamentLevel: input.tournamentLevel ?? null,
   });
   const upsetRisk = upsetRiskBreakdown.upsetRisk;
-  const recommendation = computeRecommendation(calibratedProbability, dataQuality, dataQualityLabel, upsetRisk, modelAgreement, tieBreaker.applied);
+
+  // Compute the three core-signal vote directions here so we can:
+  //  1. Derive coreSignalsAlign for computeRecommendation (the same bar Elite tier uses)
+  //  2. Reuse the extracted values inside computeEliteTier below (avoids calling
+  //     voteFavorsPlayer1 a second time for the same three signals at lines ~838-840)
+  //  3. Re-use them again in the decisionTrace eliteTier gates assembly at lines ~1024-1027
+  const surfaceEloFavorsP1 = voteFavorsPlayer1(featureModels, "Surface Elo");
+  const serveReturnFavorsP1 = voteFavorsPlayer1(featureModels, "Serve & Return");
+  const recentFormFavorsP1 = voteFavorsPlayer1(featureModels, "Recent Form");
+  const coreSignalsAlign = surfaceEloFavorsP1 === serveReturnFavorsP1 && serveReturnFavorsP1 === recentFormFavorsP1;
+
+  const recommendation = computeRecommendation(calibratedProbability, dataQuality, dataQualityLabel, modelAgreement, tieBreaker.applied, coreSignalsAlign);
 
   const favorsPlayer1 = calibratedProbability >= 50;
   const predictedWinnerId = favorsPlayer1 ? input.player1.id : input.player2.id;
@@ -751,7 +852,11 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
   // Guardrail (final consistency check): the predicted winner's own probability, mirrored from
   // player 1's when player 2 is the pick. By construction this can never read below 50 next to
   // the player the engine just named the favorite -- see the field doc on EngineOutput.
-  const predictedWinnerProbability = Math.round((favorsPlayer1 ? calibratedProbability : 100 - calibratedProbability) * 10) / 10;
+  // Belt-and-suspenders: cap at 99.4 so toFixed(0) can never produce "100%" regardless of
+  // floating-point edge cases upstream (the primary gate is the calibratedProbability clamp above).
+  const predictedWinnerProbability = Math.min(99.4,
+    Math.round((favorsPlayer1 ? calibratedProbability : 100 - calibratedProbability) * 10) / 10,
+  );
   const predictedSetScore = predictSetScore(input.matchFormat, calibratedProbability);
 
   const reasons: string[] = [];
@@ -802,14 +907,8 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     risks.push(disagreementNote);
   }
 
-  if (recommendation === "NO_STRONG_SIGNAL") {
-    risks.push("Probability is close to a coin flip and the underlying models don't agree -- there is no strong signal either way for this matchup.");
-  }
-
-  if (matchupDifficulty.decisivenessScore <= 35) {
-    disclosures.push("This matchup profiles as structurally competitive (high parity), independent of data richness; trust is adjusted downward accordingly.");
-  } else if (matchupDifficulty.decisivenessScore >= 70) {
-    disclosures.push("This matchup profiles as structurally less competitive (clearer parity gap), independent of data richness; trust is adjusted upward accordingly.");
+  if (recommendation === "INSUFFICIENT_EDGE") {
+    risks.push("Available evidence does not support a reliable directional edge for this matchup — this may be due to thin data, conflicted models, or a probability close to a coin flip.");
   }
 
   // Auditable upset-risk explanation (2026-07-13 spec, Part 2D) -- named top contributors, never
@@ -829,9 +928,11 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
   const { isEliteTier: eliteTierBeforeGuard, reason: eliteTierReasonBeforeGuard } = computeEliteTier({
     dataQuality,
     calibratedProbability,
-    surfaceEloFavorsPlayer1: voteFavorsPlayer1(featureModels, "Surface Elo"),
-    serveReturnFavorsPlayer1: voteFavorsPlayer1(featureModels, "Serve & Return"),
-    recentFormFavorsPlayer1: voteFavorsPlayer1(featureModels, "Recent Form"),
+    // Reuse the vars extracted earlier for the recommendation computation — avoids calling
+    // voteFavorsPlayer1 again for the same three signals.
+    surfaceEloFavorsPlayer1: surfaceEloFavorsP1,
+    serveReturnFavorsPlayer1: serveReturnFavorsP1,
+    recentFormFavorsPlayer1: recentFormFavorsP1,
     specialistApplied,
     segmentLabel: segment?.label ?? null,
     modelConflict,
@@ -843,13 +944,32 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
   // style), not evidence of real risk in this specific match -- disclosed, not risk-styled.
   disclosures.push(...styleMatchup.warnings);
 
+  // Zero-history structural gap: when a player has no recorded matches every signal module
+  // independently reports low reliability for the same root cause, producing a wall of
+  // identical-root warnings. Detect the root cause once and emit ONE grouped coverageGap note;
+  // suppress the individual module bullets that trace to zero match history.
+  const isZeroHistoryWarning = (w: string): boolean =>
+    w.includes("0 match") || w.includes("no prior match history") || w.includes("blended 100%");
+
+  const coverageGaps: string[] = [];
+  if (p1ZeroHistory || p2ZeroHistory) {
+    const noHistoryNames = [
+      p1ZeroHistory ? input.player1.name : null,
+      p2ZeroHistory ? input.player2.name : null,
+    ].filter((n): n is string => n !== null);
+    const them = noHistoryNames.length === 1 ? "this player" : "these players";
+    coverageGaps.push(
+      `${noHistoryNames.join(" and ")} ${noHistoryNames.length === 1 ? "has" : "have"} no recorded match history in our database — surface Elo, recent form, serve/return, and travel distance all fall back to global baselines for ${them}.`,
+    );
+  }
+
   const warnings = [
     ...surfaceElo.warnings,
     ...serveReturn.warnings,
     ...recentForm.warnings,
     ...fatigue.warnings,
     ...availability.warnings,
-  ];
+  ].filter((w) => !(p1ZeroHistory || p2ZeroHistory) || !isZeroHistoryWarning(w));
 
   const weather = input.weather ?? null;
 
@@ -876,6 +996,7 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     dataQualityLabel,
     simulationPlayer1WinProbability: simulation.player1WinProbability,
     tieBreakerApplied: tieBreaker.applied,
+    coreSignalsAlign,
   });
   const isEliteTier = consistencyViolations.length === 0 && eliteTierBeforeGuard;
   const eliteTierReason =
@@ -903,6 +1024,7 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     risks,
     disclosures,
     warnings,
+    coverageGaps,
     availabilityNote: buildAvailabilityNote(availability),
     conditionsNote: weather
       ? `Forecast conditions for ${weather.venueName}: ${weather.temperatureC}°C, wind ${weather.windSpeedKph} km/h, ${weather.precipitationProbability}% chance of precipitation. ${weather.note}`
@@ -917,7 +1039,6 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     simulatorNote,
     modelConflict,
     modelConflictNote,
-    matchupDifficulty,
     tieBreakerApplied: tieBreaker.applied,
     tieBreakerDecidingStep: tieBreaker.decidingStep,
     tieBreakerNote: tieBreaker.applied ? tieBreaker.note : null,
@@ -966,10 +1087,33 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     };
   });
 
+  // Append the market consensus module trace when it voted.
+  if (marketConsensusInput) {
+    const marketVote = featureModelByName.get("Market Consensus");
+    const marketAblated = excludedModels?.has("marketOdds") ?? false;
+    const marketVoteDir: "player1" | "player2" | "tied" | null = marketVote
+      ? marketVote.player1Probability > 50 ? "player1" : marketVote.player1Probability < 50 ? "player2" : "tied"
+      : null;
+    moduleTraces.push({
+      key: "marketOdds",
+      name: "Market Consensus",
+      rawEdge: Math.round(marketConsensusInput.player1Edge * 1000) / 1000,
+      reliability: marketConsensusInput.reliability,
+      importance: 0.5, // excluded from DQ blend; value is informational only
+      weightPrior: marketConsensusInput.weightPrior,
+      confidenceShrink: 1.0,
+      excludedFromEnsemble: false,
+      excludedFromDataQuality: true,
+      excludedByAblation: marketAblated,
+      player1Probability: !marketAblated && marketVote ? marketVote.player1Probability : null,
+      effectiveWeight: !marketAblated && marketVote ? marketVote.weightUsed : null,
+      voteDirection: !marketAblated ? marketVoteDir : null,
+    });
+  }
+
   const calibratedMarginForTrace = Math.abs(calibratedProbability - 50);
-  const surfaceEloFavorsP1 = voteFavorsPlayer1(featureModels, "Surface Elo");
-  const serveReturnFavorsP1 = voteFavorsPlayer1(featureModels, "Serve & Return");
-  const recentFormFavorsP1 = voteFavorsPlayer1(featureModels, "Recent Form");
+  // surfaceEloFavorsP1, serveReturnFavorsP1, recentFormFavorsP1 are computed earlier near the
+  // recommendation call — they're already in scope, no need to recompute here.
 
   const decisionTrace: DecisionTrace = {
     pipeline: {
@@ -978,10 +1122,6 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
       afterTieBreaker: ensembleProbability,
       calibrationMethod,
       fallbackShrinkFactor,
-      dataQualityBase: baseDataQuality,
-      dataQualityAdjusted: dataQuality,
-      matchupDifficultyDecisiveness: matchupDifficulty.decisivenessScore,
-      matchupDifficultySource: matchupDifficulty.source,
       afterCalibration: generalProbability,
       specialistWeight,
       afterSpecialist: blendedProbability,
@@ -993,7 +1133,7 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
       afterSimulator: calibratedProbability,
     },
     modules: moduleTraces,
-    recommendation: buildRecommendationTrace(calibratedProbability, dataQuality, dataQualityLabel, upsetRisk, modelAgreement, recommendation, tieBreaker.applied),
+    recommendation: buildRecommendationTrace(calibratedProbability, dataQuality, dataQualityLabel, modelAgreement, recommendation, tieBreaker.applied, coreSignalsAlign),
     eliteTier: {
       isElite: isEliteTier,
       gates: {
@@ -1015,33 +1155,6 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     computedAt: new Date().toISOString(),
   };
 
-  // ── Cross-engine agreement: validate the engine's pick against the parlay builder ──
-  // The builder takes the same EngineBreakdown already computed above and re-interprets
-  // the feature signals from the perspective of the predicted winner. This is synchronous
-  // and does not query the database -- it re-reads the engine's own already-computed outputs.
-  const builderResult = computeBuilderScore({
-    selectedPlayerId: predictedWinnerId,
-    opponentId: favorsPlayer1 ? input.player2.id : input.player1.id,
-    engineBreakdown: engine,
-    engineOutput: {
-      predictedWinnerId,
-      predictedWinnerName,
-      calibratedProbability,
-      predictedWinnerProbability,
-      rawEnsembleProbability: ensembleProbability,
-      dataQuality,
-      dataQualityLabel,
-      upsetRisk,
-      recommendation,
-      predictedSetScore,
-      engine,
-      decisionTrace,
-      crossEngineAgreement: null, // not yet computed; builder doesn't recurse
-    },
-    selectedIsPlayer1: favorsPlayer1,
-  });
-  const crossEngineAgreement = computeCrossEngineAgreement(builderResult.decision);
-
   return {
     predictedWinnerId,
     predictedWinnerName,
@@ -1055,6 +1168,5 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     predictedSetScore,
     engine,
     decisionTrace,
-    crossEngineAgreement,
   };
 }

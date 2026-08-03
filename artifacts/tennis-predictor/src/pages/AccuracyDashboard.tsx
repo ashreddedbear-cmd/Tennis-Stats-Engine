@@ -23,10 +23,10 @@ import {
   type UpsetRiskTierMetrics,
   type DisagreementTierMetrics,
   type ShadowReplayDashboard,
-  type PatternAnalysisRun,
-  type PatternSegment,
-  type ThresholdEvaluationRun,
-  type ThresholdEvalEntry,
+  type LatestPatternAnalysis,
+  type PatternSegmentItem,
+  type LatestThresholdEvaluation,
+  type ThresholdEvalEntryItem,
   type OptimizerStrategyPick,
   type CandidateConfigRecord,
   type OptimizerAccuracySummaryResponse,
@@ -757,7 +757,7 @@ function ShadowReplayCard({ shadowDashboard }: { shadowDashboard: ShadowReplayDa
 
 // ── Task #12: Correct vs Incorrect Patterns Panel ───────────────────────────────────────────────
 
-const EVIDENCE_BADGE: Record<PatternSegment["evidenceStrength"], { label: string; variant: "success" | "warning" | "destructive" | "outline" | "secondary" }> = {
+const EVIDENCE_BADGE: Record<PatternSegmentItem["evidenceStrength"], { label: string; variant: "success" | "warning" | "destructive" | "outline" | "secondary" }> = {
   Strong:      { label: "STRONG",       variant: "success" },
   Moderate:    { label: "MODERATE",     variant: "warning" },
   Weak:        { label: "WEAK",         variant: "outline" },
@@ -775,7 +775,7 @@ const DIMENSION_LABELS: Record<string, string> = {
   runKind: "Run Kind",
 }
 
-function CorrectVsIncorrectPanel({ data }: { data: PatternAnalysisRun | null | undefined }) {
+function CorrectVsIncorrectPanel({ data }: { data: LatestPatternAnalysis | null | undefined }) {
   const [expanded, setExpanded] = useState(false)
   if (!data) {
     return (
@@ -791,9 +791,9 @@ function CorrectVsIncorrectPanel({ data }: { data: PatternAnalysisRun | null | u
     )
   }
 
-  // Sort segments by |accuracy - 50| desc (most divergent first), then filter to those with n≥5
+  // Sort segments by |accuracy - 50| desc (most divergent first), then filter to those with sampleSize≥5
   const diverging = [...data.segments]
-    .filter(s => s.n >= 5 && s.accuracy !== null)
+    .filter(s => s.sampleSize >= 5 && s.accuracy !== null)
     .sort((a, b) => Math.abs((b.accuracy ?? 50) - 50) - Math.abs((a.accuracy ?? 50) - 50))
     .slice(0, expanded ? 60 : 12)
 
@@ -821,14 +821,17 @@ function CorrectVsIncorrectPanel({ data }: { data: PatternAnalysisRun | null | u
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {diverging.map((seg, i) => {
             const badge = EVIDENCE_BADGE[seg.evidenceStrength]
-            const dimLabel = DIMENSION_LABELS[seg.dimension] ?? seg.dimension
+            // segmentKey is "dimension:value" (e.g. "surface:Hard"); label is the human-readable display
+            const [dimensionKey, ...valueParts] = seg.segmentKey.split(":")
+            const dimLabel = DIMENSION_LABELS[dimensionKey] ?? dimensionKey
+            const segValue = valueParts.length > 0 ? valueParts.join(":") : seg.label
             const isPositive = (seg.accuracy ?? 50) > 50
             return (
               <div key={i} className="bg-background rounded-xl border border-border/50 p-4 space-y-2 shadow-sm">
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <div className="text-[10px] font-mono font-bold text-muted-foreground tracking-widest uppercase">{dimLabel}</div>
-                    <div className="font-bold text-sm mt-0.5 truncate">{seg.value}</div>
+                    <div className="font-bold text-sm mt-0.5 truncate">{segValue}</div>
                   </div>
                   <Badge variant={badge.variant} className="font-mono text-[9px] tracking-widest shrink-0">{badge.label}</Badge>
                 </div>
@@ -837,27 +840,27 @@ function CorrectVsIncorrectPanel({ data }: { data: PatternAnalysisRun | null | u
                     {seg.accuracy !== null ? `${seg.accuracy}%` : "—"}
                   </div>
                   <div className="text-xs text-muted-foreground/80 font-mono space-y-0.5">
-                    <div>n={seg.n}</div>
+                    <div>n={seg.sampleSize}</div>
                     {seg.ciLow !== null && seg.ciHigh !== null && (
                       <div>CI [{seg.ciLow.toFixed(0)}–{seg.ciHigh.toFixed(0)}]</div>
                     )}
                   </div>
                 </div>
-                {seg.logLoss !== null && (
+                {seg.lift !== null && (
                   <div className="text-[11px] font-mono text-muted-foreground/70">
-                    LL {seg.logLoss.toFixed(3)} · Brier {seg.brier?.toFixed(3) ?? "—"}
+                    Lift {seg.lift.toFixed(2)} vs baseline {seg.baselineAccuracy}%
                   </div>
                 )}
               </div>
             )
           })}
         </div>
-        {data.segments.filter(s => s.n >= 5).length > 12 && (
+        {data.segments.filter((s: PatternSegmentItem) => s.sampleSize >= 5).length > 12 && (
           <button
             onClick={() => setExpanded(e => !e)}
             className="text-xs font-mono text-muted-foreground hover:text-foreground transition-colors underline underline-offset-2 mt-2"
           >
-            {expanded ? "Show fewer" : `Show all ${data.segments.filter(s => s.n >= 5).length} segments`}
+            {expanded ? "Show fewer" : `Show all ${data.segments.filter((s: PatternSegmentItem) => s.sampleSize >= 5).length} segments`}
           </button>
         )}
       </CardContent>
@@ -867,7 +870,7 @@ function CorrectVsIncorrectPanel({ data }: { data: PatternAnalysisRun | null | u
 
 // ── Task #12: Threshold Recommendations Panel ─────────────────────────────────────────────────────
 
-const CLASSIFICATION_BADGE: Record<ThresholdEvalEntry["classification"], { variant: "success" | "warning" | "destructive" | "outline" | "secondary" }> = {
+const CLASSIFICATION_BADGE: Record<ThresholdEvalEntryItem["classification"], { variant: "success" | "warning" | "destructive" | "outline" | "secondary" }> = {
   "Deploy":           { variant: "success" },
   "Continue shadow":  { variant: "warning" },
   "Needs more data":  { variant: "outline" },
@@ -875,7 +878,7 @@ const CLASSIFICATION_BADGE: Record<ThresholdEvalEntry["classification"], { varia
   "Investigate":      { variant: "secondary" },
 }
 
-function ThresholdRecommendationsPanel({ data }: { data: ThresholdEvaluationRun | null | undefined }) {
+function ThresholdRecommendationsPanel({ data }: { data: LatestThresholdEvaluation | null | undefined }) {
   const [expanded, setExpanded] = useState(false)
   if (!data) {
     return (
@@ -915,7 +918,7 @@ function ThresholdRecommendationsPanel({ data }: { data: ThresholdEvaluationRun 
           Widening a gate (admitting more predictions) requires genuine holdout log-loss improvement to avoid Reject.
         </p>
         <div className="space-y-3">
-          {shown.map((entry, i) => {
+          {shown.map((entry: ThresholdEvalEntryItem, i: number) => {
             const badge = CLASSIFICATION_BADGE[entry.classification]
             const logLossImproved = entry.logLossDelta !== null && entry.logLossDelta > 0
             const accImproved = entry.accuracyDelta !== null && entry.accuracyDelta > 0
@@ -1269,10 +1272,10 @@ export default function AccuracyDashboardPage() {
   const { data: settings } = useGetEvaluationSettings()
   const { data: shadowDashboard } = useGetShadowReplayDashboard()
   const { data: optimizerSummary } = useGetOptimizerAccuracySummary({
-    query: { refetchInterval: 10000 },
+    query: { queryKey: getGetOptimizerAccuracySummaryQueryKey(), refetchInterval: 10000 },
   })
   const { data: candidateConfigs } = useGetCandidateConfigs({
-    query: { refetchInterval: 10000 },
+    query: { queryKey: getCandidateConfigsQueryKey(), refetchInterval: 10000 },
   })
   // Task #12: pattern analysis and threshold evaluation data
   const { data: patternAnalysis } = useGetLatestPatternAnalysis()

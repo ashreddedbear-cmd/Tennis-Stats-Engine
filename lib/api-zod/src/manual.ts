@@ -116,31 +116,6 @@ export const GetLatestThresholdEvaluationResponse = zod
   })
   .nullable();
 
-// ── Task #44: Targeted historical-backfill range ──────────────────────────────────────────────────
-
-/**
- * Request body for POST /evaluation/historical-backfill/run-range.
- * Fires runHistoricalBackfill for the explicit [dateStart, dateStop] window in the background
- * and returns immediately -- designed for closing known coverage gaps (e.g. 2020–2025) where
- * the window is too long for a synchronous HTTP response.
- */
-export const RunHistoricalBackfillRangeBody = zod.object({
-  dateStart: zod.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("First date to backfill, inclusive (YYYY-MM-DD)."),
-  dateStop: zod.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("Last date to backfill, inclusive (YYYY-MM-DD)."),
-  chunkDays: zod
-    .number()
-    .int()
-    .min(1)
-    .optional()
-    .describe("Provider chunk window in days. Defaults to 5 (the safe limit for busy periods)."),
-});
-
-export const RunHistoricalBackfillRangeResponse = zod.object({
-  started: zod.boolean(),
-  dateStart: zod.string(),
-  dateStop: zod.string(),
-});
-
 // ── Task #38: Seed player_stats from historical match data ────────────────────────────────────────
 
 /**
@@ -399,6 +374,15 @@ export const PaymentEntitlements = zod.object({
   eliteRecommendations: zod.boolean(),
   alerts: zod.boolean(),
   teamWorkspace: zod.boolean(),
+  // ── Elite-only ─────────────────────────────────────────────────────────
+  fullModelMonitoring: zod.boolean(),
+  confidenceCalibration: zod.boolean(),
+  recommendationPerformance: zod.boolean(),
+  historicalModelTrends: zod.boolean(),
+  monteCarlo: zod.boolean(),
+  eliteBadge: zod.boolean(),
+  advancedExplanation: zod.boolean(),
+  confidenceHistory: zod.boolean(),
 });
 
 export const PaymentWebhookEventSummary = zod.object({
@@ -443,10 +427,12 @@ export const GetPaymentsStatusResponse = zod.object({
   featureFlagEnabled: zod.boolean(),
   configured: zod.boolean(),
   active: zod.boolean(),
+  tier: zod.enum(["free", "pro", "pro_annual", "elite", "elite_annual", "team"]),
   account: PaymentsStatusAccount.nullable(),
   entitlements: PaymentEntitlements,
   stripe: zod.object({
     priceId: zod.string().nullable(),
+    elitePriceId: zod.string().nullable().optional(),
     webhookSecretConfigured: zod.boolean(),
     secretKeyConfigured: zod.boolean(),
     planKey: zod.string(),
@@ -458,6 +444,7 @@ export const GetPaymentsStatusResponse = zod.object({
 export const CreatePaymentsCheckoutSessionBody = zod.object({
   returnPath: zod.string().optional(),
   customerEmail: zod.string().email().optional(),
+  plan: zod.enum(["pro", "pro_annual", "elite", "elite_annual", "team"]).optional(),
 });
 
 export const CreatePaymentsCheckoutSessionResponse = zod.object({

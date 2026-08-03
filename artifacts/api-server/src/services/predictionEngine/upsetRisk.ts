@@ -184,6 +184,14 @@ const COMPONENT_LABELS: Record<Exclude<keyof UpsetRiskComponents, "modelConflict
  * Claiming "the core models disagree on direction" in the second case is a real, checkable false
  * statement (see `disagreement.coreModelsConflict`), so the label branches on that flag rather
  * than assuming the component's presence always means a direction conflict.
+ *
+ * LOW tier uses a different framing from MODERATE/HIGH/EXTREME deliberately:
+ *   - MODERATE/HIGH/EXTREME: "mainly because [factor]" — the factor IS elevating the tier.
+ *   - LOW with no contributors: "the edge is comfortable and no risk factor is present."
+ *   - LOW with contributors: "[factor] is present, but no amplifying signal compounds it to raise
+ *     the risk higher." — the factor raises the score without changing the tier; saying "mainly
+ *     because [thin edge]" when the tier is LOW implies the thin edge causes low risk, which is
+ *     the opposite of the truth (a thin edge is a risk driver, not a safety net).
  */
 function buildUpsetRiskNote(
   upsetRisk: UpsetRisk,
@@ -195,7 +203,9 @@ function buildUpsetRiskNote(
   if (topContributors.length === 0) {
     return `${upsetRisk}: the favorite's edge is comfortable (${margin.toFixed(0)}pts from a coin flip) and no other risk factor is present.`;
   }
-  const named = topContributors
+
+  // Labels used when listing contributors for MODERATE/HIGH/EXTREME tier notes.
+  const namedForHighTier = topContributors
     .slice(0, 2)
     .map((key) =>
       key === "modelConflict"
@@ -205,5 +215,31 @@ function buildUpsetRiskNote(
         : COMPONENT_LABELS[key as Exclude<keyof UpsetRiskComponents, "modelConflict">],
     )
     .join(" and ");
-  return `${upsetRisk} upset risk, mainly because ${named}.`;
+
+  // For MODERATE and above: factors are genuinely elevating the tier — "mainly because X" is accurate.
+  if (upsetRisk !== "LOW") {
+    return `${upsetRisk} upset risk, mainly because ${namedForHighTier}.`;
+  }
+
+  // LOW tier: factors contribute to the score but don't push the tier higher.
+  // Use compact noun phrases so "is present" reads naturally.
+  const LOW_FACTOR_NOUNS: Partial<Record<keyof UpsetRiskComponents, string>> = {
+    favoriteWeakness: "a thin edge",
+    uncertainty: "some data uncertainty",
+    sampleDepth: "a thin surface sample for at least one player",
+    volatility: "tournament-level volatility",
+    matchupHazard: "a match hazard",
+  };
+  const namedForLow = topContributors
+    .slice(0, 2)
+    .map((key) =>
+      key === "modelConflict"
+        ? coreModelsConflict
+          ? "a core-model direction conflict"
+          : "partial model disagreement"
+        : (LOW_FACTOR_NOUNS[key as keyof UpsetRiskComponents] ?? key),
+    )
+    .join(" and ");
+  const isOrAre = topContributors.slice(0, 2).length === 1 ? "is" : "are";
+  return `${upsetRisk} upset risk — ${namedForLow} ${isOrAre} present, but no amplifying signal compounds it to raise the risk higher.`;
 }

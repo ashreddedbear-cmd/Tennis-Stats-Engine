@@ -22,8 +22,13 @@ function readBoolean(value: unknown): boolean {
   return value === true;
 }
 
-export async function buildPaymentsStatus() {
-  const state = await getPaymentsAccessState();
+/**
+ * Build the payments status object for a given user.
+ * When clerkUserId is provided, returns that user's billing state.
+ * When omitted (admin/workspace context), returns the workspace billing state.
+ */
+export async function buildPaymentsStatus(clerkUserId?: string | null) {
+  const state = await getPaymentsAccessState(clerkUserId);
   const recentWebhookEvents = await getLatestWebhookEvents(10);
   return {
     featureFlagEnabled: state.featureFlagEnabled,
@@ -31,8 +36,10 @@ export async function buildPaymentsStatus() {
     account: state.account,
     entitlements: state.entitlements,
     active: state.active,
+    tier: state.tier,
     stripe: {
       priceId: process.env.STRIPE_PRICE_ID?.trim() || null,
+      elitePriceId: process.env.STRIPE_ELITE_PRICE_ID?.trim() || null,
       webhookSecretConfigured: Boolean(process.env.STRIPE_WEBHOOK_SECRET?.trim()),
       secretKeyConfigured: Boolean(process.env.STRIPE_SECRET_KEY?.trim()),
       planKey: getPaymentsPlanKey(),
@@ -42,8 +49,17 @@ export async function buildPaymentsStatus() {
   };
 }
 
-export async function createCheckoutSession(req: { protocol?: string; get(name: string): string | undefined }, body?: { returnPath?: string | null; customerEmail?: string | null }) {
-  const state = await getPaymentsAccessState();
+/**
+ * Create a Stripe checkout session for the given user.
+ * clerkUserId is embedded in the session metadata so the webhook can route
+ * the resulting subscription to the correct per-user billing record.
+ */
+export async function createCheckoutSession(
+  req: { protocol?: string; get(name: string): string | undefined },
+  body?: { returnPath?: string | null; customerEmail?: string | null; plan?: "pro" | "pro_annual" | "elite" | "elite_annual" | "team" | null },
+  clerkUserId?: string | null,
+) {
+  const state = await getPaymentsAccessState(clerkUserId);
   if (!state.featureFlagEnabled || !isPaymentsV2Enabled()) {
     throw new Error("Payments V2 is disabled");
   }
@@ -53,6 +69,9 @@ export async function createCheckoutSession(req: { protocol?: string; get(name: 
     throw new Error("APP_PUBLIC_URL or request host is required to create a Stripe checkout session");
   }
 
+  const VALID_PLANS = ["pro", "pro_annual", "elite", "elite_annual", "team"] as const;
+  type ValidPlan = typeof VALID_PLANS[number];
+  const plan: ValidPlan = (VALID_PLANS as readonly string[]).includes(body?.plan ?? "") ? body!.plan as ValidPlan : "pro";
   const successPath = body?.returnPath?.startsWith("/") ? body.returnPath : "/payments?checkout=success";
   const cancelPath = "/payments?checkout=cancel";
   const customerId = state.account?.stripeCustomerId ?? null;
@@ -62,27 +81,37 @@ export async function createCheckoutSession(req: { protocol?: string; get(name: 
     cancelUrl: absoluteUrl(baseUrl, cancelPath),
     customerId,
     customerEmail: body?.customerEmail ?? null,
-    accountKey: "workspace",
-    planKey: getPaymentsPlanKey(),
-    planName: getPaymentsPlanName(),
+    accountKey: clerkUserId ? `user_${clerkUserId}` : "workspace",
+    planKey: plan,
+    planName: plan === "elite" || plan === "elite_annual" ? "Elite" : plan === "pro_annual" ? "Pro Annual" : plan === "team" ? "Team" : "Pro",
+    plan,
+    clerkUserId: clerkUserId ?? null,
   });
 
   await recordCheckoutSession({
     stripeCustomerId: session.customer,
     stripeCheckoutSessionId: session.id,
     metadata: { status: session.status, paymentStatus: session.payment_status },
+    clerkUserId: clerkUserId ?? null,
   });
 
   return session;
 }
 
-export async function createBillingPortal(req: { protocol?: string; get(name: string): string | undefined }, body?: { returnPath?: string | null }) {
-  const state = await getPaymentsAccessState();
+/**
+ * Create a Stripe Billing Portal session for the given user.
+ */
+export async function createBillingPortal(
+  req: { protocol?: string; get(name: string): string | undefined },
+  body?: { returnPath?: string | null },
+  clerkUserId?: string | null,
+) {
+  const state = await getPaymentsAccessState(clerkUserId);
   if (!state.featureFlagEnabled || !isPaymentsV2Enabled()) {
     throw new Error("Payments V2 is disabled");
   }
   if (!state.account?.stripeCustomerId) {
-    throw new Error("No Stripe customer is linked to the workspace yet");
+    throw new Error("No Stripe customer is linked to this account yet");
   }
 
   const baseUrl = getPaymentsPublicBaseUrlFromRequest(req);
@@ -118,6 +147,8 @@ export async function handleStripeWebhook(rawBody: Buffer, signatureHeader: stri
       const checkoutSession = extractStripeObject<{ mode?: string; customer?: string; subscription?: string; payment_status?: string }>(event);
       if (checkoutSession.mode === "subscription" && checkoutSession.subscription) {
         const subscription = await retrieveStripeSubscription(checkoutSession.subscription);
+        // Extract the Clerk user ID embedded in metadata during checkout session creation
+        const clerkUserId = readString(subscription.metadata?.clerkUserId ?? null);
         await upsertBillingAccountFromSubscription({
           stripeCustomerId: checkoutSession.customer ?? subscription.customer,
           stripeSubscriptionId: subscription.id,
@@ -130,6 +161,7 @@ export async function handleStripeWebhook(rawBody: Buffer, signatureHeader: stri
           canceledAt: toDate(subscription.canceled_at),
           lastWebhookEventId: event.id,
           metadata: { eventType: event.type, paymentStatus: checkoutSession.payment_status ?? null },
+          clerkUserId,
         });
       }
     }
@@ -148,6 +180,7 @@ export async function handleStripeWebhook(rawBody: Buffer, signatureHeader: stri
         metadata?: Record<string, string>;
       }>(event);
       const priceId = subscription.items?.data?.[0]?.price?.id ?? null;
+      const clerkUserId = readString(subscription.metadata?.clerkUserId ?? null);
       await upsertBillingAccountFromSubscription({
         stripeCustomerId: subscription.customer,
         stripeSubscriptionId: subscription.id,
@@ -160,6 +193,7 @@ export async function handleStripeWebhook(rawBody: Buffer, signatureHeader: stri
         canceledAt: toDate(subscription.canceled_at ?? null),
         lastWebhookEventId: event.id,
         metadata: subscription.metadata ?? {},
+        clerkUserId,
       });
     }
 
@@ -167,6 +201,7 @@ export async function handleStripeWebhook(rawBody: Buffer, signatureHeader: stri
       const invoice = extractStripeObject<{ customer?: string; subscription?: string; status?: string }>(event);
       if (invoice.subscription) {
         const subscription = await retrieveStripeSubscription(invoice.subscription);
+        const clerkUserId = readString(subscription.metadata?.clerkUserId ?? null);
         await upsertBillingAccountFromSubscription({
           stripeCustomerId: invoice.customer ?? subscription.customer,
           stripeSubscriptionId: subscription.id,
@@ -179,6 +214,7 @@ export async function handleStripeWebhook(rawBody: Buffer, signatureHeader: stri
           canceledAt: toDate(subscription.canceled_at),
           lastWebhookEventId: event.id,
           metadata: { eventType: event.type, invoiceStatus: invoice.status ?? null },
+          clerkUserId,
         });
       }
     }

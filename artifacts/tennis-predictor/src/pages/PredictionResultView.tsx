@@ -23,7 +23,9 @@ export default function PredictionResultView() {
 
   const searchParams = new URLSearchParams(searchString)
   const batchParam = searchParams.get("batch")
-  const fromLedger = searchParams.get("from") === "ledger"
+  const fromParam = searchParams.get("from") ?? ""
+  const fromLedger = fromParam === "ledger"
+  const fromHome = fromParam === "home"
 
   const batchIds = batchParam
     ? batchParam
@@ -36,11 +38,15 @@ export default function PredictionResultView() {
   const currentIndex = batchIds ? batchIds.indexOf(currentId) : -1
   const showNav = !!batchIds && batchIds.length > 1 && currentIndex >= 0
 
+  // Preserve origin context when stepping through a batch so Back always
+  // returns to wherever this batch was started from, not just /predict.
+  const fromSuffix = fromParam ? `&from=${fromParam}` : ""
+
   const goTo = (index: number) => {
     if (!batchIds) return
     const clamped = Math.max(0, Math.min(batchIds.length - 1, index))
     if (clamped === currentIndex) return
-    setLocation(`/predictions/${batchIds[clamped]}?batch=${batchIds.join(",")}`)
+    setLocation(`/predictions/${batchIds[clamped]}?batch=${batchIds.join(",")}${fromSuffix}`)
   }
 
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -60,16 +66,16 @@ export default function PredictionResultView() {
 
   return (
     <div onTouchStart={showNav ? handleTouchStart : undefined} onTouchEnd={showNav ? handleTouchEnd : undefined}>
-      {/* Back button — navigates to Ledger when opened from there, Build Match otherwise */}
+      {/* Back button — returns to whichever page originated this prediction */}
       <div className="mb-4">
         <Button
           variant="ghost"
           size="sm"
           className="font-mono text-xs text-muted-foreground hover:text-foreground gap-1 -ml-2"
-          onClick={() => setLocation(fromLedger ? "/history" : "/predict")}
+          onClick={() => setLocation(fromLedger ? "/history" : fromHome ? "/" : "/predict")}
         >
           <ChevronLeft className="w-4 h-4" />
-          {fromLedger ? "BACK TO HISTORY" : "BACK TO BUILD MATCH"}
+          {fromLedger ? "BACK TO PREDICTION HISTORY" : fromHome ? "BACK TO HOME" : "BACK TO RUN MODEL"}
         </Button>
       </div>
 

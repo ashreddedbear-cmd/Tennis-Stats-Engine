@@ -1,0 +1,433 @@
+# TASK 105 – Independent Parlay Builder System (Part 3)
+
+# Independent Builder Scoring Engine
+
+The Parlay Builder must calculate every score independently.
+
+It must never reference, normalize, scale, transform, or inherit any Prediction Engine score.
+
+Builder scores must come entirely from Builder evidence.
+
+---
+
+# Independent Builder Factors
+
+Each leg must receive a score from every validation factor.
+
+Minimum required factors:
+
+1. Tennis Abstract Overall Elo
+2. Tennis Abstract Surface Elo
+3. UTR Rating Advantage
+4. Recent Form
+5. Surface Performance
+6. Serve Advantage
+7. Return Advantage
+8. Hold Percentage
+9. Break Percentage
+10. Opponent Quality
+11. Strength of Schedule
+12. Head-to-Head
+13. Ranking Trend
+14. Tournament Experience
+15. Surface Experience
+16. Travel Fatigue
+17. Days Rest
+18. Injury Risk
+19. Retirement History
+20. Market Consensus
+21. Historical Consistency
+22. Historical Volatility
+23. Data Coverage
+24. Data Freshness
+25. Source Agreement
+
+Each factor produces its own score.
+
+No factor should directly determine KEEP or REMOVE.
+
+---
+
+# Default Factor Weights
+
+Weights must total 100%.
+
+Default:
+
+Tennis Abstract Elo..............18%
+
+Surface Elo......................10%
+
+UTR Rating.......................10%
+
+Recent Form......................10%
+
+Surface Record....................8%
+
+Serve Statistics.................6%
+
+Return Statistics................6%
+
+Hold / Break Statistics..........5%
+
+Strength of Schedule.............5%
+
+Market Consensus.................5%
+
+Ranking Trend....................4%
+
+Head-to-Head.....................3%
+
+Travel & Fatigue.................3%
+
+Injury Risk......................3%
+
+Tournament Experience............2%
+
+Historical Consistency...........2%
+
+Historical Volatility............2%
+
+Data Quality.....................2%
+
+Source Agreement.................6%
+
+Administrator must be able to edit every weight.
+
+---
+
+# Validation Score
+
+Calculate:
+
+Validation Score
+
+Range:
+
+0–100
+
+Represents:
+
+"How much independent evidence supports this prediction?"
+
+Higher = Better
+
+Never use Prediction Engine probability.
+
+Never convert Engine Safety Score.
+
+---
+
+# Risk Score
+
+Calculate:
+
+Risk Score
+
+Range:
+
+0–100
+
+Higher = More Risk
+
+Increase Risk when:
+
+• Sources disagree
+
+• Surface mismatch
+
+• Weak recent form
+
+• High volatility
+
+• Retirement history
+
+• Injury concern
+
+• Market disagreement
+
+• Fatigue
+
+• Travel
+
+• Missing data
+
+Lower Risk when:
+
+• Sources agree
+
+• Good surface history
+
+• Strong Elo advantage
+
+• Strong UTR advantage
+
+• Strong recent form
+
+• Good consistency
+
+---
+
+# Reliability Grade
+
+Builder assigns:
+
+A
+
+B
+
+C
+
+D
+
+F
+
+Reliability depends on BOTH:
+
+Evidence
+
+AND
+
+Data Quality
+
+Example:
+
+Validation = 92
+
+Coverage = 35%
+
+Reliability should NOT be A.
+
+Low data coverage must reduce reliability.
+
+---
+
+# Parlay Grade
+
+Builder assigns:
+
+Elite
+
+Strong
+
+Moderate
+
+Weak
+
+Reject
+
+Grades are determined ONLY by Builder calculations.
+
+---
+
+# Removal Probability
+
+Builder calculates:
+
+Removal Probability
+
+0–100%
+
+This means:
+
+Probability that the leg should be removed from the parlay.
+
+NOT
+
+Probability the player loses.
+
+This distinction must be clearly shown.
+
+---
+
+# KEEP / BORDERLINE / REMOVE
+
+Builder decides independently.
+
+KEEP
+
+Strong evidence.
+
+Low risk.
+
+Good agreement.
+
+Good coverage.
+
+BORDERLINE
+
+Mixed evidence.
+
+Average risk.
+
+Some disagreement.
+
+Missing information.
+
+REMOVE
+
+Poor evidence.
+
+High risk.
+
+Multiple strong sources disagree.
+
+Critical validation problems.
+
+---
+
+# Data Coverage
+
+Calculate:
+
+Coverage %
+
+Based on:
+
+Number of successful validation sources.
+
+Example:
+
+Tennis Abstract ✓
+
+UTR ✓
+
+ATP ✓
+
+Market ✓
+
+Recent Form ✓
+
+Injury Missing
+
+Coverage
+
+83%
+
+Coverage should influence Reliability.
+
+---
+
+# Source Agreement
+
+Calculate:
+
+Agreement Score
+
+Example:
+
+10 Sources
+
+8 agree
+
+2 disagree
+
+Agreement = 80%
+
+Higher agreement
+
+↓
+
+Higher Validation
+
+Lower Risk
+
+Lower agreement
+
+↓
+
+Higher Risk
+
+Lower Validation
+
+---
+
+# Builder Decision Logic
+
+Builder combines:
+
+Validation Score
+
+Risk Score
+
+Reliability
+
+Coverage
+
+Source Agreement
+
+Critical Flags
+
+Decision:
+
+KEEP
+
+BORDERLINE
+
+REMOVE
+
+Decision must never use Prediction Engine recommendation.
+
+---
+
+# Critical Flags
+
+Immediately reduce Builder confidence when:
+
+Player mismatch
+
+Tournament mismatch
+
+Surface mismatch
+
+Missing opponent
+
+Duplicate player
+
+Incomplete draw
+
+Unknown tournament
+
+Unknown surface
+
+Recent retirement
+
+Confirmed injury
+
+Large market disagreement
+
+Extremely stale data
+
+Every critical flag must appear on the leg card.
+
+---
+
+# Decision Reasons
+
+Every Builder decision must include between 3 and 6 evidence-based explanations.
+
+KEEP Example
+
+• Tennis Abstract Elo strongly favors this player.
+
+• UTR agrees with the prediction.
+
+• Excellent recent hard-court form.
+
+• Market consensus supports this selection.
+
+REMOVE Example
+
+• Surface Elo favors opponent.
+
+• UTR projects opponent advantage.
+
+• Market moved sharply against this player.
+
+• Recent form is significantly weaker.
+
+Generic explanations are prohibited.
+
+Every reason must correspond to an actual scoring factor.
+
+---

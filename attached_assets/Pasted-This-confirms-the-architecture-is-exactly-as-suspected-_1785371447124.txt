@@ -1,0 +1,33 @@
+This confirms the architecture is exactly as suspected: the Prediction Engine consumes data through `services/tennisData/compositeProvider.ts` (shared, provider-agnostic), while the Parlay Builder has its own separate `services/parlayBuilder/builderProviderFetch.ts`. Here's the updated prompt accounting for that:
+
+```
+Integrate all of the following into BOTH the Prediction Engine's data path AND the Parlay Builder's data path — but keep them as two separate consumers, not shared/merged code. The two systems currently use different provider-fetch layers on purpose (Prediction Engine → services/tennisData/compositeProvider.ts; Parlay Builder → services/parlayBuilder/builderProviderFetch.ts), and that separation should stay. Each new data source needs to be added to BOTH layers independently, with its own attempt/fallback logic in each — do not have one call into the other's provider file.
+
+Do NOT fake or hardcode Data Quality — verify with real before/after numbers on named test matchups (e.g. Jodar/Nishikori, Michelsen/Mannarino) at each step.
+
+1. RUN THE SACKMANN BACKFILL
+   Code + endpoint already exist (POST /evaluation/sackmann-backfill/run, GET /evaluation/sackmann-backfill/status). This feeds historical_matches directly, which both the Prediction Engine and Parlay Builder already read from — so running it benefits both automatically. Trigger it for full ATP+WTA year range, poll status to confirm completion via job_runs, report real row counts imported.
+
+2. BUILD tennis-data.co.uk INTEGRATION (does not exist yet anywhere in the codebase)
+   - Add the provider under services/historicalData/, same pattern as sackmannBackfill.ts.
+   - Wire it into calibration refit and market-verification backtesting (services/predictionEngine/calibration.ts and services/evaluation/) for the Prediction Engine side.
+   - Separately, wire it into the Parlay Builder's backtesting/verification path if one exists there — check builderScoringService.ts and report where it fits; do not assume Parlay Builder automatically gets it just because Prediction Engine does.
+
+3. FIX THE RAPIDAPI / MATCHSTAT / SOFASCORE GAP
+   Confirmed: builderProviderFetch.ts (Parlay Builder) only calls Sofascore. compositeProvider.ts (Prediction Engine) already reaches RapidAPI (apiTennisProvider) and Matchstat (matchStatProvider).
+   - Add RapidAPI and Matchstat to builderProviderFetch.ts using the same attempt/fallback pattern as attemptSofascore — as their own independent attempt functions in that file, not by importing compositeProvider.ts.
+   - Confirm compositeProvider.ts (Prediction Engine) already has all three consistently — if Sofascore is thinner there, bring it up to the same level.
+   - End state: both files independently reach all three sources, with their own fallback order and diagnostics — not one wrapping the other.
+
+4. WIRE THE ODDS API (theOddsApiProvider.ts exists, called by nothing except its own index.ts)
+   - Parlay Builder: connect it into builderScoringService.ts's marketConsensus factor, replacing the current hardcoded 50-when-missing fallback with real odds.
+   - Prediction Engine: check whether any existing factor (e.g. in ensemble.ts or a market-input module) is meant to consume odds data and currently doesn't — wire it there too, as its own independent call into theOddsApiProvider, not routed through the Parlay Builder's usage.
+   - Build consensus + line-movement comparison using the existing key; no new provider needed.
+
+5. LEAVE THE WEB-SEARCH FALLBACK ALONE
+   webResearchProvider.ts / webResearchService.ts already exist for both predictionEngine and parlayBuilder as separate files — confirm both are still correctly fallback-only (not called on every match) and don't refactor them into a shared module.
+
+6. LOWEST PRIORITY: Ultimate Tennis Statistics, Match Charting Project, free-tier news API fallback — none exist yet in either path. Scope for both Prediction Engine and Parlay Builder before building, keeping the same separate-but-parallel pattern.
+
+After each step, report: (a) real Data Quality before/after on the named test matchups, (b) confirmation that both the Prediction Engine path and the Parlay Builder path were touched independently, and (c) any place the two systems ended up sharing code that should be separate instead.
+```

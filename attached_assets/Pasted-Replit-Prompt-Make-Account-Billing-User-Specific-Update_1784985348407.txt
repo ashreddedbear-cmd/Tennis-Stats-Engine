@@ -1,0 +1,239 @@
+Replit Prompt — Make Account Billing User-Specific
+
+Update the Account Billing section so it automatically displays the currently logged-in user’s real subscription and billing information.
+
+Primary Requirement
+
+The billing page must never show shared, hardcoded, admin, or another user’s Stripe information.
+
+Every value must be connected to the authenticated user’s account using their Clerk user ID and the matching subscription record in PostgreSQL.
+
+Required Data Flow
+
+1. Detect the currently authenticated Clerk user.
+2. Use the Clerk user ID to retrieve that user’s billing record from the database.
+3. Return only that user’s Stripe customer and subscription information.
+4. Display the database values on the Account Billing card.
+5. Keep the database synchronized through verified Stripe webhooks.
+6. Never grant paid access based only on a successful checkout redirect.
+
+Display Requirements
+
+Replace the static placeholders with live user-specific values:
+
+Customer
+
+* Display the user’s Stripe customer ID in a masked format, such as cus_••••8K2A.
+* Do not expose the full Stripe customer ID in the frontend.
+* When no Stripe customer exists, display NONE.
+
+Subscription
+Display the user’s current plan and billing interval, such as:
+
+* Free
+* Elite Trial
+* Pro Monthly
+* Pro Annual
+* Elite Monthly
+* Elite Annual
+* Team Monthly
+* None
+
+Status
+Support these subscription statuses:
+
+* Active
+* Trialing
+* Past Due
+* Unpaid
+* Canceled
+* Incomplete
+* Expired
+* Inactive
+
+Access Granted
+Display:
+
+* The plan currently granting access, such as Pro, Elite, or Team
+* Free when the user has no paid entitlement
+* Do not display only a dash when the user is authenticated
+
+Renewal End
+Display the subscription’s actual renewal or expiration date in a readable format, such as:
+
+August 25, 2026
+
+For canceled subscriptions that remain active through the billing period, label this field:
+
+Access Ends
+
+For trials, label it:
+
+Trial Ends
+
+When no renewal or expiration date exists, display:
+
+Not applicable
+
+Billing Portal Button
+
+Make Open Billing Portal work only for the logged-in user.
+
+Required behavior:
+
+1. Confirm the user is authenticated.
+2. Retrieve the Stripe customer ID from that user’s database record.
+3. Create a Stripe Billing Portal session on the backend.
+4. Redirect the user to the returned Stripe portal URL.
+5. Never accept a Stripe customer ID directly from the browser.
+6. Never allow one user to open another user’s billing portal.
+
+When the user does not have a Stripe customer ID:
+
+* Disable the button or replace it with Choose a Plan
+* Do not return a server error
+
+Refresh Status Button
+
+Make Refresh Status securely update the displayed information.
+
+Required behavior:
+
+1. Re-fetch the authenticated user’s latest subscription record.
+2. Optionally reconcile that record with Stripe from the backend.
+3. Never update access based on frontend-provided subscription data.
+4. Show a loading state while refreshing.
+5. Show a success message when updated.
+6. Show a clear error message if the refresh fails.
+7. Prevent repeated clicks while the request is running.
+
+Stripe Webhook Requirements
+
+Continue using verified Stripe webhooks as the source of truth for paid access.
+
+Handle at least:
+
+* checkout.session.completed
+* customer.subscription.created
+* customer.subscription.updated
+* customer.subscription.deleted
+* invoice.paid
+* invoice.payment_failed
+* customer.subscription.trial_will_end
+
+Verify the Stripe webhook signature before processing any event.
+
+Use idempotent webhook handling so duplicate Stripe events do not create duplicate subscription records or duplicate entitlements.
+
+Map Stripe records to the correct application user using secure metadata and database relationships, including:
+
+* Clerk user ID
+* Internal user ID
+* Stripe customer ID
+* Stripe subscription ID
+
+Database Requirements
+
+Ensure the billing/subscription table contains or supports:
+
+* Internal user ID
+* Clerk user ID
+* Stripe customer ID
+* Stripe subscription ID
+* Stripe price ID
+* Plan
+* Billing interval
+* Subscription status
+* Trial start
+* Trial end
+* Current period start
+* Current period end
+* Cancel-at-period-end status
+* Canceled date
+* Access-granted plan
+* Entitlement status
+* Last Stripe event ID
+* Last synchronized date
+* Created date
+* Updated date
+
+Add safe database migrations when fields are missing. Do not delete existing billing data.
+
+Enforce one active billing profile per application user.
+
+Access-Control Rules
+
+Paid access must be granted only when the database contains a webhook-confirmed valid entitlement.
+
+Apply these rules:
+
+* active subscription → grant the correct paid plan
+* trialing subscription → grant Elite trial access until trial expiration
+* past_due → follow the application’s failed-payment downgrade policy
+* unpaid → downgrade to Free
+* canceled with future period end → retain access until the period ends
+* expired or deleted subscription → downgrade to Free
+* failed checkout or abandoned checkout → do not grant access
+
+Owner and Admin bypasses may remain, but the billing card must clearly identify that access as an administrative entitlement rather than pretending there is an active Stripe subscription.
+
+Security Requirements
+
+* Require authentication for every billing endpoint.
+* Derive the user identity from the server-side authentication session.
+* Never trust a user ID, customer ID, subscription ID, price ID, plan, or status sent from the frontend.
+* Do not expose Stripe secret keys or webhook secrets to the client.
+* Prevent horizontal privilege escalation.
+* Add appropriate server-side logging without logging full payment details.
+* Do not expose full card numbers, payment methods, or sensitive Stripe data.
+
+User Interface States
+
+Add proper states for:
+
+* Loading
+* Signed out
+* Free user
+* Active subscriber
+* Trialing subscriber
+* Past-due subscriber
+* Canceled but active until period end
+* Expired subscription
+* Missing Stripe customer
+* Webhook processing delay
+* Backend error
+
+While a checkout is still awaiting webhook confirmation, show:
+
+Payment received — confirming access
+
+Do not show paid features as unlocked until webhook confirmation finishes.
+
+Mobile Requirements
+
+Keep the card fully responsive on mobile.
+
+Ensure:
+
+* Status badges wrap cleanly
+* Dates do not overflow
+* Buttons remain fully visible
+* Loading and error messages fit inside the card
+* No horizontal scrolling is introduced
+
+Verification Tests
+
+After implementation, test with at least two separate user accounts and confirm:
+
+1. Each account sees only its own billing information.
+2. A Free user sees Free or Inactive status correctly.
+3. A successful checkout does not grant access before webhook confirmation.
+4. Webhook confirmation updates the correct user.
+5. Refresh Status updates the page without reloading.
+6. The Billing Portal opens for the correct Stripe customer.
+7. A user cannot manipulate the request to access another customer.
+8. Cancel-at-period-end displays the correct access-ending date.
+9. Failed or unpaid subscriptions downgrade correctly.
+10. Signing out clears all user-specific billing information.
+
+Do not redesign the rest of the page. Keep the existing dark green visual style and improve only the data connection, security, states, and billing behavior.

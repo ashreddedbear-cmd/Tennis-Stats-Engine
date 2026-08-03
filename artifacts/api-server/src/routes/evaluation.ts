@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { resolve as resolvePath, join as joinPath } from "path";
 import { and, desc, eq, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import { db, evaluationPredictionsTable, evaluationRunsTable, calibrationModelsTable, jobRunsTable, historicalMatchesTable } from "@workspace/db";
 import { logger } from "../lib/logger";
@@ -46,8 +47,19 @@ import { validateAndStoreSimulator } from "../services/evaluation/simulatorValid
 import { predictionSettingsTable, simulatorValidationTable } from "@workspace/db";
 import { startAblationJob, getAblationJobStatus } from "../services/evaluation/ablationJob";
 import { runShadowPaperTradingReplay, listShadowReplayBatches } from "../services/evaluation/shadowReplay";
+import { isPipelineQuiet, PAPER_TRADE_QUIET_WINDOW_HOURS, sendPipelineQuietAlert, resetAlertCooldown } from "../services/evaluation/paperTradingQuiet";
 import { usedHistoricalMatchFallback } from "../services/predictionEngine/playerProfileWarnings";
 import { runIncrementalHistoricalBackfill, runHistoricalBackfill, getLatestCoveredMatchDate } from "../services/historicalData/backfill";
+import { runSackmannBackfill, SACKMANN_PROVIDER } from "../services/historicalData/sackmannBackfill";
+import { runTennisDataCoUkBackfill, TENNIS_DATA_CO_UK_PROVIDER } from "../services/historicalData/tennisDataCoUkBackfill";
+import { runExternalCsvBackfill, EXT_CSV_PROVIDER } from "../services/historicalData/externalCsvBackfill";
+import {
+  runExternalCsvBridge,
+  clearAffectedEvalPredictions,
+  orchestrateBridgeRefresh,
+  type DbLike as BridgeDbLike,
+} from "../services/historicalData/externalCsvBridge";
+import { startBridgeRescoreJob, getBridgeRescoreJobStatus } from "../services/evaluation/bridgeRescoreJob";
 import { getTennisDataProvider } from "../services/tennisData";
 import { HISTORICAL_BACKFILL_JOB_NAME } from "../jobs/historicalBackfillJobName";
 import {
@@ -57,7 +69,6 @@ import {
   ListHistoricalBackfillJobRunsQueryParams,
   ListHistoricalBackfillJobRunsResponse,
   GetHistoricalDataFreshnessResponse,
-  GetRankingVerificationResponse,
   GetPredictionStatsResponse,
   RunOptimizerBody,
   GetLatestPatternAnalysisResponse,
@@ -78,6 +89,7 @@ import { getOptimizerAccuracySummary } from "../services/evaluation/optimizerSum
 import { runCalibrationRefitJob } from "../jobs/runCalibrationRefitJob";
 import { computeRecommendation, type Recommendation } from "../services/predictionEngine/recommendation";
 import { enforceEntitlement } from "../lib/entitlements";
+import { requireAdmin } from "../lib/adminAuth";
 import {
   canUseCompetitiveBalance,
   canUseDeveloperAnalytics,
@@ -119,7 +131,7 @@ function deriveRecommendationFromEvaluationRow(row: {
   const dataQuality = row.dataQuality;
   const dataQualityLabel = dataQuality >= 85 ? "Excellent" : dataQuality >= 65 ? "Strong" : dataQuality >= 45 ? "Acceptable" : dataQuality >= 25 ? "Limited" : "Poor";
   const tieBreakerApplied = row.tieBreakerApplied === true;
-  return computeRecommendation(row.calibratedProbability, dataQuality, dataQualityLabel, row.upsetRiskTier as Parameters<typeof computeRecommendation>[3], row.modelAgreement as Parameters<typeof computeRecommendation>[4], tieBreakerApplied);
+  return computeRecommendation(row.calibratedProbability, dataQuality, dataQualityLabel, row.modelAgreement as Parameters<typeof computeRecommendation>[3], tieBreakerApplied);
 }
 
 router.get("/evaluation/runs", async (_req, res): Promise<void> => {
@@ -208,7 +220,7 @@ router.get("/evaluation/predictions", async (req, res): Promise<void> => {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
-  const { runKind, segment, status, limit, offset } = parsed.data;
+  const { runKind, segment, status, limit } = parsed.data;
 
   const conditions = [];
   if (runKind) conditions.push(eq(evaluationPredictionsTable.runKind, runKind));
@@ -220,8 +232,7 @@ router.get("/evaluation/predictions", async (req, res): Promise<void> => {
     .from(evaluationPredictionsTable)
     .where(conditions.length > 0 ? and(...conditions) : undefined)
     .orderBy(desc(evaluationPredictionsTable.scheduledStartAt))
-    .limit(limit)
-    .offset(offset ?? 0);
+    .limit(limit);
 
   res.json(ListEvaluationPredictionsResponse.parse(rows.map(withEvaluationHistoricalMatchFallbackFlag)));
 });
@@ -464,6 +475,107 @@ router.post("/paper-trading/run-cycle", async (_req, res): Promise<void> => {
   res.json(RunPaperTradingCycleResponse.parse(summary));
 });
 
+/**
+ * GET /evaluation/paper-trading/status — Task #110
+ * Returns last-run time, graded count, and pipeline-quiet alert state.
+ * Safe to poll from the admin UI without triggering any side effects.
+ */
+router.get("/paper-trading/status", async (_req, res): Promise<void> => {
+  try {
+
+    // Latest completed paper-trading cycle (from job_runs table)
+    const [lastRun] = await db
+      .select({ finishedAt: jobRunsTable.finishedAt, status: jobRunsTable.status })
+      .from(jobRunsTable)
+      .where(and(eq(jobRunsTable.jobName, PAPER_TRADING_JOB_NAME), isNotNull(jobRunsTable.finishedAt)))
+      .orderBy(desc(jobRunsTable.finishedAt))
+      .limit(1);
+
+    // Fallback: if no job_runs row exists yet, derive last-run from the newest locked prediction
+    const [latestLock] = lastRun
+      ? [null]
+      : await db
+          .select({ lockedAt: evaluationPredictionsTable.lockedAt })
+          .from(evaluationPredictionsTable)
+          .where(eq(evaluationPredictionsTable.runKind, "paper_trade"))
+          .orderBy(desc(evaluationPredictionsTable.lockedAt))
+          .limit(1);
+
+    const lastRunAt: Date | null = lastRun?.finishedAt ?? latestLock?.lockedAt ?? null;
+
+    const [counts] = await db
+      .select({
+        total: sql<number>`COUNT(*)::int`,
+        graded: sql<number>`COUNT(*) FILTER (WHERE ${evaluationPredictionsTable.status} = 'graded')::int`,
+      })
+      .from(evaluationPredictionsTable)
+      .where(eq(evaluationPredictionsTable.runKind, "paper_trade"));
+
+    const quiet = isPipelineQuiet(lastRunAt, PAPER_TRADE_QUIET_WINDOW_HOURS);
+    const hoursSinceLastRun = lastRunAt
+      ? Math.round(((Date.now() - lastRunAt.getTime()) / (1000 * 60 * 60)) * 10) / 10
+      : null;
+
+    // Fire the operator alert (if wired) whenever the status endpoint detects silence.
+    // sendPipelineQuietAlert has a built-in cooldown so it won't spam on every poll.
+    let alertOutcome: string | undefined;
+    if (quiet) {
+      const outcome = await sendPipelineQuietAlert(lastRunAt);
+      alertOutcome = outcome;
+      if (outcome === "fired") {
+        logger.warn({ lastRunAt: lastRunAt?.toISOString() ?? null, hoursSinceLastRun }, "Pipeline-quiet alert fired");
+      } else if (outcome.startsWith("error:")) {
+        logger.error({ outcome, lastRunAt: lastRunAt?.toISOString() ?? null }, "Pipeline-quiet alert send failed");
+      }
+    }
+
+    res.json({
+      lastRunAt: lastRunAt?.toISOString() ?? null,
+      hoursSinceLastRun,
+      quietWindowHours: PAPER_TRADE_QUIET_WINDOW_HOURS,
+      pipelineQuiet: quiet,
+      alertOutcome: alertOutcome ?? null,
+      gradedCount: counts?.graded ?? 0,
+      totalCount: counts?.total ?? 0,
+    });
+  } catch (e) {
+    logger.error({ err: e }, "paper-trading/status query failed");
+    res.status(500).json({ error: e instanceof Error ? e.message : "Status query failed" });
+  }
+});
+
+/**
+ * POST /evaluation/paper-trading/test-quiet-alert  (admin-only)
+ * Forces a pipeline-quiet alert to fire immediately, bypassing the cooldown.
+ * Use this for the live test in Item 2: confirm the alert reaches the webhook,
+ * then call this again after a successful cycle to confirm it stops firing.
+ */
+router.post("/paper-trading/test-quiet-alert", requireAdmin, async (_req, res): Promise<void> => {
+  try {
+    // Fetch the real last-run timestamp so the alert message has accurate data
+    const [lastRun] = await db
+      .select({ finishedAt: jobRunsTable.finishedAt })
+      .from(jobRunsTable)
+      .where(and(eq(jobRunsTable.jobName, PAPER_TRADING_JOB_NAME), isNotNull(jobRunsTable.finishedAt)))
+      .orderBy(desc(jobRunsTable.finishedAt))
+      .limit(1);
+
+    const lastRunAt: Date | null = lastRun?.finishedAt ?? null;
+
+    resetAlertCooldown();
+    const outcome = await sendPipelineQuietAlert(lastRunAt, /* force */ true);
+
+    res.json({
+      outcome,
+      webhookConfigured: Boolean(process.env.QUIET_PIPELINE_ALERT_WEBHOOK_URL?.trim()),
+      lastRunAt: lastRunAt?.toISOString() ?? null,
+      firedAt: new Date().toISOString(),
+    });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : "Test alert failed" });
+  }
+});
+
 router.get("/paper-trading/job-runs", async (req, res): Promise<void> => {
   const parsed = ListPaperTradingJobRunsQueryParams.safeParse(req.query);
   if (!parsed.success) {
@@ -479,6 +591,37 @@ router.get("/paper-trading/job-runs", async (req, res): Promise<void> => {
     .limit(parsed.data.limit);
 
   res.json(ListPaperTradingJobRunsResponse.parse(rows));
+});
+
+/**
+ * Task #33: Admin-only trigger for a full calibration refit (walk-forward with evaluationOnly=false).
+ * Protected by requireAdmin (bypasses the subscription entitlement gate) so the owner can always
+ * refit the model regardless of payment status. Runs in the background — poll
+ * GET /evaluation/walk-forward/status to track progress.
+ *
+ * This exists separately from POST /evaluation/walk-forward/run (entitlement-gated, defaults
+ * evaluationOnly=true via the HTTP body schema) so the admin can refit without navigating the
+ * subscription UI and without accidentally triggering an evaluationOnly run.
+ */
+router.post("/evaluation/calibration-refit", requireAdmin, async (_req, res): Promise<void> => {
+  const result = startWalkForwardJob({ evaluationOnly: false });
+  res.json(result);
+});
+
+/**
+ * Admin-only trigger for an evaluation-only walk-forward: scores all currently unscored
+ * historical matches and writes them into evaluation_predictions WITHOUT touching the
+ * calibration_models or specialist_models tables.
+ *
+ * Use this to grow the evaluation corpus (backtest sample weight) safely at any time.
+ * Unlike POST /evaluation/calibration-refit (evaluationOnly=false), this never refits or
+ * replaces the active calibration model, so it is safe to run while task #78 is open.
+ *
+ * Poll GET /evaluation/walk-forward/status to track progress.
+ */
+router.post("/evaluation/walk-forward/score-unscored", requireAdmin, async (_req, res): Promise<void> => {
+  const result = startWalkForwardJob({ evaluationOnly: true });
+  res.json(result);
 });
 
 router.get("/evaluation/calibration-refit/job-runs", async (req, res): Promise<void> => {
@@ -603,6 +746,408 @@ router.post("/evaluation/historical-backfill/run-cycle", async (_req, res): Prom
   const provider = getTennisDataProvider();
   const result = await runIncrementalHistoricalBackfill(provider);
   res.json(RunHistoricalBackfillCycleResponse.parse(result));
+});
+
+/**
+ * Sackmann CSV backfill (Task #107 Phase 1) — downloads Jeff Sackmann's tennis_atp / tennis_wta
+ * GitHub CSVs and inserts match history into historical_matches via the same infrastructure as
+ * the live-provider backfill. Runs in the background; outcome written to job_runs.
+ *
+ * POST /evaluation/sackmann-backfill/run
+ * Body (all optional): { startYear?: number, endYear?: number, tours?: ("atp"|"wta")[], includeChallengerItf?: boolean }
+ *
+ * includeChallengerItf defaults to true — fetches atp_matches_qual_chall_YYYY.csv and
+ * wta_matches_qual_itf_YYYY.csv in addition to the main-draw files. These files add Challenger
+ * and ITF match history for lower-ranked players who rarely appear in the main-draw file.
+ */
+// requireAdmin: this is a data-pipeline operation, not a subscriber feature; the entitlement
+// check is inappropriate here (it requires an active user session/subscription) and would block
+// owner-triggered runs. Other job-trigger routes (calibration-refit, walk-forward) already use
+// requireAdmin for the same reason.
+router.post("/evaluation/sackmann-backfill/run", requireAdmin, async (req, res): Promise<void> => {
+
+  const startYear          = typeof req.body?.startYear          === "number"  ? req.body.startYear          : 2010;
+  const endYear            = typeof req.body?.endYear            === "number"  ? req.body.endYear            : new Date().getFullYear();
+  const tours              = Array.isArray(req.body?.tours)                    ? req.body.tours               : ["atp", "wta"];
+  const includeChallengerItf = typeof req.body?.includeChallengerItf === "boolean" ? req.body.includeChallengerItf : true;
+
+  // Respond immediately — the backfill is long-running.
+  res.json({ started: true, startYear, endYear, tours, includeChallengerItf, jobName: `${SACKMANN_PROVIDER}-backfill` });
+
+  const startedAt = new Date();
+  runSackmannBackfill({ startYear, endYear, tours, includeChallengerItf })
+    .then(async (result) => {
+      await db.insert(jobRunsTable).values({
+        jobName: `${SACKMANN_PROVIDER}-backfill`,
+        startedAt,
+        finishedAt: new Date(),
+        status: "success",
+        attempts: 1,
+        summary: {
+          fixturesLoaded: result.fixturesLoaded,
+          atpYearsLoaded: result.atpYearsLoaded,
+          wtaYearsLoaded: result.wtaYearsLoaded,
+          atpChallengerYearsLoaded: result.atpChallengerYearsLoaded,
+          wtaItfYearsLoaded: result.wtaItfYearsLoaded,
+          includeChallengerItf,
+          matchesInserted: result.backfill.matchesInserted,
+          featureRowsInserted: result.backfill.featureRowsInserted,
+          matchesSkippedDuplicate: result.backfill.matchesSkippedDuplicate,
+        },
+        errorMessage: null,
+      });
+      logger.info({ result }, "sackmann-backfill: completed");
+    })
+    .catch(async (err) => {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.error({ err }, "sackmann-backfill: failed");
+      await db.insert(jobRunsTable).values({
+        jobName: `${SACKMANN_PROVIDER}-backfill`,
+        startedAt,
+        finishedAt: new Date(),
+        status: "failed",
+        attempts: 1,
+        summary: null,
+        errorMessage,
+      });
+    });
+});
+
+/**
+ * GET /evaluation/sackmann-backfill/status
+ * Returns the most recent sackmann-backfill job_runs row so the admin UI can show
+ * whether a backfill has run, when it finished, and how many matches were imported.
+ */
+router.get("/evaluation/sackmann-backfill/status", async (_req, res): Promise<void> => {
+  if (!(await enforceEntitlement(res, canUsePredictionHistory, "predictionHistory"))) return;
+
+  const [latest] = await db
+    .select()
+    .from(jobRunsTable)
+    .where(eq(jobRunsTable.jobName, `${SACKMANN_PROVIDER}-backfill`))
+    .orderBy(desc(jobRunsTable.startedAt))
+    .limit(1);
+
+  res.json({
+    hasRun: !!latest,
+    lastRun: latest
+      ? {
+          status: latest.status,
+          startedAt: latest.startedAt?.toISOString() ?? null,
+          finishedAt: latest.finishedAt?.toISOString() ?? null,
+          summary: latest.summary ?? null,
+          errorMessage: latest.errorMessage ?? null,
+        }
+      : null,
+  });
+});
+
+/**
+ * POST /evaluation/external-csv-backfill/run
+ * Imports uploaded CSV files from attached_assets/ (or any workspace-relative paths) into
+ * historical_matches. Same Elo / feature-snapshot / idempotency guarantees as the Sackmann path.
+ *
+ * Body: { files: string[] }  — workspace-relative paths, e.g.
+ *   ["attached_assets/2024-atp-season_xxx.csv", "attached_assets/2024-wta-season_xxx.csv"]
+ *
+ * Player ID resolution: surnames are matched against existing historical_matches rows so that
+ * known Sackmann / API-Tennis player IDs are reused — keeping Elo chains intact across years.
+ * New players fall back to "ext-{csvId}" (stable within and across files from this source).
+ */
+router.post("/evaluation/external-csv-backfill/run", requireAdmin, async (req, res): Promise<void> => {
+  const requestedFiles: string[] = Array.isArray(req.body?.files) ? req.body.files : [];
+  if (requestedFiles.length === 0) {
+    res.status(400).json({ error: "Provide at least one file path in the 'files' array" });
+    return;
+  }
+
+  // process.cwd() in the API server is artifacts/api-server — go up two levels to workspace root
+  const workspaceRoot = resolvePath(process.cwd(), "../..");
+  const absFiles      = requestedFiles.map((f: string) => joinPath(workspaceRoot, f));
+  const jobName    = `${EXT_CSV_PROVIDER}-backfill`;
+
+  res.json({ started: true, files: requestedFiles, jobName });
+
+  const startedAt = new Date();
+  runExternalCsvBackfill({ files: absFiles })
+    .then(async (result) => {
+      await db.insert(jobRunsTable).values({
+        jobName,
+        startedAt,
+        finishedAt: new Date(),
+        status: "success",
+        attempts: 1,
+        summary: {
+          filesLoaded:             result.filesLoaded,
+          fixturesParsed:          result.fixturesParsed,
+          playersMatched:          result.playersMatched,
+          playersUnmatched:        result.playersUnmatched,
+          matchesInserted:         result.backfill.matchesInserted,
+          featureRowsInserted:     result.backfill.featureRowsInserted,
+          matchesSkippedDuplicate: result.backfill.matchesSkippedDuplicate,
+          bridge: {
+            extPlayerSlotsFound: result.bridge.extPlayerSlotsFound,
+            resolved:            result.bridge.resolved,
+            unresolved:          result.bridge.unresolved,
+            matchRowsUpdated:    result.bridge.matchRowsUpdated,
+            featureRowsUpdated:  result.bridge.featureRowsUpdated,
+            atpMatchRate:        result.bridge.atpMatchRate,
+            wtaMatchRate:        result.bridge.wtaMatchRate,
+          },
+        },
+        errorMessage: null,
+      });
+      logger.info({ result }, "ext-csv-backfill: completed");
+    })
+    .catch(async (err) => {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.error({ err }, "ext-csv-backfill: failed");
+      await db.insert(jobRunsTable).values({
+        jobName,
+        startedAt,
+        finishedAt: new Date(),
+        status: "failed",
+        attempts: 1,
+        summary: null,
+        errorMessage,
+      });
+    });
+});
+
+/**
+ * GET /evaluation/external-csv-backfill/status
+ * Most recent job_runs row for the external CSV backfill.
+ */
+router.get("/evaluation/external-csv-backfill/status", requireAdmin, async (_req, res): Promise<void> => {
+  const [latest] = await db
+    .select()
+    .from(jobRunsTable)
+    .where(eq(jobRunsTable.jobName, `${EXT_CSV_PROVIDER}-backfill`))
+    .orderBy(desc(jobRunsTable.startedAt))
+    .limit(1);
+
+  res.json({
+    hasRun: !!latest,
+    lastRun: latest
+      ? {
+          status:       latest.status,
+          startedAt:    latest.startedAt?.toISOString()  ?? null,
+          finishedAt:   latest.finishedAt?.toISOString() ?? null,
+          summary:      latest.summary      ?? null,
+          errorMessage: latest.errorMessage ?? null,
+        }
+      : null,
+  });
+});
+
+/**
+ * POST /evaluation/external-csv-backfill/bridge
+ *
+ * Post-import bridge: re-resolves ext-{id} player IDs in historical_matches to existing
+ * Sackmann / API-Tennis IDs using surname + first-initial disambiguation.
+ *
+ * Safe to run repeatedly — idempotent once all ext-{id}s have been replaced.
+ * Runs in the background; result is logged and stored in job_runs under "ext-csv-bridge".
+ *
+ * Typical use-case: run AFTER the initial CSV backfill to raise the player-ID match rate
+ * from ~11% (surname-only) to ≥70% ATP / ≥50% WTA, so Elo chains continue across years.
+ */
+router.post("/evaluation/external-csv-backfill/bridge", requireAdmin, async (_req, res): Promise<void> => {
+  const jobName   = "ext-csv-bridge";
+  const startedAt = new Date();
+  res.json({ started: true, jobName });
+
+  runExternalCsvBridge()
+    .then(async (result) => {
+      // ── Bridge-specific full refresh ───────────────────────────────────────
+      // Delegate to orchestrateBridgeRefresh which handles:
+      //   • Skipping entirely when no matches were resolved.
+      //   • NOT deleting rows when a job is already running (would orphan rows
+      //     that the in-flight run already excluded from its eligible set).
+      //   • Awaiting clearAffectedEvalPredictions before scheduling the job
+      //     (ensures the rescore job's DB queries see the post-deletion state).
+      //   • Using startBridgeRescoreJob (not walk-forward) so the rescore
+      //     loads the FULL historical context for Elo/h2h/form and scores
+      //     only the affected matches — with no fold minimums or warmup floors.
+      const refresh = await orchestrateBridgeRefresh({
+        affectedMatchIds: result.affectedMatchIds,
+        resolved: result.resolved,
+        db: db as unknown as BridgeDbLike,
+        isJobRunning: () =>
+          getWalkForwardJobStatus().state === "running" ||
+          getBridgeRescoreJobStatus().state === "running",
+        clearPredictions: (dbLike, ids) => clearAffectedEvalPredictions(dbLike, ids),
+        startJob: (ids) => startBridgeRescoreJob(ids),
+      });
+
+      const { affectedEvalRowsCleared, walkForwardStarted, walkForwardSkipReason } = refresh;
+
+      if (walkForwardStarted) {
+        logger.info(
+          { affectedMatchCount: result.affectedMatchIds.length, affectedEvalRowsCleared },
+          "ext-csv-bridge: cleared stale eval rows + triggered targeted walk-forward re-score",
+        );
+      } else if (walkForwardSkipReason === "walk_forward_already_running") {
+        logger.warn(
+          { affectedMatchCount: result.affectedMatchIds.length },
+          "ext-csv-bridge: walk-forward already running — full refresh deferred to avoid orphaned eval rows",
+        );
+      } else if (walkForwardSkipReason === "clear_failed") {
+        logger.error(
+          { affectedMatchCount: result.affectedMatchIds.length },
+          "ext-csv-bridge: failed to clear stale eval predictions — walk-forward skipped",
+        );
+      } else if (walkForwardSkipReason === "no_resolved_matches") {
+        logger.info({ resolved: result.resolved },
+          "ext-csv-bridge: no new resolutions — skipping eval-prediction clear and walk-forward");
+      } else if (walkForwardSkipReason) {
+        logger.warn({ reason: walkForwardSkipReason },
+          "ext-csv-bridge: walk-forward started concurrently — cleared rows will be re-scored by that run");
+      }
+
+      await db.insert(jobRunsTable).values({
+        jobName,
+        startedAt,
+        finishedAt: new Date(),
+        status: "success",
+        attempts: 1,
+        summary: {
+          extPlayerSlotsFound:     result.extPlayerSlotsFound,
+          resolved:                result.resolved,
+          unresolved:              result.unresolved,
+          matchRowsUpdated:        result.matchRowsUpdated,
+          featureRowsUpdated:      result.featureRowsUpdated,
+          atpMatchRate:            result.atpMatchRate,
+          wtaMatchRate:            result.wtaMatchRate,
+          affectedEvalRowsCleared,
+          walkForwardStarted,
+          walkForwardSkipReason:   walkForwardSkipReason ?? null,
+        },
+        errorMessage: null,
+      });
+      logger.info({ result }, "ext-csv-bridge: completed");
+    })
+    .catch(async (err) => {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.error({ err }, "ext-csv-bridge: failed");
+      await db.insert(jobRunsTable).values({
+        jobName,
+        startedAt,
+        finishedAt: new Date(),
+        status: "failed",
+        attempts: 1,
+        summary: null,
+        errorMessage,
+      });
+    });
+});
+
+/**
+ * GET /evaluation/external-csv-backfill/bridge/status
+ * Most recent job_runs row for the ext-csv bridge.
+ */
+router.get("/evaluation/external-csv-backfill/bridge/status", requireAdmin, async (_req, res): Promise<void> => {
+  const [latest] = await db
+    .select()
+    .from(jobRunsTable)
+    .where(eq(jobRunsTable.jobName, "ext-csv-bridge"))
+    .orderBy(desc(jobRunsTable.startedAt))
+    .limit(1);
+
+  res.json({
+    hasRun: !!latest,
+    lastRun: latest
+      ? {
+          status:       latest.status,
+          startedAt:    latest.startedAt?.toISOString()  ?? null,
+          finishedAt:   latest.finishedAt?.toISOString() ?? null,
+          summary:      latest.summary      ?? null,
+          errorMessage: latest.errorMessage ?? null,
+        }
+      : null,
+  });
+});
+
+/**
+ * tennis-data.co.uk XLSX backfill (Phase 5 item 2) — downloads ATP + WTA XLSX files and
+ * inserts match records with embedded market odds into historical_matches.
+ * No API key required. Runs in the background; outcome written to job_runs.
+ *
+ * POST /evaluation/tennis-data-co-uk-backfill/run
+ * Body (all optional): { startYear?: number, endYear?: number, tours?: ("atp"|"wta")[] }
+ * Defaults: startYear=2015, endYear=<current year>, tours=["atp","wta"]
+ *
+ * Market odds (B365, Pinnacle, market avg/max) are stored in raw_source JSONB under _marketOdds.
+ * Query: WHERE provider='tennis-data-co-uk' AND (raw_source->'_marketOdds'->>'avgWinner')::float IS NOT NULL
+ */
+router.post("/evaluation/tennis-data-co-uk-backfill/run", requireAdmin, async (req, res): Promise<void> => {
+  const startYear = typeof req.body?.startYear === "number" ? req.body.startYear : 2015;
+  const endYear   = typeof req.body?.endYear   === "number" ? req.body.endYear   : new Date().getFullYear();
+  const tours     = Array.isArray(req.body?.tours)          ? req.body.tours      : ["atp", "wta"];
+
+  res.json({ started: true, startYear, endYear, tours, jobName: `${TENNIS_DATA_CO_UK_PROVIDER}-backfill` });
+
+  const startedAt = new Date();
+  runTennisDataCoUkBackfill({ startYear, endYear, tours })
+    .then(async (result) => {
+      await db.insert(jobRunsTable).values({
+        jobName:    `${TENNIS_DATA_CO_UK_PROVIDER}-backfill`,
+        startedAt,
+        finishedAt: new Date(),
+        status:     "success",
+        attempts:   1,
+        summary: {
+          fixturesLoaded:   result.fixturesLoaded,
+          fixturesWithOdds: result.fixturesWithOdds,
+          atpYearsLoaded:   result.atpYearsLoaded,
+          wtaYearsLoaded:   result.wtaYearsLoaded,
+          matchesInserted:          result.backfill.matchesInserted,
+          featureRowsInserted:      result.backfill.featureRowsInserted,
+          matchesSkippedDuplicate:  result.backfill.matchesSkippedDuplicate,
+        },
+        errorMessage: null,
+      });
+      logger.info({ result }, "tennis-data-co-uk-backfill: completed");
+    })
+    .catch(async (err) => {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.error({ err }, "tennis-data-co-uk-backfill: failed");
+      await db.insert(jobRunsTable).values({
+        jobName:    `${TENNIS_DATA_CO_UK_PROVIDER}-backfill`,
+        startedAt,
+        finishedAt: new Date(),
+        status:     "failed",
+        attempts:   1,
+        summary:    null,
+        errorMessage,
+      });
+    });
+});
+
+/**
+ * GET /evaluation/tennis-data-co-uk-backfill/status
+ * Returns the most recent job_runs row for the tennis-data.co.uk backfill.
+ */
+router.get("/evaluation/tennis-data-co-uk-backfill/status", requireAdmin, async (_req, res): Promise<void> => {
+  const [latest] = await db
+    .select()
+    .from(jobRunsTable)
+    .where(eq(jobRunsTable.jobName, `${TENNIS_DATA_CO_UK_PROVIDER}-backfill`))
+    .orderBy(desc(jobRunsTable.startedAt))
+    .limit(1);
+
+  res.json({
+    hasRun: !!latest,
+    lastRun: latest
+      ? {
+          status:       latest.status,
+          startedAt:    latest.startedAt?.toISOString()  ?? null,
+          finishedAt:   latest.finishedAt?.toISOString() ?? null,
+          summary:      latest.summary      ?? null,
+          errorMessage: latest.errorMessage ?? null,
+        }
+      : null,
+  });
 });
 
 /**
@@ -767,7 +1312,7 @@ router.get("/evaluation/historical-backfill/freshness", async (_req, res): Promi
 router.post("/evaluation/ranking-verification", async (_req, res): Promise<void> => {
   const provider = getTennisDataProvider();
   const result = await runRankingVerification(provider);
-  res.json(GetRankingVerificationResponse.parse(result));
+  res.json(result);
 });
 
 // ── Task #12: Continuous outcome-learning endpoints ───────────────────────────────────────────────

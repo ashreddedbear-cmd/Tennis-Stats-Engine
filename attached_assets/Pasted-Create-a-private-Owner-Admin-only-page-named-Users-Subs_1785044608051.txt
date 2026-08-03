@@ -1,0 +1,126 @@
+Create a private Owner/Admin-only page named Users & Subscriptions inside the Admin Dashboard.
+
+This page must display every person who creates an account for Tennis Matrix AI, including Free, Pro, Elite, and Team users.
+
+The page must pull user identity and account information from the application database and subscription/payment information from Stripe. Stripe webhook events must keep the database synchronized when a subscription is created, upgraded, downgraded, renewed, canceled, refunded, disputed, or has a failed payment.
+
+Create a summary section at the top containing:
+
+* Total registered users
+* Active users
+* Free users
+* Pro users
+* Elite users
+* Team accounts
+* Monthly subscribers
+* Annual subscribers
+* Active trials
+* Paying subscribers
+* Monthly recurring revenue
+* Annual recurring revenue
+* Past-due accounts
+* Failed payments
+* Cancellations scheduled
+* New signups during the selected date range
+
+Create a searchable and sortable user table with the following columns:
+
+* User name
+* Email address
+* Internal user ID
+* Account status
+* Current plan: Free, Pro, Elite, or Team
+* Billing cycle: Free, Monthly, or Yearly
+* Subscription price
+* Signup date
+* Trial status
+* Trial start date
+* Trial expiration date
+* Paid subscription start date
+* Current billing-period start
+* Next renewal date
+* Cancellation status
+* Subscription cancellation date
+* Stripe customer ID
+* Stripe subscription ID
+* Latest payment status
+* Last payment date
+* Latest payment amount
+* Failed-payment count
+* Refund status
+* Predictions used today
+* Total predictions made
+* Last login
+* Last active date
+* Team owner status
+* Team seats purchased
+* Team seats currently used
+* Number of open support tickets
+* Private admin notes
+
+Add filters for:
+
+* Free, Pro, Elite, and Team
+* Monthly and yearly billing
+* Active, suspended, banned, canceled, past due, and trialing accounts
+* Paid and unpaid users
+* Active and expired trials
+* Failed payments
+* Scheduled cancellations
+* Signup date range
+* Renewal date range
+* Team owners and team members
+
+When an admin selects a user, open a full user-details panel showing:
+
+1. Account information
+2. Subscription details
+3. Complete payment history
+4. Plan-change history
+5. Trial history
+6. Prediction usage
+7. Login and activity history
+8. Support conversations
+9. Team membership
+10. Admin action history
+11. Private admin notes
+
+Add Owner/Admin controls to:
+
+* Change a user’s plan
+* Grant temporary complimentary Pro or Elite access
+* Extend a trial
+* Cancel a subscription immediately
+* Schedule cancellation for the end of the billing period
+* Restore a scheduled cancellation
+* Suspend or reactivate an account
+* Ban or unban an account
+* Reset a user’s daily prediction usage
+* Add or remove Team seats
+* Open the user’s Stripe customer record
+* Initiate a refund through the server-side Stripe integration
+* Add private admin notes
+* Export filtered results to CSV
+
+All sensitive actions must require a confirmation modal. Refunds, bans, suspensions, plan changes, complimentary access, and subscription cancellations must be written to an immutable admin audit log containing:
+
+* Admin performing the action
+* Affected user
+* Action performed
+* Previous value
+* New value
+* Timestamp
+* Optional reason
+
+Security requirements:
+
+* The page must never be accessible to normal subscribers.
+* Enforce Owner/Admin authorization on the server, not only in the user interface.
+* Never expose Stripe secret keys in frontend code.
+* Retrieve Stripe data through authenticated server endpoints.
+* Do not display full card numbers or sensitive payment credentials.
+* Record administrative actions in the audit log.
+* Paginate the user table so it remains fast with a large number of accounts.
+* Use database indexes for email, plan, status, signup date, renewal date, and Stripe customer ID.
+
+Make the page mobile-friendly and usable from an iPhone. On smaller screens, display each user as a compact card rather than forcing a wide table. Include a Back button that returns the admin to the previous Admin Dashboard page.

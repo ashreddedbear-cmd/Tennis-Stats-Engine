@@ -12,6 +12,12 @@ import backtestsRouter from "./backtests";
 import launchAuditRouter from "./launchAudit";
 import liveAuditsRouter from "./liveAudits";
 import paymentsRouter from "./payments";
+import monitoringRouter from "./monitoring";
+import recommendationCalibrationRouter from "./recommendationCalibration";
+import supportRouter from "./support";
+import adminUsersRouter from "./adminUsers";
+import adminParlayRouter from "./adminParlay";
+import savedCardsRouter from "./savedCards";
 
 const router: IRouter = Router();
 
@@ -28,5 +34,11 @@ router.use(backtestsRouter);
 router.use(launchAuditRouter);
 router.use(liveAuditsRouter);
 router.use(paymentsRouter);
+router.use(monitoringRouter);
+router.use(recommendationCalibrationRouter);
+router.use(supportRouter);
+router.use(adminUsersRouter);
+router.use(adminParlayRouter);
+router.use(savedCardsRouter);
 
 export default router;

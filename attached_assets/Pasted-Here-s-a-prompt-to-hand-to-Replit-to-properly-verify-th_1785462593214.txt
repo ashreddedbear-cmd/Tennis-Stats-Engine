@@ -1,0 +1,25 @@
+Here's a prompt to hand to Replit to properly verify this rather than take the session's word for it:
+
+---
+
+**Prompt for Replit Agent:**
+
+> Before marking Task #7 complete, verify the tennis-predictor `tsx`-not-found failure is genuinely pre-existing and not something introduced by this session's changes.
+>
+> 1. **Confirm `tsx` is actually absent as a dependency**, not just missing from a stale lockfile:
+>    - Check `tennis-predictor/package.json` (dependencies and devDependencies) for `tsx`.
+>    - Check if `tsx` is hoisted/available at the workspace root (`package.json` at repo root) — if this is a pnpm workspace, a root-level `tsx` could make it resolve there but not in `tennis-predictor` specifically depending on how the workspace is configured.
+>    - Run `pnpm why tsx` (or equivalent) from within `tennis-predictor` to see definitively whether it resolves anywhere in the dependency tree.
+>
+> 2. **Confirm the failure predates today's changes**, not just this session:
+>    - Run `git log` on the invariants workflow file and on `tennis-predictor/package.json` to find the last commit before today's session.
+>    - Check out that commit (or use `git show`) and run the tennis-predictor test command against it directly, to see if the `tsx not found` error reproduces on old code.
+>    - If CI/workflow run history is available (Replit's own logs, or GitHub Actions if configured), pull the last few runs prior to today and confirm this same failure shows up there.
+>
+> 3. **Report back explicitly**: does `tsx` exist anywhere in the dependency tree for tennis-predictor, and does the failure reproduce on a pre-session commit? Don't infer from "Task #10 was already opened for this" — Task #10 being opened doesn't by itself prove the failure predates today, only that someone flagged tsx-skipping as a concern at some point.
+>
+> If either check fails (i.e., `tsx` was actually available before, or the failure does NOT reproduce on the pre-session commit), treat it as a regression introduced today and fix it before closing Task #7.
+
+---
+
+This closes the two gaps: it stops "pre-existing" from being an assumption and makes Replit produce actual evidence (dependency tree output + a real diff against a prior commit) before the task gets marked clean.

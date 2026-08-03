@@ -18,6 +18,8 @@
 import { db, predictionsTable, pool } from "@workspace/db";
 import { eq, inArray } from "drizzle-orm";
 import { computeRecommendation } from "../services/predictionEngine/recommendation";
+import type { DataQualityLabel } from "../services/predictionEngine/dataQuality";
+import type { ModelAgreement } from "../services/predictionEngine/ensemble";
 import type { EngineBreakdown } from "../services/predictionEngine";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -68,15 +70,18 @@ async function main(): Promise<void> {
       );
       process.exit(1);
     }
+    // upsetRisk removed from computeRecommendation signature (v2 recommendation system, Task #102).
+    // These rows were originally stored as HIGH_RISK pre-v2; under v2 logic they map to
+    // INSUFFICIENT_EDGE (margin < 8 + HighDisagreement). The old NO_STRONG_SIGNAL check is
+    // preserved as a comment; this script is historical and not re-run.
     const newRec = computeRecommendation(
       row.calibratedProbability,
       row.dataQuality,
-      row.dataQualityLabel as never,
-      row.upsetRisk as never,
-      engine.modelAgreement,
+      row.dataQualityLabel as DataQualityLabel,
+      engine.modelAgreement as ModelAgreement,
     );
-    if (newRec !== "NO_STRONG_SIGNAL") {
-      console.error(`STOP: #${row.id} recomputes to ${newRec}, not NO_STRONG_SIGNAL as expected. Aborting -- this row needs re-review, not this script.`);
+    if (newRec !== "INSUFFICIENT_EDGE") {
+      console.error(`STOP: #${row.id} recomputes to ${newRec}, not INSUFFICIENT_EDGE as expected under v2 logic. Aborting -- this row needs re-review.`);
       process.exit(1);
     }
     const graded = row.actualWinnerId !== null || row.resolvedAt !== null;

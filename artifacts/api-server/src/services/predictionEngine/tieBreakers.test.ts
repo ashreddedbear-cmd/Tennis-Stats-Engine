@@ -122,6 +122,42 @@ test("applyTieBreaker: outside TIE_BAND — applied is false and probability pas
   }
 });
 
+// ── Display-consistency invariant: banner must show rawEnsemble, not calibratedProbability ───────
+//
+// When tieBreakerApplied=true, calibration, specialist-blending, and simulator-blending run
+// *after* the tie-breaker check and can push calibratedProbability to extreme values (e.g.
+// 100%/0%) while the raw ensemble sits at ~50%.  The UI "Too Close to Call" banner must display
+// rawEnsembleProbability (== adjustedProbability here, since no nudge is applied), NOT
+// calibratedProbability.  This test asserts the invariant that makes the fix coherent:
+//   - When applied=true, adjustedProbability is always within TIE_BAND of 50.
+//   - calibratedProbability may legally differ — the engine does not constrain it post-tie-breaker.
+//   - Therefore the banner MUST use adjustedProbability; using calibratedProbability would produce
+//     contradictions like "Too Close to Call / 100.0%".
+
+test("display invariant: when applied=true, adjustedProbability is always within TIE_BAND of 50 (safe for banner display)", () => {
+  const withinBand = [50.0, 49.0, 51.0, 50 + TIE_BAND - 0.01, 50 - TIE_BAND + 0.01];
+  for (const raw of withinBand) {
+    const result = applyTieBreaker(raw, IGNORED_INPUTS);
+    assert.ok(result.applied, `Expected applied=true for raw=${raw}`);
+    assert.ok(
+      Math.abs(result.adjustedProbability - 50) < TIE_BAND,
+      `adjustedProbability ${result.adjustedProbability} must be within TIE_BAND (${TIE_BAND}) of 50 when applied — it is the value the banner displays`,
+    );
+  }
+});
+
+test("display invariant: when applied=false, adjustedProbability is outside TIE_BAND (calibratedProbability is appropriate for display)", () => {
+  const outsideBand = [50 + TIE_BAND, 50 - TIE_BAND, 65, 35, 80, 20];
+  for (const raw of outsideBand) {
+    const result = applyTieBreaker(raw, IGNORED_INPUTS);
+    assert.ok(!result.applied, `Expected applied=false for raw=${raw}`);
+    assert.ok(
+      Math.abs(result.adjustedProbability - 50) >= TIE_BAND,
+      `adjustedProbability ${result.adjustedProbability} must be >= TIE_BAND (${TIE_BAND}) from 50 when not applied`,
+    );
+  }
+});
+
 // ── Key regression guard: the specific probabilities the old cascade would have nudged ──────────
 
 test("applyTieBreaker: regression — probabilities formerly nudged by cascade now pass through as-is", () => {

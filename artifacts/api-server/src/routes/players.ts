@@ -6,8 +6,6 @@ import {
   GetPlayerResponse,
   GetPlayerMatchesParams,
   GetPlayerMatchesResponse,
-  GetPlayerStatsParams,
-  GetPlayerStatsResponse,
 } from "@workspace/api-zod";
 import { db, playerStatsTable, historicalMatchesTable } from "@workspace/db";
 import { eq, notInArray, sql } from "drizzle-orm";
@@ -73,7 +71,7 @@ router.get("/players/:playerId", async (req, res): Promise<void> => {
  * act on it or treat it as background context.
  */
 router.get("/players/:playerId/stats", async (req, res): Promise<void> => {
-  const params = GetPlayerStatsParams.safeParse(req.params);
+  const params = GetPlayerParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: params.error.message });
     return;
@@ -100,7 +98,7 @@ router.get("/players/:playerId/stats", async (req, res): Promise<void> => {
   if (isStale) {
     res.setHeader("X-Stats-Stale", "true");
   }
-  res.json(GetPlayerStatsResponse.parse(row));
+  res.json(row);
 });
 
 /**

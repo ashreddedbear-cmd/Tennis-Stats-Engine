@@ -1,0 +1,89 @@
+Based on what you’ve described your app is trying to do, Replit shouldn’t rely on just one website. It should pull from multiple sources and merge the results. A good hierarchy would look like this:
+
+1. Official ATP
+
+For:
+
+* ATP rankings
+* Player profiles
+* ATP match results
+* ATP Challenger events
+
+2. Official WTA
+
+For:
+
+* WTA rankings
+* WTA match results
+* Player profiles
+
+3. Official ITF
+
+For:
+
+* ITF tournaments
+* Juniors
+* Lower-level professional events
+* World Tennis Number where applicable 
+
+4. Tennis Abstract (Jeff Sackmann)
+
+This is one of the most widely used public tennis datasets and includes extensive historical ATP, WTA, Challenger, and ITF match data. 
+
+5. UTR Sports
+
+For:
+
+* Universal Tennis Ratings
+* Player ratings
+* Some match history
+
+⸻
+
+For your Validation Engine
+
+It sounds like you want to validate predictions using multiple independent sources, so I’d have it query something like:
+
+* ATP
+* WTA
+* ITF
+* Tennis Abstract
+* UTR
+* Internal historical database
+* Elo ratings
+* Head-to-head database
+* Surface-specific statistics
+* Recent form database
+* Injury/news feed (if available)
+* Odds movement (optional, if you choose to include market information)
+
+⸻
+
+Looking at your screenshot
+
+The message:
+
+“No match history found for D. Singh – player may not be in the database yet.”
+
+is almost certainly not because D. Singh has never played. It’s much more likely that your app failed to match the player name in one or more data sources. Common causes include:
+
+* Name abbreviation mismatch (e.g., “D. Singh” vs. full first name)
+* Different spelling or formatting
+* Source coverage gaps
+* Failed API/database lookup
+
+That aligns with the issue you identified earlier: the validation layer is treating a lookup failure as if the player has no history.
+
+What I’d tell Replit
+
+The Validation Engine should not depend on a single provider. It should implement a multi-source lookup strategy:
+
+1. Search the internal player database.
+2. If no match is found, search ATP/WTA/ITF by full name and aliases.
+3. Query Tennis Abstract historical data.
+4. Query UTR if appropriate.
+5. Normalize names (initials, accents, hyphens, alternate spellings).
+6. Merge the results.
+7. Only report “No match history found” after all configured sources have been searched and no valid player record is found.
+
+That approach makes the validation engine much more robust and reduces false “insufficient data” results caused by simple player-name resolution failures.

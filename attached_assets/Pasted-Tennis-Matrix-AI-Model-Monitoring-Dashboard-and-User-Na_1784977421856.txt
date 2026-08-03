@@ -1,0 +1,896 @@
+Tennis Matrix AI — Model Monitoring Dashboard and User Navigation
+
+Primary Objective
+
+Create a clean, professional Model Monitoring Dashboard for subscribers.
+
+Do not remove the existing Backtesting page. Move the entire Backtesting page into the Admin/Owner section because it contains technical testing and model-development controls.
+
+The Model Monitoring Dashboard should be a subscriber-facing transparency page that allows users to see how the production prediction system is performing without allowing them to run tests, retrain models, modify settings, or access developer controls.
+
+⸻
+
+1. User Navigation
+
+Update the main user navigation so it is simple, clear, and focused only on features subscribers actually need.
+
+Use this navigation order:
+
+1. Home
+2. Run Model
+3. Prediction History
+4. Model Monitoring
+5. Account
+
+Remove any remaining references to Build Match from the navigation, page titles, buttons, breadcrumbs, mobile menu, and internal links.
+
+The correct name is now:
+
+Run Model
+
+⸻
+
+Desktop Navigation
+
+On desktop, display the navigation in a clean top navigation bar or left sidebar depending on the existing application layout.
+
+The navigation should include:
+
+Home
+
+Purpose:
+
+Give the user a quick overview of their account and recent activity.
+
+The Home page may show:
+
+* Current subscription plan
+* Predictions remaining today, when applicable
+* Recent prediction summary
+* Latest completed prediction
+* Current model status
+* Quick link to Run Model
+* Quick link to Prediction History
+* Important alerts or system notices
+
+Run Model
+
+Purpose:
+
+This is the main prediction workflow.
+
+Users should use this page to:
+
+* Search for a match
+* Select players
+* Paste one or multiple matchups
+* Upload supported match information
+* Review matched fixtures
+* Run the prediction model
+* View the completed prediction card
+
+The navigation label, page heading, browser title, breadcrumbs, and buttons must all use Run Model.
+
+Do not display the old term Build Match anywhere in the user interface.
+
+Prediction History
+
+Purpose:
+
+Show prediction records belonging only to the currently authenticated user.
+
+Each user must only see their own prediction history.
+
+Users should be able to:
+
+* Review previous predictions
+* Search their history
+* Filter by date
+* Filter by tour
+* Filter by tournament
+* Filter by surface
+* Filter by recommendation
+* Filter by upset risk
+* Filter by result status
+* Open a full prediction record
+* Copy an eligible prediction summary
+* See whether a prediction won, lost, is pending, or was voided
+
+Do not expose another user’s predictions.
+
+Admin and Owner accounts may have separate administrative access to broader prediction records.
+
+Model Monitoring
+
+Purpose:
+
+Give subscribers a clear and trustworthy view of how Tennis Matrix AI is currently performing.
+
+This should be a monitoring and transparency page, not a developer testing page.
+
+Users may view model health and performance information, but they must not be able to:
+
+* Run backtests
+* Start walk-forward validation
+* Start shadow replay
+* Launch paper trading
+* Retrain the model
+* Run an optimizer
+* Change model weights
+* Modify thresholds
+* Change calibration settings
+* Modify configurations
+* Delete validation records
+* Access raw developer logs
+* Trigger background jobs
+
+Account
+
+Purpose:
+
+Allow users to manage their account and subscription.
+
+The Account page may include:
+
+* Profile details
+* Current plan
+* Billing status
+* Subscription management
+* Trial status
+* Usage limits
+* Notification preferences
+* Favorite-player alerts
+* Security settings
+* Sign out
+
+⸻
+
+2. Mobile Navigation
+
+The application must be fully usable on mobile devices.
+
+Use a compact mobile header with:
+
+* Tennis Matrix AI logo or application name on the left
+* Menu icon on the right
+
+When the menu opens, display the user navigation vertically in this order:
+
+1. Home
+2. Run Model
+3. Prediction History
+4. Model Monitoring
+5. Account
+
+Clearly highlight the currently selected page.
+
+The mobile menu must:
+
+* Open and close reliably
+* Close after a page is selected
+* Prevent horizontal scrolling
+* Use large tap targets
+* Keep labels fully visible
+* Work correctly on smaller iPhone screens
+* Remain separate from Admin navigation unless the signed-in account is an Admin or Owner
+
+⸻
+
+3. Model Monitoring Dashboard Layout
+
+Create the page title:
+
+Model Monitoring
+
+Use the subtitle:
+
+Live visibility into the health, reliability, calibration, and recent performance of Tennis Matrix AI.
+
+Near the top of the page, display:
+
+* Production model status
+* Model version
+* Last updated date and time
+* Last completed validation date
+* Data freshness status
+* Current monitoring period
+
+Use a clean card-based layout.
+
+Avoid overcrowding the page.
+
+The most important information should appear first.
+
+⸻
+
+4. Overall Model Status Card
+
+Create a large summary card at the top of the page.
+
+Title:
+
+Overall Model Status
+
+Display one clear system status:
+
+* Operating Normally
+* Monitoring Required
+* Performance Degraded
+* Data Delay
+* Validation Required
+
+Include a short plain-language explanation beneath the status.
+
+Example:
+
+Operating Normally
+
+The prediction engine, calibration system, data feeds, and monitoring services are currently operating within expected ranges.
+
+Also display:
+
+* Current model version
+* Last successful model update
+* Last completed monitoring check
+* Active production model
+* Current data coverage period
+
+Do not show technical stack traces or internal error details to subscribers.
+
+⸻
+
+5. Core Performance Summary
+
+Create a section titled:
+
+Performance Summary
+
+Display clear metric cards for:
+
+* Overall prediction accuracy
+* Predictions evaluated
+* Current log loss
+* Current Brier score
+* Expected calibration error
+* Average confidence
+* Accuracy over the last 7 days
+* Accuracy over the last 30 days
+* Accuracy over the last 90 days
+
+Each metric should include a tooltip or short explanation.
+
+Examples:
+
+Prediction Accuracy
+
+The percentage of graded predictions where the predicted winner won the match.
+
+Log Loss
+
+Measures the quality of predicted probabilities. Lower values are better.
+
+Brier Score
+
+Measures the difference between predicted probabilities and actual outcomes. Lower values are better.
+
+Expected Calibration Error
+
+Measures how closely confidence levels match real-world outcomes. Lower values are better.
+
+Do not label a metric as good or bad without comparing it with a defined target, historical baseline, or monitored range.
+
+⸻
+
+6. Accuracy Trend
+
+Create a chart titled:
+
+Prediction Accuracy Trend
+
+Allow the user to select:
+
+* 7 Days
+* 30 Days
+* 90 Days
+* 1 Year
+
+The chart should show:
+
+* Accuracy over time
+* Number of graded predictions
+* Optional historical baseline
+* Optional rolling average
+
+The chart must not become misleading when the sample size is small.
+
+Display sample size clearly.
+
+When insufficient data exists, show:
+
+Not enough graded predictions are available for this period.
+
+⸻
+
+7. Calibration Monitoring
+
+Create a section titled:
+
+Confidence Calibration
+
+Explain:
+
+Calibration measures whether the model’s stated confidence matches its actual results.
+
+Display confidence buckets such as:
+
+* 50–55%
+* 55–60%
+* 60–65%
+* 65–70%
+* 70–75%
+* 75–80%
+* 80–85%
+* 85–90%
+* 90%+
+
+For each bucket, display:
+
+* Average predicted confidence
+* Actual win rate
+* Number of graded predictions
+* Calibration difference
+* Status
+
+Possible status labels:
+
+* Well Calibrated
+* Slightly Overconfident
+* Overconfident
+* Slightly Underconfident
+* Underconfident
+* Insufficient Sample
+
+Do not classify buckets with small samples as reliable.
+
+Use sample-size safeguards.
+
+⸻
+
+8. Accuracy by Surface
+
+Create a section titled:
+
+Accuracy by Surface
+
+Display:
+
+* Outdoor Hard
+* Indoor Hard
+* Clay
+* Grass
+* Unknown or Unclassified, when applicable
+
+For each surface, show:
+
+* Accuracy
+* Number of predictions
+* Average confidence
+* Calibration error
+* Current trend
+* Data quality average
+
+Clearly display when a surface does not have enough data for a reliable conclusion.
+
+⸻
+
+9. Accuracy by Competition Level
+
+Create a section titled:
+
+Accuracy by Competition Level
+
+Display separate results for:
+
+* ATP
+* WTA
+* Challenger
+* ITF
+* Grand Slam, when tracked separately
+
+For each level, show:
+
+* Accuracy
+* Predictions evaluated
+* Average confidence
+* Calibration difference
+* Upset rate
+* Current performance trend
+
+This section should help users understand that reliability may differ across competition levels.
+
+⸻
+
+10. Recommendation Performance
+
+Create a section titled:
+
+Recommendation Performance
+
+Display performance for each recommendation category used by the application, such as:
+
+* Elite
+* Strong
+* Moderate
+* High Risk
+* Pass
+* Too Close to Call
+* No Strong Signal
+
+For each category, display:
+
+* Accuracy
+* Number of graded predictions
+* Average model confidence
+* Average upset risk
+* Calibration difference
+
+Do not count forced predictions, administrative test predictions, shadow predictions, or excluded historical rows inside normal subscriber-facing production statistics unless they are explicitly shown as a separate category.
+
+⸻
+
+11. Upset Risk Monitoring
+
+Create a section titled:
+
+Upset Risk Performance
+
+Display the outcome history for:
+
+* Low
+* Moderate
+* High
+* Extreme
+
+For each tier, show:
+
+* Predicted winner accuracy
+* Actual loss rate
+* Number of predictions
+* Average confidence
+* Recent trend
+
+This section should help users understand how frequently the predicted winner loses at each upset-risk level.
+
+⸻
+
+12. Model Agreement Monitoring
+
+Create a section titled:
+
+Model Agreement Performance
+
+Display:
+
+* Strong Agreement
+* Moderate Agreement
+* Mixed Signals
+* High Disagreement
+* Extreme Disagreement
+
+For each tier, show:
+
+* Accuracy
+* Prediction count
+* Average confidence
+* Calibration error
+* Average upset rate
+
+Explain:
+
+Model Agreement shows how closely the major prediction components agree with one another.
+
+Do not present disagreement as an error. Explain that disagreement indicates uncertainty.
+
+⸻
+
+13. Data Quality Monitoring
+
+Create a section titled:
+
+Data Quality
+
+Display:
+
+* Current average Data Quality score
+* Percentage of predictions with high-quality data
+* Percentage with moderate-quality data
+* Percentage with low-quality data
+* Missing-data rate
+* Stale-data rate
+* Current data freshness
+
+Include monitored components such as:
+
+* Rankings
+* Recent match history
+* Surface records
+* Serve statistics
+* Return statistics
+* Player profiles
+* Head-to-head records
+* Schedule and fixture data
+* Injury or availability information, when available
+* Weather and court conditions, when available
+
+Use simple user-facing statuses:
+
+* Fresh
+* Delayed
+* Partial
+* Missing
+* Unavailable
+
+Do not expose API keys, provider secrets, database credentials, internal endpoints, or raw provider responses.
+
+⸻
+
+14. Production Model Components
+
+Create a section titled:
+
+Model Components
+
+Show the current operating status of major model components.
+
+Examples:
+
+* Surface Elo
+* Serve and Return Analysis
+* Recent Form
+* Opponent-Adjusted Performance
+* Fatigue and Rest
+* Travel Impact
+* Head-to-Head
+* Style Matchup
+* Court Conditions
+* Monte Carlo Simulation
+* Calibration
+* Evidence Reliability
+* Competitive Balance
+* Recommendation and Abstain Logic
+
+For each component, display:
+
+* Active
+* Monitoring
+* Limited Data
+* Temporarily Unavailable
+
+Allow users to open a brief explanation of what each component measures.
+
+Do not show model weights, proprietary formulas, source code, private thresholds, or internal configuration values.
+
+⸻
+
+15. Recent Model Improvements
+
+Create a section titled:
+
+Recent Model Improvements
+
+Show approved production changes that are safe for subscribers to view.
+
+Each improvement should include:
+
+* Improvement title
+* Date deployed
+* Short explanation
+* Area affected
+* Current monitoring status
+
+Examples:
+
+* Calibration adjustment deployed
+* Confidence gating improved
+* Missing-data fallback improved
+* Competitive Balance monitoring added
+* Surface reliability adjustment updated
+* Overconfidence reduced in a confidence bucket
+* Prediction stability improvement deployed
+
+Do not automatically expose experimental, rejected, incomplete, or confidential changes.
+
+Only display changes marked as approved for subscriber visibility.
+
+⸻
+
+16. Model Version and Update History
+
+Create a section titled:
+
+Model Version History
+
+Display:
+
+* Current production version
+* Deployment date
+* Previous production version
+* Validation status
+* Monitoring status
+* Short release notes
+
+Do not expose Git commit hashes, branch names, internal file names, deployment secrets, or raw engineering logs to subscribers.
+
+⸻
+
+17. System and Data Status
+
+Create a section titled:
+
+System Status
+
+Show subscriber-safe statuses for:
+
+* Prediction engine
+* Match schedule data
+* Player database
+* Ranking data
+* Historical match data
+* Calibration service
+* Monte Carlo service
+* Prediction history storage
+* Result grading
+* Notification service
+
+Use statuses such as:
+
+* Operational
+* Delayed
+* Limited
+* Maintenance
+* Unavailable
+
+Include a last-checked time.
+
+Internal technical errors should remain visible only to Admin and Owner accounts.
+
+⸻
+
+18. Transparency and Explanation Panel
+
+Create an informational card titled:
+
+How to Read This Dashboard
+
+Use clear text such as:
+
+This dashboard shows how Tennis Matrix AI is performing across completed predictions. Accuracy alone does not fully measure model quality, so the dashboard also monitors confidence calibration, data quality, uncertainty, model agreement, surface performance, and competition-level performance.
+
+Predictions with higher confidence are still not guaranteed outcomes. Tennis matches contain uncertainty, and the model may recommend passing when the available evidence is not strong enough.
+
+⸻
+
+19. Subscriber Permissions
+
+Subscribers may:
+
+* View the Model Monitoring Dashboard
+* View approved performance metrics
+* View approved model status information
+* View approved version history
+* View calibration summaries
+* View accuracy trends
+* View surface and tour-level performance
+* View data freshness
+* View subscriber-safe system health information
+
+Subscribers may not:
+
+* Run validation jobs
+* Change monitoring settings
+* Modify date ranges beyond available options
+* Edit metrics
+* Delete data
+* Start background tasks
+* View raw database records
+* View other users’ private predictions
+* Access developer logs
+* Access test controls
+* Access training controls
+* Access optimizer controls
+* Access model configuration controls
+
+Enforce these restrictions on both the frontend and backend.
+
+Do not rely only on hiding buttons.
+
+⸻
+
+20. Move Backtesting to Admin
+
+Move the existing Backtesting page into the Admin/Owner section.
+
+Preserve its current functionality and data.
+
+The Admin Backtesting page may include:
+
+* Walk-Forward Validation
+* Shadow Replay
+* Historical Testing
+* Paper Trading
+* Calibration testing
+* Confidence bucket testing
+* Segment testing
+* Model comparison
+* Champion versus Challenger evaluation
+* Optimizer results
+* Ablation testing
+* Exclusion rules
+* Validation job history
+
+Administrative controls may include:
+
+* Run test
+* Cancel test
+* Retry failed test
+* Select evaluation period
+* Select model version
+* Select dataset
+* Compare model candidates
+* Promote approved model
+* Reject candidate
+* Export results
+* View detailed logs
+
+Only Admin and Owner accounts may access this page.
+
+Regular subscribers must receive an unauthorized response if they attempt to open the route directly.
+
+⸻
+
+21. Admin Navigation
+
+Add a clearly separated Admin section that is visible only to Admin and Owner accounts.
+
+Suggested Admin navigation:
+
+1. Admin Overview
+2. Users
+3. Subscriptions and Payments
+4. Backtesting
+5. Model Validation
+6. Training and Optimization
+7. System Health
+8. Data Management
+9. Notifications
+10. Logs and Diagnostics
+11. Feature Controls
+12. Security and Audit Logs
+
+Do not mix Admin pages into the main subscriber navigation.
+
+The user should clearly understand when they have entered the Admin area.
+
+Use an Admin label, divider, badge, or separate sidebar section.
+
+⸻
+
+22. Access Control
+
+Use server-side role validation for every protected Admin route and action.
+
+Roles:
+
+* User
+* Admin
+* Owner
+
+Permissions:
+
+User
+
+May access subscriber pages and only their own private data.
+
+Admin
+
+May access approved administrative pages and management controls.
+
+Owner
+
+May access all application features and administrative controls.
+
+Owner and Admin access must not be granted based only on hidden UI elements, email text displayed in the browser, or client-side state.
+
+Validate permissions on the server.
+
+⸻
+
+23. Empty, Loading, and Error States
+
+Every dashboard section must have proper states.
+
+Loading
+
+Show clean skeleton cards or loading indicators.
+
+Empty
+
+Example:
+
+No graded predictions are available for this monitoring period.
+
+Delayed Data
+
+Example:
+
+Some monitoring information is delayed. The most recent available results are shown.
+
+Error
+
+Example:
+
+This monitoring section is temporarily unavailable. Other areas of the application remain operational.
+
+Do not show raw API errors, SQL errors, stack traces, or private technical information to subscribers.
+
+⸻
+
+24. Design Requirements
+
+Use a premium analytics-dashboard appearance.
+
+The page should feel:
+
+* Clean
+* Trustworthy
+* Modern
+* Data-focused
+* Professional
+* Easy to scan
+* Mobile responsive
+
+Use:
+
+* Consistent card spacing
+* Clear section headings
+* Large readable metric values
+* Short explanations
+* Responsive charts
+* Status badges
+* Tooltips
+* Accessible contrast
+* Proper empty states
+* Clear loading states
+
+Avoid:
+
+* Overcrowded cards
+* Excessive technical jargon
+* Tiny text
+* Horizontal scrolling
+* Too many colors
+* Misleading green or red indicators
+* Developer controls on subscriber pages
+* Large blocks of unexplained statistics
+
+⸻
+
+25. Final Navigation Result
+
+The final subscriber navigation must be:
+
+Home
+
+Run Model
+
+Prediction History
+
+Model Monitoring
+
+Account
+
+The old Build Match label must no longer appear anywhere in the subscriber interface.
+
+The Backtesting page must remain available, but only inside the protected Admin/Owner section.
+
+The Model Monitoring Dashboard must become the subscriber-facing page for production model health, transparency, calibration, data quality, and recent performance.

@@ -1,0 +1,42 @@
+94 - Run Section C – Market-Odds Engine Ablation
+
+What & Why
+
+Tasks #83 and #86 are both Archived. This task re-scopes the remaining work: run auditMarketConsensusAblation.ts to completion so Section C prints, apply the decision rule, and update persistent memory with the result.
+
+Section C re-runs the full prediction engine on up to 5,932 historical rows (tennis-data.co.uk walk-forward, graded, has avgWinner/avgLoser) — once with market odds active and once without — so we know how much of the market's standalone +3.7pp edge (fast direction audit) survives when odds are fed through the engine as one module among many.
+
+Done looks like
+
+Section C has printed: with-odds accuracy, without-odds accuracy, Δaccuracy, Δlog-loss, and a paired sample count ≥ 500.
+The comparison to the fast direction audit (+3.7pp) is documented: what fraction of the market's edge carries through when it is one engine input vs. a standalone signal.
+Decision rule applied:
+Δacc ≥ +0.5pp at n≥500 → market odds module is net-positive in the engine; no weight-tuning needed (document as KEEP).
+Δacc < +0.5pp or negative → document as a real module finding (weight-tuning or exclusion may be warranted, document as INVESTIGATE).
+.agents/memory/market-odds-ablation-results.md updated with Section C results, the comparison narrative, and the decision reached.
+A summary is printed to the task output: with/without accuracy, Δacc, Δlog-loss, the +3.7pp comparison, and which branch of the decision rule applied.
+Out of scope
+
+Any changes to engine weights or module code.
+Re-running Sections A or B (already complete).
+Restarting the API server (must not happen during the run).
+Steps
+
+Verify the script compiles and candidates exist — do a quick dry run check: confirm historicalOddsCandidates.length > 0 by querying the DB for graded historical_test rows that have avgWinner/avgLoser embedded in raw_source. If the count is 0, diagnose why (walk-forward may need a score-unscored trigger) before starting the long run.
+Run the ablation script — execute:
+cd artifacts/api-server && node --import tsx/esm src/scripts/auditMarketConsensusAblation.ts
+Do NOT use pnpm exec tsx (hangs). Do NOT restart the API server (kills the 134k+ row in-process match-history index while it is being built; the build takes 2–3 h). Log progress output; the script emits [C] Processed i/N... every 200 rows.
+Parse Section C output — extract from stdout:
+Paired sample count (n)
+With-odds accuracy and log-loss
+Without-odds accuracy and log-loss
+Δaccuracy and Δlog-loss
+Apply the decision rule:
+Δacc ≥ +0.5pp at n≥500 → label decision KEEP; note that weight-tuning is not needed based on this evidence.
+Δacc < +0.5pp or negative → label decision INVESTIGATE; note that the market signal degrades significantly when used as an engine input vs. standalone.
+Compute the edge-attenuation ratio — divide Section C Δacc by the fast direction audit Δacc (+3.7pp) to get the fraction of market signal that survives engine integration. Document this ratio alongside the hindsight caveat already in the memory file (tennis-data.co.uk player1 = actual winner, so Section C is an upper bound on live improvement).
+Update memory — write Section C findings, the edge-attenuation ratio, the decision, and a one-line summary into .agents/memory/market-odds-ablation-results.md under a new ## Section C — Full Engine Re-run (historical) heading. Update the Combined interpretation table at the bottom of that file.
+Relevant files
+
+artifacts/api-server/src/scripts/auditMarketConsensusAblation.ts (Section C: lines 726–787)
+.agents/memory/market-odds-ablation-results.md

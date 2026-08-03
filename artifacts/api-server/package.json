@@ -14,7 +14,9 @@
     "test:historicalBackfillIncremental": "tsx --test src/services/historicalData/backfillIncremental.test.ts",
     "test:predictionEngine": "tsx --test src/services/predictionEngine/serveReturn.test.ts src/services/predictionEngine/opponentStrength.test.ts src/services/predictionEngine/surfaceElo.test.ts src/services/predictionEngine/recentForm.test.ts src/services/predictionEngine/availability.test.ts src/services/predictionEngine/calibration.test.ts src/services/predictionEngine/dataQuality.test.ts src/services/predictionEngine/disagreement.test.ts src/services/predictionEngine/playerProfileWarnings.test.ts src/routes/predictions.legacyEngine.test.ts src/services/predictionEngine/simulator.test.ts src/services/predictionEngine/upsetRisk.test.ts src/services/predictionEngine/eliteTier.test.ts src/services/predictionEngine/finalConsistencyCheck.test.ts src/services/predictionEngine/recommendation.test.ts src/services/predictionEngine/predictionIdentity.test.ts",
     "test:tennisData": "tsx --test src/services/tennisData/surfaceMap.test.ts src/services/tennisData/playerIdentity.test.ts src/services/tennisData/playerIdentity.nameMatch.test.ts src/services/tennisData/playerIdentity.enrichRank.test.ts src/services/tennisData/playerIdentity.uchijima.test.ts src/services/tennisData/fixtureTime.test.ts src/services/tennisData/screenshotMatchupResolver.test.ts",
-    "test:evaluation": "tsx --test src/services/evaluation/walkForward.test.ts src/services/evaluation/paperTrading.test.ts src/services/evaluation/specialistWeights.test.ts src/services/evaluation/ledgerDuplicates.test.ts src/services/evaluation/metrics.test.ts src/services/evaluation/savePrediction.test.ts src/services/evaluation/ledgerPlayers.test.ts src/services/evaluation/evaluationPredictionsImmutability.test.ts src/services/evaluation/shadowReplay.test.ts src/services/evaluation/predictionSnapshotParity.test.ts",
+    "test:evaluation": "tsx --test src/services/evaluation/walkForward.test.ts src/services/evaluation/bridgeRescore.test.ts src/services/evaluation/paperTrading.test.ts src/services/evaluation/paperTradingQuiet.test.ts src/services/evaluation/specialistWeights.test.ts src/services/evaluation/ledgerDuplicates.test.ts src/services/evaluation/metrics.test.ts src/services/evaluation/savePrediction.test.ts src/services/evaluation/ledgerPlayers.test.ts src/services/evaluation/evaluationPredictionsImmutability.test.ts src/services/evaluation/shadowReplay.test.ts src/services/evaluation/predictionSnapshotParity.test.ts src/services/evaluation/historicalScoring.test.ts",
+    "check:parlay-boundary": "tsx src/scripts/checkParlayBoundary.ts",
+    "test:parlay-boundary": "tsx --test src/scripts/checkParlayBoundary.test.ts",
     "test:ledgerPlayers": "tsx --test src/services/evaluation/ledgerPlayers.test.ts",
     "test:job-smoke": "pnpm run build && tsx --test src/jobs/runPaperTradingJob.smoke.test.ts src/jobs/runCalibrationRefitJob.smoke.test.ts src/jobs/runHistoricalBackfillJob.smoke.test.ts",
     "job:paper-trading": "export PAPER_TRADING_JOB_STANDALONE=1 && node --enable-source-maps ./dist/jobs/runPaperTradingJob.mjs",
@@ -27,6 +29,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.1",
+    "@clerk/express": "^2.1.45",
+    "@clerk/shared": "^4.25.7",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
     "@workspace/integrations-openai-ai-server": "workspace:*",
@@ -34,9 +38,13 @@
     "cors": "^2.8.6",
     "drizzle-orm": "catalog:",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.6.0",
+    "http-proxy-middleware": "^4.2.0",
     "openai": "^6.46.0",
     "pino": "^9.14.0",
-    "pino-http": "^10.5.0"
+    "pino-http": "^10.5.0",
+    "xlsx": "^0.18.5",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",

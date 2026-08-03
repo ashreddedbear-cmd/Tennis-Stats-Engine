@@ -1,0 +1,35 @@
+**Task — Reconcile Row Counts, Diagnose Why the Market-Odds-Aware Curve (C) Underperforms the Reapplied Global Curve (B), and Re-Validate at Higher n Before Retiring Task #83**
+
+**What & Why**
+
+Section B-CAL produced three log-loss numbers:
+- (A) stored old-vintage calibrated probability: 0.6361
+- (B) current global curve reapplied to the same raw probabilities: 0.6149
+- (C) new market-odds-specific curve: 0.6333
+
+The conclusion drawn — "the log-loss regression is a calibration vintage artifact, not a flaw in market odds, so Task #83 isn't needed" — rests entirely on the (A) vs (B) comparison. But the whole premise of building (C) was that a curve fit specifically on market-odds-inclusive predictions should outperform a generic one on that same data. It doesn't — (C) is worse than (B), which contradicts the hypothesis this task was built to test, and the report doesn't address that contradiction before concluding #83 is unnecessary.
+
+The most likely explanation is sample size: at ~184-202 total rows, a fit/holdout split leaves roughly 90-140 points to fit an isotonic/Platt curve on — thin enough to produce a noisy, overfit curve. If so, (C)'s bad result isn't evidence about market odds at all; it's evidence the curve-fitting sample was too small to trust.
+
+Separately, this thread has reported four different row counts for the same underlying query at different points (180, 184, 201, 202) — before any KEEP/EXCLUDE math is trusted, there needs to be one consistent, reproducible number.
+
+**Done looks like**
+
+- One authoritative, reproducible count of qualifying paper-trade rows (`run_kind='paper_trade' AND status='graded' AND odds_player1_decimal IS NOT NULL AND included_in_accuracy=true`), run fresh and reported with a timestamp — reconciling why 180/184/201/202 all appeared across this thread.
+- Paper-trading loop left running with a **minimum floor of 500 qualifying rows before this task proceeds** — target range **500-700**, not a bare threshold crossing, specifically to give curve (C) enough holdout volume to be trustworthy rather than noisy. Do not run the re-validation below 500; if the count is under 500, report current count and wait.
+- Section B-CAL re-run once the count lands in the 500-700 range, reporting (A), (B), and (C) again, along with the exact row count used.
+- Explicit check on whether (C) now beats (B) as the underlying hypothesis predicts. If (C) still underperforms (B) even at 500-700, that's a real finding (the market-odds-specific curve genuinely isn't earning its keep) rather than a sample-size artifact — document it as such.
+- Task #83 (weight-tuning) is only retired if (C) beats (B) at this sample size. If (C) still underperforms, #83 stays active and should proceed using whichever curve — (B) or (C) — performs best at that point, not the original stale global curve.
+- Findings written to `.agents/memory/parlay-calibration-findings.md` (or the market-odds equivalent) with the reconciled row count, the 500-700-row Section B-CAL results, and the final call on #83.
+
+**Out of scope**
+
+- Making the final #84 KEEP/EXCLUDE call — that still waits on this task's outcome plus whatever accuracy threshold #84 already specifies.
+- Changing how market odds' implied probability is computed (already correctly devigged).
+- Any further Parlay Builder weight-reweighting work (separate track, already queued).
+
+**Relevant files**
+
+- `artifacts/api-server/src/scripts/auditMarketConsensusAblation.ts`
+- `artifacts/api-server/src/services/evaluation/calibration.ts`
+- `.agents/memory/` (market-odds findings doc)

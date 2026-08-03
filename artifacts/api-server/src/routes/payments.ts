@@ -1,5 +1,8 @@
 import { Router, type IRouter } from "express";
+import { getAuth } from "@clerk/express";
 import { requireAdmin } from "../lib/adminAuth";
+import { requireClerkUser } from "../middlewares/requireClerkUser";
+import { isAdminSessionCookieValid } from "../lib/adminAuth";
 import { buildPaymentsStatus, createBillingPortal, createCheckoutSession, handleStripeWebhook } from "../services/payments/paymentsService";
 import {
   CreateBillingPortalSessionBody,
@@ -12,35 +15,68 @@ import {
 
 const router: IRouter = Router();
 
+/**
+ * Admin-only: workspace-wide billing status for the admin panel.
+ * Regular users should use GET /payments/me/status instead.
+ */
 router.get("/payments/status", requireAdmin, async (_req, res): Promise<void> => {
-  const status = await buildPaymentsStatus();
+  const status = await buildPaymentsStatus(null); // workspace-scoped (no clerkUserId)
   res.json(GetPaymentsStatusResponse.parse(status));
 });
 
-router.post("/payments/checkout-session", requireAdmin, async (req, res): Promise<void> => {
+/**
+ * Authenticated user: returns the signed-in user's own billing status.
+ * For admin cookie users (no Clerk session), falls back to workspace billing.
+ */
+router.get("/payments/me/status", requireClerkUser, async (req, res): Promise<void> => {
+  // Admin cookie users have no Clerk userId — they see workspace-level billing
+  const clerkUserId = isAdminSessionCookieValid(req.signedCookies)
+    ? null
+    : (getAuth(req)?.userId ?? null);
+  const status = await buildPaymentsStatus(clerkUserId);
+  res.json(GetPaymentsStatusResponse.parse(status));
+});
+
+/**
+ * Start a Stripe checkout session for the signed-in user.
+ * Available to any authenticated user (Clerk or admin cookie).
+ */
+router.post("/payments/checkout-session", requireClerkUser, async (req, res): Promise<void> => {
   const parsed = CreatePaymentsCheckoutSessionBody.safeParse(req.body ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
 
+  const clerkUserId = isAdminSessionCookieValid(req.signedCookies)
+    ? null
+    : (getAuth(req)?.userId ?? null);
+
   try {
-    const session = await createCheckoutSession(req, parsed.data);
+    const session = await createCheckoutSession(req, parsed.data, clerkUserId);
     res.json(CreatePaymentsCheckoutSessionResponse.parse({ sessionId: session.id, url: session.url }));
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : "Unable to create checkout session" });
   }
 });
 
-router.post("/payments/billing-portal-session", requireAdmin, async (req, res): Promise<void> => {
+/**
+ * Open the Stripe Billing Portal for the signed-in user's subscription.
+ * Available to any authenticated user (Clerk or admin cookie).
+ */
+router.post("/payments/billing-portal-session", requireClerkUser, async (req, res): Promise<void> => {
   const parsed = CreateBillingPortalSessionBody.safeParse(req.body ?? {});
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
 
+  const clerkUserId = isAdminSessionCookieValid(req.signedCookies)
+    ? null
+    : (getAuth(req)?.userId ?? null);
+
   try {
-    const session = await createBillingPortal(req, parsed.data);
+    const session = await createBillingPortal(req, parsed.data, clerkUserId);
     res.json(CreateBillingPortalSessionResponse.parse({ url: session.url }));
   } catch (error) {
     res.status(400).json({ error: error instanceof Error ? error.message : "Unable to create billing portal session" });

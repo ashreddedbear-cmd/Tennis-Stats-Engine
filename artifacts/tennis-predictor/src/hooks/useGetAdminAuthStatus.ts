@@ -6,7 +6,7 @@ export interface AdminAuthStatus {
 
 export function useGetAdminAuthStatus() {
   return useQuery<AdminAuthStatus>({
-    queryKey: ['adminAuthStatus'],
+    queryKey: ['/api/auth/status'],
     queryFn: async () => {
       const res = await fetch('/api/auth/status', {
         credentials: 'include',

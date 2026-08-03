@@ -1,0 +1,79 @@
+Yes—I know exactly what you’re after, and I think it’s actually a better way to evaluate your model.
+
+Instead of wide 10% buckets, you want 5% calibration buckets so you can see exactly where your model is most trustworthy.
+
+I’d recommend these ranges:
+
+Prediction Range	Tier
+50–55%	
+56–60%	
+61–65%	
+66–70%	
+71–75%	
+76–80%	
+81–85%	
+86–90%	
+91–95%	
+96–100%	
+
+For each bucket, the chart should compare:
+
+* Predicted Win % (average prediction from your model)
+* Actual Win % (what actually happened historically)
+
+If your model predicts 71–75% and those players actually win 73% of the time, that’s an excellent bucket. If it predicts 81–85% but those players only win 74% of the time, then that bucket is overconfident.
+
+I’d also have Replit add a table underneath the chart
+
+Prediction Range	Predictions	Wins	Actual Win %	Calibration Error	Rating
+50–55%	84	45	53.6%	0.8%	⭐ Excellent
+56–60%	112	68	60.7%	1.2%	⭐ Excellent
+61–65%	97	64	66.0%	2.0%	✅ Very Good
+66–70%	89	61	68.5%	1.5%	⭐ Excellent
+71–75%	74	55	74.3%	0.7%	🏆 Best Tier
+76–80%	51	38	74.5%	4.5%	⚠ Slightly Overconfident
+81–85%	33	25	75.8%	7.2%	⚠ Overconfident
+
+That immediately tells you which probability bands you should trust the most, rather than forcing you to interpret bar heights visually.
+
+I’d also ask Replit to fix a couple of things with the current chart
+
+The chart you shared has some issues:
+
+* The y-axis is clearly wrong (showing values like 5000% and 8940% instead of 50% and 89.4%).
+* Use percentages with one decimal place (e.g., 74.3%).
+* Label the blue bar Predicted Win % and the orange bar Actual Win %.
+* Draw a thin reference line for Perfect Calibration (y = x) or add a small note explaining that the closer the two values are, the better calibrated that tier is.
+* Show the sample size (n) above or below each bucket, since a bucket based on 15 matches is much less reliable than one based on 300.
+
+Prompt for Replit
+
+Redesign the Model Calibration chart using 5% probability buckets instead of 10% buckets.
+
+Use these ranges:
+
+* 50–55%
+* 56–60%
+* 61–65%
+* 66–70%
+* 71–75%
+* 76–80%
+* 81–85%
+* 86–90%
+* 91–95%
+* 96–100%
+
+For each bucket, calculate:
+
+* Average predicted probability
+* Actual historical win percentage
+* Number of predictions (sample size)
+* Calibration error (absolute difference between predicted and actual)
+
+Fix the y-axis so it displays correct percentages (0–100%) instead of values like 5000% or 8940%.
+
+Under the chart, add a sortable summary table showing Prediction Range, Sample Size, Predicted %, Actual %, Calibration Error, and a confidence rating (Excellent, Very Good, Good, Fair, Poor).
+
+Automatically highlight the bucket with the lowest calibration error as “Best Calibrated Tier” so it’s immediately obvious which prediction range has historically been the most accurate.
+
+I actually think this version would be much more useful for betting decisions because it tells you which confidence ranges your model has earned the most trust in, instead of just showing a generic calibration graph.

@@ -1,16 +1,22 @@
 import { Router, type IRouter } from "express";
 import { RecognizeMatchupScreenshotBody, RecognizeMatchupScreenshotResponse } from "@workspace/api-zod";
-import { getTennisDataProvider, ProviderUnavailableError } from "../services/tennisData";
-import { recognizeMatchupScreenshot, ScreenshotRecognitionUnavailableError, type RawScreenshotRecognition } from "../services/tennisData/screenshotRecognition";
+import { ProviderUnavailableError } from "../services/tennisData";
+import type { RawScreenshotRecognition } from "../services/tennisData/screenshotRecognition";
 import { resolveScreenshotMatchup } from "../services/tennisData/screenshotMatchupResolver";
+import { getTennisDataProvider } from "../services/tennisData";
 import { inferSurfaceAndLevel } from "../services/tennisData/surfaceMap";
+import { screenshotImportService } from "../services/screenshotImport/ScreenshotImportService.js";
 const router: IRouter = Router();
 
 /**
  * POST /api/matchups/from-screenshot
- * Accepts a base64 image, runs vision AI to extract matchups, resolves players and event.
- * Returns the result including `debugLog` (stage-by-stage pipeline trace) and `rawText`
- * (the raw vision model output before parsing) so the frontend can show real failure reasons.
+ *
+ * Global entry point for ALL screenshot OCR in the app. Routes through the
+ * ScreenshotImportService, which handles provider selection, failover, caching,
+ * health monitoring, and diagnostics. No module should call a vision provider directly.
+ *
+ * Returns the resolved matchup result plus `debugLog`, `rawText`, and `diagnostics`
+ * so the frontend can show real failure reasons and which OCR provider was used.
  */
 router.post("/matchups/from-screenshot", async (req, res): Promise<void> => {
   const parsed = RecognizeMatchupScreenshotBody.safeParse(req.body);
@@ -20,22 +26,18 @@ router.post("/matchups/from-screenshot", async (req, res): Promise<void> => {
   }
 
   try {
-    const raw = await recognizeMatchupScreenshot(parsed.data.imageBase64);
-    const { debugLog, rawText, ...rawForResolver } = raw;
-    const result = await resolveScreenshotMatchup(getTennisDataProvider(), rawForResolver);
-    // Use passthrough() so debugLog/rawText are preserved alongside the validated fields.
-    res.json(RecognizeMatchupScreenshotResponse.passthrough().parse({ ...result, debugLog, rawText }));
+    const result = await screenshotImportService.importScreenshot(parsed.data.imageBase64);
+    const { diagnostics, ...rest } = result;
+    // Expose diagnostics inline for backward compat (debugLog + rawText) plus new diagnostics object
+    res.json({
+      ...rest,
+      debugLog: diagnostics.debugLog,
+      rawText: diagnostics.rawText,
+      diagnostics,
+    });
   } catch (err) {
-    if (err instanceof ScreenshotRecognitionUnavailableError) {
-      res.status(502).json({
-        error: "Vision AI provider unavailable",
-        detail: err.message,
-        debugLog: err.debugLog ?? [],
-      });
-      return;
-    }
     if (err instanceof ProviderUnavailableError) {
-      res.status(502).json({ error: "Tennis data provider unavailable", detail: err.message });
+      res.status(502).json({ error: "Tennis data provider unavailable", detail: (err as Error).message });
       return;
     }
     throw err;

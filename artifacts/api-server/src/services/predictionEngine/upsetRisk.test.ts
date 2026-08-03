@@ -98,6 +98,30 @@ test("note names the real top contributors, never a generic placeholder, wheneve
   assert.match(result.note, /favorite's edge is thin|thin surface-history sample/);
 });
 
+test("LOW upset risk note says the factor is present but does NOT imply it caused the low rating", () => {
+  // 58% → margin 8 → favoriteWeakness 15 → score 15 → LOW.
+  // The old template "LOW upset risk, mainly because the favorite's edge is thin" implied
+  // the thin edge *causes* low risk (backwards — thin edge is a risk driver, not a safety net).
+  const result = computeUpsetRisk(input({ calibratedProbability: 58 }));
+  assert.equal(result.upsetRisk, "LOW");
+  assert.ok(result.topContributors.includes("favoriteWeakness"), "favoriteWeakness should be a top contributor at margin=8");
+  // Must NOT use "mainly because" — that framing implies the factor caused the LOW tier.
+  assert.doesNotMatch(result.note, /mainly because/, "LOW tier must not use 'mainly because' framing");
+  // Must acknowledge the factor IS present.
+  assert.match(result.note, /present|thin edge/, "LOW tier note must still name the contributing factor");
+  // Must convey that the risk stays low despite the factor.
+  assert.match(result.note, /LOW/);
+});
+
+test("LOW upset risk note with no contributors stays on the comfortable-edge branch", () => {
+  // 75% → margin 25 → favoriteWeakness 0 → score 0 → LOW, no contributors.
+  const result = computeUpsetRisk(input({ calibratedProbability: 75 }));
+  assert.equal(result.upsetRisk, "LOW");
+  assert.deepEqual(result.topContributors, []);
+  assert.match(result.note, /comfortable/);
+  assert.doesNotMatch(result.note, /mainly because/);
+});
+
 test("modelConflict note names a real core-model direction conflict only when coreModelsConflict is actually true", () => {
   const withCoreConflict = computeUpsetRisk(
     input({
@@ -118,5 +142,7 @@ test("modelConflict note falls back to an accurate agreement-band label when the
   );
   assert.ok(bandOnly.topContributors.includes("modelConflict"));
   assert.doesNotMatch(bandOnly.note, /the core models disagree on direction/);
-  assert.match(bandOnly.note, /overall agreement is less than strong/);
+  // Note may use different phrasing depending on whether the tier is LOW or MODERATE+, but must
+  // never falsely claim a direction conflict. Acceptable phrases for the agreement-band case:
+  assert.match(bandOnly.note, /partial model disagreement|overall agreement is less than strong/);
 });

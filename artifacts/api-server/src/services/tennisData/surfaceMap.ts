@@ -116,6 +116,14 @@ const TOURNAMENT_SURFACE: Array<{ match: RegExp; surface: Surface; level?: Tourn
   { match: /los cabos/i, surface: "Hard", level: "ATP250" },
   { match: /\badelaide\b/i, surface: "Hard", level: "ATP250" },
 
+  // ── WTA 125k hard-court events ───────────────────────────────────────────────
+  // Tour-restricted (WTA only) — Memphis and Vancouver are WTA 125k hard-court events;
+  // a hypothetical ATP event in either city would be on a different tier and surface.
+  // Level set to WTA250 — closest available tier (no WTA125 type); prevents the provider
+  // from overriding with a stale "ATP250" label from an old ATP Memphis/Vancouver edition.
+  { match: /\bmemphis\b/i, surface: "Hard", level: "WTA250", tour: "WTA" },
+  { match: /\bvancouver\b/i, surface: "Hard", level: "WTA250", tour: "WTA" },
+
   // ── ATP 250 clay events ──────────────────────────────────────────────────────
   { match: /buenos aires/i, surface: "Clay", level: "ATP250" },
   { match: /\bcordoba\b/i, surface: "Clay", level: "ATP250" },

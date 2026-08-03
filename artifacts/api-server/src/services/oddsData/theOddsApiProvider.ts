@@ -1,4 +1,6 @@
 import { logger } from "../../lib/logger";
+import { withRetry, isTransientError } from "../../lib/retry";
+import { CircuitBreaker } from "../../lib/circuitBreaker";
 import { TtlCache } from "../tennisData/cache";
 import { matchPlayersToEvent } from "./nameMatch";
 import { OddsProviderRateLimitedError, OddsProviderUnavailableError, type OddsProvider, type OddsProviderStatusInfo, type OddsQuote } from "./types";
@@ -53,6 +55,11 @@ export class TheOddsApiProvider implements OddsProvider {
   private cache = new TtlCache();
   private lastSuccessfulCallAt: string | null = null;
   private lastError: string | null = null;
+  private readonly breaker = new CircuitBreaker("the-odds-api", {
+    failureThreshold: 4,
+    openDurationMs: 60_000,
+    windowMs: 120_000,
+  });
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
@@ -67,30 +74,52 @@ export class TheOddsApiProvider implements OddsProvider {
     url.searchParams.set("apiKey", this.apiKey);
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
 
-    let response: Response;
     try {
-      response = await fetch(url.toString(), { signal: AbortSignal.timeout(10_000) });
+      const body = await this.breaker.execute(() =>
+        withRetry(
+          async () => {
+            let response: Response;
+            try {
+              response = await fetch(url.toString(), { signal: AbortSignal.timeout(10_000) });
+            } catch (err) {
+              throw err;
+            }
+            if (response.status === 401 || response.status === 429) {
+              throw Object.assign(
+                new OddsProviderRateLimitedError(
+                  `The Odds API reported ${response.status} (rate/usage limit or invalid key)`,
+                ),
+                { status: response.status },
+              );
+            }
+            if (!response.ok) {
+              throw Object.assign(
+                new Error(`The Odds API responded with HTTP ${response.status}`),
+                { status: response.status },
+              );
+            }
+            return (await response.json()) as T;
+          },
+          {
+            attempts: 3,
+            baseDelayMs: 400,
+            maxDelayMs: 5_000,
+            retryOn: (err) =>
+              !(err instanceof OddsProviderRateLimitedError) && isTransientError(err),
+            onRetry: (err, attempt) =>
+              logger.warn({ err, path, attempt }, "The Odds API request retrying"),
+          },
+        ),
+      );
+      this.lastSuccessfulCallAt = new Date().toISOString();
+      this.lastError = null;
+      return body;
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown network error calling The Odds API";
+      const message = err instanceof Error ? err.message : "Unknown error calling The Odds API";
       this.lastError = message;
+      if (err instanceof OddsProviderRateLimitedError) throw err;
       throw new OddsProviderUnavailableError(message);
     }
-
-    if (response.status === 401 || response.status === 429) {
-      const message = `The Odds API reported ${response.status} (rate/usage limit or invalid key)`;
-      this.lastError = message;
-      throw new OddsProviderRateLimitedError(message);
-    }
-    if (!response.ok) {
-      const message = `The Odds API responded with HTTP ${response.status}`;
-      this.lastError = message;
-      throw new OddsProviderUnavailableError(message);
-    }
-
-    const body = (await response.json()) as T;
-    this.lastSuccessfulCallAt = new Date().toISOString();
-    this.lastError = null;
-    return body;
   }
 
   private async getActiveTennisSportKeys(): Promise<string[]> {

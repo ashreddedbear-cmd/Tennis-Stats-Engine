@@ -2,60 +2,112 @@ export function TennisMatrixLogo() {
   return (
     <svg
       viewBox="0 0 48 48"
-      width="36"
-      height="36"
+      width="100%"
+      height="100%"
       xmlns="http://www.w3.org/2000/svg"
-      className="drop-shadow-lg"
     >
-      {/* Gradient background */}
       <defs>
-        <linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stopColor="#10b981" stopOpacity={1} />
-          <stop offset="100%" stopColor="#059669" stopOpacity={1} />
-        </linearGradient>
+        <clipPath id="tmClip">
+          <circle cx="24" cy="24" r="23.5" />
+        </clipPath>
+        <radialGradient id="tmBase" cx="40%" cy="30%" r="70%">
+          <stop offset="0%" stopColor="#071307" />
+          <stop offset="100%" stopColor="#010401" />
+        </radialGradient>
+        <filter id="tmSeamGlow" x="-20%" y="-20%" width="140%" height="140%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="0.7" result="blur" />
+          <feMerge>
+            <feMergeNode in="blur" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
       </defs>
 
-      {/* Main racket frame circle */}
-      <circle cx="24" cy="18" r="12" fill="none" stroke="url(#logoGrad)" strokeWidth="2.5" />
+      {/* Base dark circle */}
+      <circle cx="24" cy="24" r="24" fill="url(#tmBase)" />
 
-      {/* Racket strings - horizontal */}
-      <line x1="14" y1="12" x2="34" y2="12" stroke="url(#logoGrad)" strokeWidth="1" opacity="0.6" />
-      <line x1="13.5" y1="15" x2="34.5" y2="15" stroke="url(#logoGrad)" strokeWidth="1" opacity="0.5" />
-      <line x1="13" y1="18" x2="35" y2="18" stroke="url(#logoGrad)" strokeWidth="1" opacity="0.5" />
-      <line x1="13.5" y1="21" x2="34.5" y2="21" stroke="url(#logoGrad)" strokeWidth="1" opacity="0.5" />
-      <line x1="14" y1="24" x2="34" y2="24" stroke="url(#logoGrad)" strokeWidth="1" opacity="0.6" />
+      {/* Clipped content */}
+      <g clipPath="url(#tmClip)">
 
-      {/* Racket strings - vertical */}
-      <line x1="18" y1="8" x2="18" y2="28" stroke="url(#logoGrad)" strokeWidth="1" opacity="0.6" />
-      <line x1="21" y1="7" x2="21" y2="29" stroke="url(#logoGrad)" strokeWidth="1" opacity="0.5" />
-      <line x1="24" y1="6.5" x2="24" y2="29.5" stroke="url(#logoGrad)" strokeWidth="1" opacity="0.5" />
-      <line x1="27" y1="7" x2="27" y2="29" stroke="url(#logoGrad)" strokeWidth="1" opacity="0.5" />
-      <line x1="30" y1="8" x2="30" y2="28" stroke="url(#logoGrad)" strokeWidth="1" opacity="0.6" />
+        {/* Matrix rain columns — vertical dash segments, vary opacity for depth */}
+        {/* Column far-left */}
+        <line x1="8" y1="4"  x2="8" y2="44" stroke="#00ff41" strokeWidth="0.6"
+          strokeDasharray="2.5 3.5 1.5 5 3 4 2 6" opacity="0.13" />
+        {/* Column left-center */}
+        <line x1="16" y1="2"  x2="16" y2="46" stroke="#00ff41" strokeWidth="0.6"
+          strokeDasharray="1.5 4 3 3.5 2 5.5 1.5 4" opacity="0.1" />
+        {/* Column center */}
+        <line x1="24" y1="3"  x2="24" y2="45" stroke="#00ff41" strokeWidth="0.6"
+          strokeDasharray="3 3 2 5 1.5 4.5 2.5 3" opacity="0.1" />
+        {/* Column right-center */}
+        <line x1="32" y1="2"  x2="32" y2="46" stroke="#00ff41" strokeWidth="0.6"
+          strokeDasharray="2 4.5 3 3 1.5 5 2 4" opacity="0.1" />
+        {/* Column far-right */}
+        <line x1="40" y1="4"  x2="40" y2="44" stroke="#00ff41" strokeWidth="0.6"
+          strokeDasharray="1.5 5 2.5 3 3 4 1.5 5.5" opacity="0.13" />
 
-      {/* Racket handle */}
-      <rect x="21.5" y="28" width="5" height="14" rx="2.5" fill="url(#logoGrad)" />
+        {/* ── PCB-trace tennis seam — TOP (angular, circuit-board style) ── */}
+        <path
+          d="M 1 24 L 5 24 L 5 19 L 10 19 L 10 13 L 18 13 L 18 19 L 30 19 L 30 13 L 38 13 L 38 19 L 43 19 L 43 24 L 47 24"
+          fill="none"
+          stroke="#00ff41"
+          strokeWidth="1.7"
+          strokeLinejoin="miter"
+          strokeLinecap="butt"
+          opacity="0.92"
+          filter="url(#tmSeamGlow)"
+        />
 
-      {/* Tennis ball - positioned off to the side */}
-      <circle cx="38" cy="32" r="6" fill="#FFEB3B" />
-      <path
-        d="M 36 30 Q 38 31 40 30"
-        stroke="#FDD835"
-        strokeWidth="1.5"
-        fill="none"
-        strokeLinecap="round"
-      />
-      <path
-        d="M 36 34 Q 38 33 40 34"
-        stroke="#FDD835"
-        strokeWidth="1.5"
-        fill="none"
-        strokeLinecap="round"
-      />
+        {/* ── PCB-trace tennis seam — BOTTOM (mirror) ── */}
+        <path
+          d="M 1 24 L 5 24 L 5 29 L 10 29 L 10 35 L 18 35 L 18 29 L 30 29 L 30 35 L 38 35 L 38 29 L 43 29 L 43 24 L 47 24"
+          fill="none"
+          stroke="#00ff41"
+          strokeWidth="1.7"
+          strokeLinejoin="miter"
+          strokeLinecap="butt"
+          opacity="0.92"
+          filter="url(#tmSeamGlow)"
+        />
 
-      {/* Matrix accent dots */}
-      <circle cx="12" cy="34" r="1.5" fill="url(#logoGrad)" opacity="0.7" />
-      <circle cx="16" cy="36" r="1" fill="url(#logoGrad)" opacity="0.5" />
-      <circle cx="10" cy="40" r="1.2" fill="url(#logoGrad)" opacity="0.6" />
+        {/* ── PCB nodes: square pads at every inflection point — TOP ── */}
+        {/* left outer bend */}
+        <rect x="3.5" y="17.5" width="3" height="3" fill="#00ff41" opacity="0.95" />
+        {/* left-peak down */}
+        <rect x="8.5" y="11.5" width="3" height="3" fill="#00ff41" opacity="0.95" />
+        {/* inner valley - left */}
+        <rect x="16.5" y="11.5" width="3" height="3" fill="#00ff41" opacity="0.95" />
+        <rect x="16.5" y="17.5" width="3" height="3" fill="#00ff41" opacity="0.95" />
+        {/* inner valley - right */}
+        <rect x="28.5" y="17.5" width="3" height="3" fill="#00ff41" opacity="0.95" />
+        <rect x="28.5" y="11.5" width="3" height="3" fill="#00ff41" opacity="0.95" />
+        {/* right-peak down */}
+        <rect x="36.5" y="11.5" width="3" height="3" fill="#00ff41" opacity="0.95" />
+        {/* right outer bend */}
+        <rect x="36.5" y="17.5" width="3" height="3" fill="#00ff41" opacity="0.95" />
+        <rect x="41.5" y="17.5" width="3" height="3" fill="#00ff41" opacity="0.95" />
+
+        {/* ── PCB nodes: square pads — BOTTOM ── */}
+        <rect x="3.5" y="27.5" width="3" height="3" fill="#00ff41" opacity="0.95" />
+        <rect x="8.5" y="33.5" width="3" height="3" fill="#00ff41" opacity="0.95" />
+        <rect x="16.5" y="33.5" width="3" height="3" fill="#00ff41" opacity="0.95" />
+        <rect x="16.5" y="27.5" width="3" height="3" fill="#00ff41" opacity="0.95" />
+        <rect x="28.5" y="27.5" width="3" height="3" fill="#00ff41" opacity="0.95" />
+        <rect x="28.5" y="33.5" width="3" height="3" fill="#00ff41" opacity="0.95" />
+        <rect x="36.5" y="33.5" width="3" height="3" fill="#00ff41" opacity="0.95" />
+        <rect x="36.5" y="27.5" width="3" height="3" fill="#00ff41" opacity="0.95" />
+        <rect x="41.5" y="27.5" width="3" height="3" fill="#00ff41" opacity="0.95" />
+
+      </g>
+
+      {/* Outer ring */}
+      <circle cx="24" cy="24" r="23" fill="none" stroke="#00ff41" strokeWidth="0.9" opacity="0.65" />
+
+      {/* Center targeting reticle */}
+      <line x1="20.5" y1="24" x2="27.5" y2="24" stroke="#00ff41" strokeWidth="0.9" opacity="0.85" />
+      <line x1="24" y1="20.5" x2="24" y2="27.5" stroke="#00ff41" strokeWidth="0.9" opacity="0.85" />
+      {/* Center node — bright square */}
+      <rect x="22.5" y="22.5" width="3" height="3" fill="#00ff41" opacity="1" />
     </svg>
   )
 }

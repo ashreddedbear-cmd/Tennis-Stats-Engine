@@ -1,0 +1,34 @@
+**Task — Refit Calibration Curve on Market-Odds-Inclusive Predictions Before Final KEEP/EXCLUDE Call**
+
+**What & Why**
+
+Section B's ablation found market odds improves accuracy (+1.6pp) but worsens log-loss (+0.0243) when included. Before treating that as evidence against the module, rule out a more likely explanation: `calibration.ts` fits one global curve mapping raw ensemble probability → real outcome, using whatever predictions were in its training set. Since market odds is currently gated off in production (`EXCLUDED_FROM_ENSEMBLE`), the existing curve was fit almost entirely on predictions where market odds never voted. When the ablation script turns market odds on, it shifts the raw ensemble probability — correctly, which is why accuracy improves — but then maps that shifted number through a curve that was never fit on this distribution. That mismatch, not a flaw in the market-odds module itself, is the likely source of the log-loss regression.
+
+**Done looks like**
+
+- A second calibration curve fit specifically on raw-probability/outcome pairs from predictions where market odds was active in the ensemble (reuse `fitBestCalibration` / `fitIsotonicCalibrationBinned` / `fitPlattScaling` — whichever `fitBestCalibration` already selects — no new fitting logic needed, just a differently-scoped input set).
+- Proper train/holdout split maintained for this fit (`splitForCalibrationHoldout`), same discipline as the existing calibration pipeline — no testing on the same rows used to fit the curve.
+- Section B's with-market-odds arm re-scored using this new curve instead of the stale global one.
+- A clear before/after comparison: log-loss under the old (stale) curve vs. the new (market-odds-aware) curve, at the same accuracy.
+- A written conclusion: if log-loss improves to roughly parity (or better) once properly recalibrated, the original regression was a stale-curve artifact — market odds is cleared on this axis. If log-loss is still meaningfully worse even with a matched curve, that's real evidence the module needs weight-tuning (already queued as follow-up #83), not a calibration bug.
+
+**Out of scope**
+
+- Any change to how market odds' implied probability is computed — already correctly devigged, confirmed in `index.ts` (~line 493), not the issue here.
+- Turning market odds on in production, or touching `EXCLUDED_FROM_ENSEMBLE` — this task only produces cleaner evidence for that eventual decision.
+- Follow-up tasks #82 and #84 (re-running Section C once the walk-forward finishes, and the final n≥200 KEEP/EXCLUDE call) — unaffected by this, proceed independently.
+- Rebuilding the *production* calibration pipeline — this is a one-off diagnostic curve for the ablation comparison only, not a replacement for the live calibration model.
+
+**Steps**
+
+1. Pull the same prediction set Section B already used for the with-market-odds arm (`historical_test` rows scored with `input.marketOdds` populated), and extract `{rawProbability, outcome}` pairs from them.
+2. Split into fit/holdout using `splitForCalibrationHoldout`, consistent with how the production calibration model is fit elsewhere in the codebase.
+3. Fit a new curve on the fit split via `fitBestCalibration`.
+4. Apply that new curve (via `applyCalibration`) to the holdout split's raw probabilities, and compute log-loss/Brier score the same way `logLoss`/`brierScore` already do elsewhere.
+5. Print a side-by-side: old global curve's log-loss on this arm vs. new market-odds-fit curve's log-loss on the same holdout rows.
+6. Write the conclusion directly into the ablation script's output (or a short findings note) — state plainly whether the regression was a stale-curve artifact or a real module problem, so task #83 knows whether it's still needed.
+
+**Relevant files**
+
+- `artifacts/api-server/src/services/evaluation/calibration.ts`
+- `artifacts/api-server/src/scripts/auditMarketConsensusAblation.ts`

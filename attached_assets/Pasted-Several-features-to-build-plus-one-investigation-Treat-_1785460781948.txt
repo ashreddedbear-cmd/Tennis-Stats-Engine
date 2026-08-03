@@ -1,0 +1,18 @@
+Several features to build, plus one investigation. Treat these as separate, ordered items.
+
+1. INVESTIGATE (do this first, before touching anything): Audit the Prediction Engine History tab for completed-but-ungraded matches. For each one found, determine the specific reason via ledgerGrading.ts's logic (provider lookup failure, ambiguous name match, outside the FORWARD_LOOKUP_WINDOW_MS window, or genuinely never checked because grade-pending hasn't run recently). Report findings grouped by root cause — do not just delete them. For any that are fixable (e.g. a name-resolution gap), fix the resolution and grade them for real. Only for matches confirmed truly unresolvable after investigation, remove them from the visible History list (or flag them distinctly, e.g. "unresolvable" rather than silently pending forever).
+
+2. Also investigate: confirm whether grade-pending has an independent recurring schedule, or only runs as a side effect of the paper-trading job. If the latter, add an independent recurring grading job so predictions don't wait on an unrelated job's schedule to get checked.
+
+3. BUILD: Parlay Builder History tab, separate from the Prediction Engine's History tab and storing a distinct set of cards (Parlay cards, not Prediction cards) — two separate tables/storage, not shared. Wire this to continuously grade parlays after every match completes, using the existing resolveParlayLegOutcomes.ts / backfillParlayLegOutcomes.ts infrastructure as the grading backbone (this already exists but currently only feeds one-off analysis scripts — extend it to also populate this new history table automatically, not just report to console).
+
+4. BUILD: A "Save" button on individual parlay leg cards (the WEAK/BORDERLINE cards shown in the Parlay Builder results), allowing the user to save specific cards for later.
+
+5. BUILD: A "Saved Parlays" folder/view, accessible from the Parlay Builder screen, where saved cards live. Include:
+   - Open/select interface to pick which saved cards to add to a new parlay build
+   - "Add selected matches" button
+   - "Clear all" button to empty the saved folder
+
+6. BUILD: When generating a parlay card, order the two players so the one with the stronger validation/stats profile displays first by default, rather than showing sel-vs-opp in import order. Confirm no existing sort logic does this (none currently does) and add it based on the already-computed validationScore/factor data, so the user doesn't have to manually flip between both directions to find the stronger side.
+
+Do not conflate items 3-6 with item 1 — the ungraded-matches investigation in the Prediction Engine is diagnostic work on existing data; items 3-6 are new Parlay Builder features built from scratch.

@@ -1,0 +1,77 @@
+The current implementation is still too dependent on the local database.
+
+Player names must originate from the imported prediction, screenshot, schedule, or match entry. Statistical validation data must originate from configured external tennis providers. The local database should function as a normalized cache and historical store, not as the sole source of truth.
+
+Required architecture:
+
+Imported match
+→ Player Identity Resolver
+→ Fresh cache check
+→ External provider lookup when cache is absent or stale
+→ Normalize and merge provider data
+→ Save provider results locally
+→ Validation Engine consumes merged normalized data
+
+Requirements:
+
+1. A player missing from the local database must automatically trigger external provider searches.
+
+2. Do not report “No match history found” merely because the player is absent locally.
+
+3. Search all configured and eligible providers using:
+   - full name
+   - initials
+   - surname
+   - aliases
+   - accents/diacritics
+   - event and tour context
+   - opponent identity
+   - provider-specific IDs
+
+4. Distinguish these outcomes:
+
+   CACHE_MISS
+   The player or records are not stored locally. External lookup must continue.
+
+   PLAYER_RESOLVED
+   The player was matched to a canonical identity.
+
+   DATA_FOUND
+   External match records were retrieved.
+
+   SOURCE_UNAVAILABLE
+   A provider failed, timed out, blocked the request, or could not be queried.
+
+   PLAYER_NOT_FOUND
+   A provider responded successfully but could not identify the player.
+
+   NO_MATCH_HISTORY
+   The player was identified, all eligible providers responded successfully,
+   and none returned professional match history.
+
+   INSUFFICIENT_DATA
+   Some data was retrieved, but not enough to calculate reliable factors.
+
+5. The final message must not say:
+   “The player genuinely has no professional record in your database.”
+
+   Replace it with provider-aware language.
+
+6. Record diagnostics for every validation:
+   - sources configured
+   - sources attempted
+   - sources successful
+   - sources failed
+   - cache age
+   - player resolution method
+   - provider IDs found
+   - records returned per source
+   - reasons for failure
+
+7. The database must retain source attribution and retrieval timestamps for every stored record.
+
+8. Validation factors must be computed from the merged provider data pool, not merely from locally existing player rows.
+
+9. If external providers cannot be reached, return DATA_UNAVAILABLE and do not assign a misleading Grade D based on zero matches.
+
+10. Keep the Prediction Engine and Validation Engine independent. The Validation Engine validates the Prediction Engine’s selected player; it does not choose another winner.

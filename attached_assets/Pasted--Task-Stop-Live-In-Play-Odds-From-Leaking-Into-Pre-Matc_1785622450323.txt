@@ -1,0 +1,26 @@
+**Task — Stop Live/In-Play Odds From Leaking Into Pre-Match Market Consensus Scoring**
+
+**What & Why**
+
+`fetchMarketOdds` (called from `builderProviderFetch.ts` and used throughout `builderScoringService.ts`'s Market Consensus factor, risk adjustments, and closeness signal) has no check anywhere for whether the match has already started. It pulls whatever odds are currently available and scores them as if they were pre-match handicapping evidence — but once a match is live, "market odds" mechanically reflect the current score, not a matchup assessment. A pick at 60% pre-match seeing its market signal collapse to 1% mid-blowout isn't the market "disagreeing" with the pre-match call — it's just reporting the live score. Feeding that into `marketConsensus` scoring, the risk penalty (`1 / marketOdds < 0.42` → `risk += 18`), and the closeness signal treats a live-score artifact as if it were genuine pre-match disagreement, which can wrongly tank a card's grade for a pick that was never actually contradicted before the match started.
+
+**Done looks like**
+
+- Market odds are only fetched and scored when the match has not yet started (before `commenceTime`/`scheduledStartAt`).
+- Once a match goes live, the Market Consensus factor, the risk adjustments at lines ~1230/1246/1387/1691/1701, and the closeness signal at line ~1714-1715 all use the **last known pre-match odds value**, frozen — not a fresh live fetch.
+- If no pre-match odds were ever captured before the match went live (e.g., a card created after commence time), market odds falls back to the existing "No market odds provided" neutral path (score 50), not a live-in-play number.
+- This applies to both scoring code paths in the file (the main path and the `__TEST_computeScoring` duplicate — same pattern as the earlier Agreement/coverage fixes, where only one path got updated the first time).
+- A card whose match has gone live is visibly marked (e.g., a `matchStatus: "live"` flag surfaced to the UI) so the frontend can distinguish "still pre-match, actively scored" from "live, frozen at last pre-match state" — this task covers the backend flag; UI treatment (dropping it from the pickable pool, as discussed) can be a fast follow if not already covered by existing fixture-state logic.
+- Regression test: a mock match with pre-match odds implying 55%, then a second call after `matchStatus` flips to live with wildly different (in-play) odds supplied, confirms the scoring output is identical between the two calls — proving the live odds never entered scoring.
+
+**Out of scope**
+
+- Actually removing/hiding live-status cards from the user-facing pickable pool — flag the state here; the UI-side "no longer available to add" behavior can be scoped separately once this backend flag exists.
+- Any change to how pre-match market odds are weighted, devigged, or used in the Prediction Engine's separate market-odds ensemble track (Tasks #83/#84/#85/#86/#87) — this is specific to the Parlay Builder's `builderScoringService.ts` path only.
+- Changing the coverage/fatigue/Agreement logic already fixed earlier — untouched by this.
+
+**Relevant files**
+
+- `artifacts/api-server/src/services/parlayBuilder/builderScoringService.ts` (both scoring paths — main and `__TEST_computeScoring`, lines ~1008-1018, ~1230, ~1246, ~1297-1298, ~1387, ~1576-1582, ~1691, ~1701, ~1714-1715)
+- `artifacts/api-server/src/services/parlayBuilder/builderProviderFetch.ts` (`fetchMarketOdds` call site, ~line 590)
+- `artifacts/api-server/src/services/oddsData/index.ts` (`fetchMarketOdds` itself — check whether match-status/commence-time filtering belongs here instead, as the single source of truth, rather than gating at every call site)

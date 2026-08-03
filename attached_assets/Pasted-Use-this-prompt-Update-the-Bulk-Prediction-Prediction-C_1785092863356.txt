@@ -1,0 +1,429 @@
+Use this prompt:
+
+Update the Bulk Prediction, Prediction Cards, Build Parlay, and History workflows. Preserve the current visual style, but implement the following layout, persistence, and navigation changes.
+
+⸻
+
+1. Redesign the top of every prediction-card page
+
+The current prediction page uses too much vertical space for:
+
+* TENNIS MATRIX AI
+* Tournament/event name
+* Surface
+* Best-of format
+* Tournament level
+
+Reduce this header area so more of the actual prediction card is visible without scrolling.
+
+Required layout
+
+Move the event information from the large section above the card into the prediction card itself.
+
+Display it directly underneath the two player names and percentages.
+
+Example:
+
+K. Isomura        48.8%
+vs
+K. Poling         51.2%
+ATP Challenger Vancouver · Hard
+Best of 3 · Challenger
+
+Requirements:
+
+* The event name must not be larger than either player name.
+* Use a smaller, secondary font.
+* Keep the event information readable but visually subordinate to the players.
+* Surface, format, and level may be displayed as compact badges or inline metadata.
+* Remove the large duplicate event block currently shown above the prediction card.
+* Do not display incorrect labels such as WTA250 for an ATP Challenger event.
+* Use the normalized metadata already attached to the prediction.
+
+Move TENNIS MATRIX AI slightly lower on the page and make it somewhat larger and more prominent.
+
+The final order should be:
+
+Back to Run Model
+TENNIS MATRIX AI
+Prediction card
+
+Avoid creating a large empty gap between the title and the card.
+
+Apply this layout consistently to every prediction card, including:
+
+* New predictions
+* Restored saved predictions
+* History prediction cards
+
+⸻
+
+2. Split the Predict button into two buttons
+
+The current full-width button:
+
+PREDICT X MATCHUPS
+
+must be replaced with two equal-width buttons positioned next to each other.
+
+Suggested layout:
+
+[ VIEW PREDICTIONS ] [ BUILD PARLAY ]
+
+On mobile, each button should use approximately half of the available row width, with a small gap between them.
+
+Button A: View Predictions
+
+This button should:
+
+1. Run predictions for all valid READY matchups.
+2. Save the complete prediction batch as the latest saved batch.
+3. Open the prediction-card viewer.
+4. Add the newly predicted matches to History once, according to the app’s existing history behavior.
+
+Button B: Build Parlay
+
+This button should:
+
+1. Run predictions for all valid READY matchups.
+2. Save the complete prediction batch to the Saved Predictions folder.
+3. Transfer the ready matches and their generated prediction data directly into Build Parlay.
+4. Add the matches to History once.
+5. Navigate directly to the Build Parlay screen instead of opening the prediction-card viewer.
+
+The Build Parlay transfer must include:
+
+* Player 1
+* Player 2
+* Predicted winner
+* Win probability
+* Validation score
+* Risk score
+* Keep, borderline, or remove status
+* Grade
+* Tournament
+* Surface
+* Level
+* Match format
+* Source agreement
+* Coverage
+* Reasons and factor data
+* Stable prediction ID
+* Stable match ID
+
+Do not rerun the prediction model after navigating to Build Parlay.
+
+Both buttons should use the same successfully generated prediction result. The only difference is the destination screen.
+
+Disable both buttons when:
+
+* No valid matches are ready
+* A prediction run is already in progress
+
+Show independent labels:
+
+VIEW 40 PREDICTIONS
+BUILD PARLAY WITH 40
+
+⸻
+
+3. Prevent duplicate History entries
+
+Creating predictions should add each match to History only once.
+
+These actions must not create duplicate History records:
+
+* Opening Saved Predictions
+* Returning to an existing prediction-card batch
+* Opening a prediction from Build Parlay
+* Refreshing the page
+* Navigating back and forward
+* Rehydrating persisted app state
+
+Use stable IDs and an idempotent history-write operation.
+
+Suggested approach:
+
+historyRecordId = `${predictionBatchId}:${matchId}`;
+
+Before adding a record:
+
+if (!historyStore.has(historyRecordId)) {
+  historyStore.add(record);
+}
+
+Separate these operations:
+
+createPredictionBatch()
+savePredictionBatch()
+addPredictionBatchToHistoryOnce()
+openPredictionCards()
+transferPredictionBatchToParlay()
+restorePredictionBatch()
+
+restorePredictionBatch() must never call the prediction endpoint or the history-writing function.
+
+⸻
+
+4. Preserve the latest prediction batch
+
+Continue supporting the Saved Predictions folder/button.
+
+After either View Predictions or Build Parlay successfully runs:
+
+* Save that complete batch as the latest saved prediction batch.
+* Overwrite the previously saved batch.
+* Do not clear it when navigating away.
+* Do not clear it when transferring matches into Build Parlay.
+* Do not clear it when the user views History.
+
+The batch remains available until another prediction batch completes successfully.
+
+Example:
+
+* Predict 40 matches.
+* The folder contains those 40 predictions.
+* Send the 40 to Build Parlay.
+* The same 40 must still be available in Saved Predictions.
+* Later predict 20 new matches.
+* The folder now contains only the newer 20.
+
+Starting a new upload must not erase the saved prediction batch.
+
+Only replace the saved prediction batch after a new prediction run finishes successfully.
+
+⸻
+
+5. Fix the Lowest Risk button in Build Parlay
+
+The Lowest Risk sorting or filtering button currently cannot be selected.
+
+Diagnose and fix all possible causes, including:
+
+* Button covered by another element
+* Incorrect z-index
+* pointer-events: none
+* Disabled state being applied incorrectly
+* Transparent overlay intercepting taps
+* Touch target too small
+* State update not wired
+* Wrong event handler
+* Parent container blocking interaction
+* Filter expecting a missing or incorrectly typed risk value
+
+Required behavior:
+
+* The button must be tappable on mobile.
+* It must visually indicate its selected state.
+* It must sort eligible parlay picks from lowest risk to highest risk.
+* Use a numeric risk value.
+* Missing risk values should appear after valid values, not before them.
+* Switching to another sort option must update the selected state correctly.
+* Restoring a saved Build Parlay session must preserve the chosen sorting option.
+
+Example:
+
+const sorted = [...matches].sort((a, b) => {
+  const riskA = Number.isFinite(a.risk) ? a.risk : Infinity;
+  const riskB = Number.isFinite(b.risk) ? b.risk : Infinity;
+  return riskA - riskB;
+});
+
+Add automated mobile tap tests for this control.
+
+⸻
+
+6. Persist all Build Parlay progress
+
+Matches currently disappear when the user:
+
+* Switches to another app
+* Leaves the browser temporarily
+* Goes to the Home screen
+* Navigates away from Build Parlay
+* Returns to Run Model
+* Refreshes the page
+* Reopens the browser
+
+Fix this by persisting the active Build Parlay draft outside temporary component state.
+
+Persist:
+
+* All imported matches
+* Manually entered matches
+* Screenshot-derived matches
+* Prediction data
+* Selected or deselected status
+* Removed matches
+* Sort option
+* Filters
+* Parlay order
+* User-edited conditions
+* Current scroll or card position where practical
+* Draft creation and update timestamps
+
+Suggested data model:
+
+type ActiveParlayDraft = {
+  version: number;
+  draftId: string;
+  updatedAt: string;
+  sourceBatchId?: string;
+  matches: ParlayMatch[];
+  selectedMatchIds: string[];
+  removedMatchIds: string[];
+  sortMode: "default" | "lowest-risk" | "highest-confidence";
+  filters: ParlayFilters;
+};
+
+Save the draft after every meaningful edit using a debounced persistence function.
+
+Example:
+
+const persistDraft = debounce((draft) => {
+  localStorage.setItem(ACTIVE_PARLAY_DRAFT_KEY, JSON.stringify(draft));
+}, 250);
+
+Also save immediately when:
+
+* The page becomes hidden
+* The app loses focus
+* The browser begins unloading
+* Navigation occurs
+
+Listen for:
+
+visibilitychange
+pagehide
+beforeunload
+
+On app initialization:
+
+1. Read the persisted draft.
+2. Validate and migrate its schema.
+3. Restore Build Parlay automatically.
+4. Do not add the restored matches to History again.
+
+Do not erase the active draft simply because the user leaves the screen.
+
+Only clear it when the user explicitly chooses an action such as:
+
+CLEAR PARLAY
+START OVER
+DELETE DRAFT
+
+Require confirmation before permanently clearing a nonempty draft.
+
+⸻
+
+7. Persist unfinished Bulk Upload work
+
+The Bulk Upload screen must also preserve unfinished work while the user multitasks.
+
+Persist:
+
+* Parsed matchup rows
+* Player names
+* Tournament names
+* Surfaces
+* Levels
+* Ready/error state
+* User condition edits
+* Selected rows
+* Uploaded-image references when technically available
+
+Important limitation:
+
+Browser file objects may not survive a full browser restart. Therefore:
+
+* Persist the extracted and normalized matchup data immediately after image processing.
+* Do not depend solely on the original File objects.
+* If the raw image cannot be restored, preserve the parsed matches so the user does not lose their progress.
+
+When returning to Bulk Upload, restore the previous unfinished upload session.
+
+Starting a separate prediction batch should not unexpectedly clear the current Build Parlay draft.
+
+Use separate storage keys for:
+
+LAST_PREDICTION_BATCH_KEY
+ACTIVE_PARLAY_DRAFT_KEY
+ACTIVE_BULK_UPLOAD_KEY
+
+⸻
+
+8. Clarify ownership of state
+
+Do not keep critical workflow state only inside individual React components.
+
+Move persistent state into a shared store or persistence service.
+
+Suggested architecture:
+
+PredictionBatchStore
+BulkUploadDraftStore
+ParlayDraftStore
+HistoryStore
+
+Each store should have:
+
+* Hydration
+* Validation
+* Versioning
+* Migration
+* Save
+* Restore
+* Clear
+* Deduplication
+
+Component unmounting must not destroy the data.
+
+Navigation should change what is displayed, not erase the user’s work.
+
+⸻
+
+9. Loading and failure behavior
+
+For either prediction destination button:
+
+* Show progress while the model runs.
+* Prevent double submissions.
+* Do not navigate until the prediction batch finishes successfully.
+* If some matchups fail, clearly identify them.
+* Save successful predictions without silently pretending failed ones succeeded.
+* Do not overwrite the previous Saved Predictions batch if the new batch completely fails.
+* Do not erase an existing Build Parlay draft on prediction failure.
+
+When transferring to Build Parlay:
+
+38 matches added
+2 matches could not be predicted
+
+Provide a way to review failed rows.
+
+⸻
+
+10. Acceptance tests
+
+Implement and verify all of these:
+
+1. Predict 40 matches using View Predictions and confirm the 40 prediction cards open.
+2. Return home, reopen Run Model, open Saved Predictions, and confirm the same 40 cards appear without a new prediction API request.
+3. Confirm reopening Saved Predictions does not add duplicate History records.
+4. Predict 40 matches using Build Parlay and confirm the user navigates directly to Build Parlay.
+5. Confirm all ready matches and prediction metadata appear in Build Parlay.
+6. Confirm those matches are added to History exactly once.
+7. Confirm the prediction cards remain available in Saved Predictions after transfer to Build Parlay.
+8. Switch to another mobile app, return, and confirm the active Build Parlay draft remains intact.
+9. Go to Home, return to Build Parlay, and confirm all matches and selections remain intact.
+10. Refresh the browser and confirm the active parlay draft is restored.
+11. Begin a Bulk Upload, leave the screen before predicting, return, and confirm the parsed matchups remain.
+12. Tap Lowest Risk on a mobile device and confirm it becomes selected and sorts correctly.
+13. Confirm missing risk values sort last.
+14. Confirm the tournament and surface are shown inside each prediction card beneath the players.
+15. Confirm the large duplicate tournament header above the card has been removed.
+16. Confirm TENNIS MATRIX AI is larger and positioned closer to the prediction cards.
+17. Predict a newer batch of 20 and confirm Saved Predictions now contains the newer 20 rather than the previous 40.
+18. Confirm a failed new prediction does not erase the previous successful Saved Predictions batch.
+19. Confirm no restored screen or persisted draft creates duplicate history entries.
+20. Confirm the layout works on narrow mobile screens without button overlap, clipped text, or horizontal scrolling.

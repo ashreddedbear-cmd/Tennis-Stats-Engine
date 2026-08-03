@@ -1,0 +1,441 @@
+Replit Prompt — Build a Completely Independent Parlay Builder
+
+The Parlay Builder is NOT part of the Tennis Matrix AI prediction engine. It is a completely separate application module with its own scoring system, validation logic, configuration, and decision-making process. It must never modify, retrain, recalibrate, or influence the prediction engine.
+
+⸻
+
+Architecture
+
+Create two independent systems.
+
+System 1
+
+Prediction Engine
+
+* Produces match predictions.
+* Calculates win probability.
+* Calculates recommendation.
+* Calculates upset risk.
+* Calculates confidence.
+* Runs Monte Carlo.
+* Stores prediction history.
+* Remains completely untouched.
+
+System 2
+
+Parlay Builder
+
+* Reads predictions produced by the engine.
+* Never changes engine outputs.
+* Performs its own independent analysis.
+* Decides which legs should remain or be removed.
+* Generates its own scores.
+* Has its own database tables if needed.
+* Can be improved without affecting the prediction engine.
+
+There must be zero coupling between these systems.
+
+⸻
+
+Purpose
+
+The Parlay Builder exists for one purpose:
+
+Reduce losing legs before a bet is placed.
+
+It should function like a quality-control inspector.
+
+The engine predicts.
+
+The Parlay Builder judges the prediction.
+
+⸻
+
+Workflow
+
+1. Upload screenshots.
+2. OCR extracts every match.
+3. Match players to the database.
+4. Load the engine prediction.
+5. Run the Parlay Builder Validation.
+6. Score every leg independently.
+7. Remove weak legs.
+8. Present only the strongest combinations.
+
+⸻
+
+NEVER use
+
+Never use:
+
+Engine Confidence
+
+Engine Recommendation
+
+Engine Rating
+
+Engine Calibration
+
+Engine Recommendation Labels
+
+Those belong only to the prediction engine.
+
+The Parlay Builder creates entirely new ratings.
+
+⸻
+
+Parlay Builder Score
+
+Every leg receives:
+
+Validation Score (0–100)
+
+Risk Score
+
+Reliability Grade
+
+Parlay Grade
+
+Removal Probability
+
+Pass/Fail
+
+These scores do NOT exist anywhere else.
+
+⸻
+
+Validation Factors
+
+The Parlay Builder should evaluate each leg independently using:
+
+Surface matchup
+
+Recent form
+
+Opponent quality
+
+Ranking trend
+
+Serve consistency
+
+Return consistency
+
+Break point efficiency
+
+Hold percentage
+
+Fatigue
+
+Rest
+
+Travel
+
+Tournament level
+
+Head-to-head
+
+Current streak
+
+Historical volatility
+
+Historical upset rate
+
+Player consistency
+
+Expected competitiveness
+
+Evidence agreement
+
+Missing data penalties
+
+Contradicting statistics
+
+Market disagreement (optional)
+
+Model disagreement
+
+Data freshness
+
+Data quality
+
+Everything contributes to the Validation Score.
+
+⸻
+
+Validation Categories
+
+Every pick receives one label.
+
+Elite Validation
+
+Almost every metric agrees.
+
+Very low risk.
+
+Recommended.
+
+⸻
+
+Strong Validation
+
+Most metrics agree.
+
+Minor concerns.
+
+Recommended.
+
+⸻
+
+Moderate Validation
+
+Mixed evidence.
+
+Usable but risky.
+
+⸻
+
+Weak Validation
+
+Several problems.
+
+Generally avoid.
+
+⸻
+
+Reject
+
+Evidence strongly disagrees.
+
+Automatically recommend removal.
+
+⸻
+
+Automatic Removal Rules
+
+Automatically recommend removal when:
+
+Validation Score is below threshold.
+
+Evidence conflicts heavily.
+
+Surface mismatch.
+
+Poor recent form.
+
+Very inconsistent player.
+
+Large disagreement.
+
+Missing critical data.
+
+Multiple warning flags.
+
+Extremely high volatility.
+
+Never remove automatically without recording why.
+
+⸻
+
+Removal Reasons
+
+Every removed leg must list reasons.
+
+Example:
+
+Removed because:
+
+• Surface mismatch
+
+• Poor recent form
+
+• Large opponent advantage
+
+• High volatility
+
+• Validation score too low
+
+Never simply say “Removed.”
+
+⸻
+
+Leg Card
+
+Every leg should display:
+
+Player
+
+Opponent
+
+Tournament
+
+Surface
+
+Validation Score
+
+Reliability Grade
+
+Risk Score
+
+Validation Level
+
+Reasons
+
+KEEP
+
+or
+
+REMOVE
+
+⸻
+
+Builder Summary
+
+Display:
+
+Total Legs
+
+Recommended Legs
+
+Removed Legs
+
+Borderline Legs
+
+Average Validation Score
+
+Average Risk
+
+Overall Parlay Grade
+
+Expected Stability
+
+Overall Reliability
+
+⸻
+
+Filtering
+
+Allow:
+
+Show Keep
+
+Show Remove
+
+Show Borderline
+
+Highest Validation
+
+Lowest Validation
+
+Highest Risk
+
+Lowest Risk
+
+Sort by Validation Score
+
+Sort by Reliability
+
+Sort by Tournament
+
+Sort by Surface
+
+⸻
+
+Auto Builder
+
+Buttons:
+
+Build Best 3
+
+Build Best 5
+
+Build Best 8
+
+Build Best 10
+
+Build Highest Stability
+
+Build Lowest Risk
+
+Build Highest Validation
+
+Every build is generated only from KEEP legs.
+
+⸻
+
+Explanation System
+
+Every recommendation must explain itself.
+
+For example:
+
+Validation Score: 91
+
+Reasons:
+
+Excellent hard-court history
+
+Superior return game
+
+Strong recent form
+
+Opponent struggling on surface
+
+Low volatility
+
+High consistency
+
+This creates transparency.
+
+⸻
+
+History
+
+Save every Parlay Builder session separately from Prediction History.
+
+Store:
+
+Uploaded matches
+
+Removed legs
+
+Validation Scores
+
+Reasons
+
+Final parlays
+
+Builder version
+
+Date
+
+This history belongs only to the Parlay Builder.
+
+⸻
+
+Administration
+
+Allow independent adjustment of:
+
+Validation thresholds
+
+Removal thresholds
+
+Risk thresholds
+
+Weighting of validation factors
+
+Auto-build settings
+
+These settings must never alter the prediction engine.
+
+⸻
+
+Critical Rule
+
+The Prediction Engine and the Parlay Builder must remain permanently independent.
+
+The Prediction Engine predicts outcomes.
+
+The Parlay Builder evaluates whether those predictions are suitable for inclusion in a parlay.
+
+Neither system may modify, retrain, recalibrate, or overwrite the other. Communication must be one-way only: the Parlay Builder may read prediction outputs but must never write back to the prediction engine or influence future predictions. This ensures that improvements to the Parlay Builder never change the core prediction model, and improvements to the prediction model never automatically change the Parlay Builder’s validation logic.

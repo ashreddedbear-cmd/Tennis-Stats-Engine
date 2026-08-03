@@ -1,9 +1,13 @@
 /**
- * Task #110 / Task #20: tolerant parsing of pasted matchup lines like "Player A vs Player B — Tournament"
+ * Tolerant parsing of pasted matchup lines like "Player A vs Player B — Tournament"
  * into a structured shape. Real pasted lists vary in separator style (em dash, hyphen, "@", "in"
- * for the tournament; "vs", "vs.", "v", "versus", "-", "—" for the players), so this never assumes an exact
- * template -- it only reports a parsed shape when it can confidently find the vs-split, and always
- * flags lines it can't split rather than guessing.
+ * for the tournament; "vs", "vs.", "v", "versus", "-", "—" for the players), so this never assumes
+ * an exact template -- it only reports a parsed shape when it can confidently find the vs-split,
+ * and always flags lines it can't split rather than guessing.
+ *
+ * Tournament section headers (e.g. "ATP Estoril", "WTA Prague", "Challenger Poznan") are silently
+ * recognised and returned with isTournamentHeader: true so callers can carry the name forward as
+ * context for subsequent matchup lines without showing a parse error.
  */
 
 export interface ParsedMatchupLine {
@@ -21,6 +25,13 @@ export interface ParsedMatchupLine {
   matchDate: string | null
   /** Set when the line could not be split into two player names -- never guessed. */
   parseError: string | null
+  /**
+   * True when the line is a tournament section header (e.g. "ATP Estoril", "WTA Prague",
+   * "Challenger Poznan") rather than a matchup. Callers should skip rendering these as errors
+   * and carry the header text forward as tournament context for subsequent lines until the next
+   * header overrides it.
+   */
+  isTournamentHeader: boolean
 }
 
 // Ordered longest-separator-first so "vs." isn't left with a trailing period matched separately,
@@ -28,8 +39,7 @@ export interface ParsedMatchupLine {
 const VS_SEPARATOR_PATTERN = /\s+(?:vs\.?|versus|v\.)\s+/i
 
 // Leading bullet/list markers from pasted rendered lists: "*", "-", "•", or a leading "1." / "1)"
-// numbering. These are stripped before splitting so the marker never leaks into `playerAName`
-// (e.g. "* Murphy Cassone vs. Tristan Schoolkate" must not parse playerAName as "* Murphy Cassone").
+// numbering. These are stripped before splitting so the marker never leaks into `playerAName`.
 // A leading "-" marker is only stripped when followed by whitespace, so a genuinely hyphenated
 // leading name segment is never mistaken for a marker.
 const LEADING_LIST_MARKER_PATTERN = /^(?:[*•]|-(?=\s)|\d+[.)])\s*/
@@ -42,19 +52,36 @@ function stripLeadingListMarker(line: string): string {
 // Must be at the very end of the line (trailing). Only strips when the paren content is non-empty.
 const PAREN_TOURNAMENT_PATTERN = /\s*\(([^)]+)\)\s*$/
 
-// A bare " v " or " - " is ambiguous with hyphenated player names (e.g. "Auger-Aliassime" would
-// never appear, but "Auger-Aliassime vs Bonzi" must not be split on the surname's own hyphen), so
-// these looser separators are only tried once the primary VS_SEPARATOR_PATTERN fails to match.
+// A bare " v " or " - " is ambiguous with hyphenated player names, so these looser separators are
+// only tried once the primary VS_SEPARATOR_PATTERN fails to match.
 // Em dash and en dash are included here as last-resort player separators (see splitTournament below
 // for why they are normally tried as tournament separators first, and when they fall through).
 const LOOSE_VS_SEPARATOR_PATTERN = /\s+(?:v|[—–]|-)\s+/i
 
 // Tried in order; each one splits on its LAST occurrence in the line (the tournament segment is
-// always trailing), so a hyphenated player surname earlier in the line (e.g.
-// "Auger-Aliassime vs Bonzi - Halle Open") is never mistaken for the tournament separator itself.
-// Em dash / en dash and "@"/"at"/"in" are unambiguous; the plain " - " variant is tried last
-// since it's the one most likely to collide with a genuinely hyphenated name.
+// always trailing), so a hyphenated player surname earlier in the line is never mistaken for the
+// tournament separator itself. Em dash / en dash and "@"/"at"/"in" are unambiguous; the plain
+// " - " variant is tried last since it's the one most likely to collide with a hyphenated name.
 const TOURNAMENT_SEPARATOR_PATTERNS = [/[—–]/g, /\s+@\s+/gi, /\s+\bat\b\s+/gi, /\s+\bin\b\s+/gi, /\s+-\s+/g]
+
+/**
+ * Matches lines that are tour/level section headers rather than matchups.
+ * Patterns covered:
+ *   ATP <name> / WTA <name>
+ *   Challenger <name> / ITF <name>
+ *   Grade codes: M15, W25, M100, etc.
+ *   Bare: "Grand Slam", "Masters", "Finals"
+ * A line with any vs-separator is never treated as a header regardless of how it starts.
+ */
+const TOURNAMENT_HEADER_PATTERN =
+  /^(?:ATP|WTA|Challenger|ITF|M\d+|W\d+|Grand\s+Slam|Masters|Finals)(?:\s+.*)?$/i
+
+function isTournamentHeaderLine(line: string): boolean {
+  // If the line contains a player separator it's a matchup, not a header.
+  if (VS_SEPARATOR_PATTERN.test(line)) return false
+  if (LOOSE_VS_SEPARATOR_PATTERN.test(line)) return false
+  return TOURNAMENT_HEADER_PATTERN.test(line)
+}
 
 function lastMatch(pattern: RegExp, line: string): RegExpExecArray | null {
   let last: RegExpExecArray | null = null
@@ -67,14 +94,11 @@ function lastMatch(pattern: RegExp, line: string): RegExpExecArray | null {
 
 /**
  * Handles "Last, First" reversed names by flipping at the comma.
- * e.g. "Djokovic, Novak" → "Novak Djokovic"
- *      "del Potro, Juan Martin" → "Juan Martin del Potro"
  * Only flips when there is exactly one comma -- multiple commas are left as-is (too ambiguous).
  */
 function normalizePlayerName(name: string): string {
   const commaIdx = name.indexOf(",")
   if (commaIdx === -1) return name
-  // Multiple commas -- don't attempt to flip, too ambiguous
   if (name.indexOf(",", commaIdx + 1) !== -1) return name
   const lastName = name.slice(0, commaIdx).trim()
   const firstName = name.slice(commaIdx + 1).trim()
@@ -106,12 +130,6 @@ function splitTournament(line: string): { matchPart: string; tournamentName: str
       const matchPart = line.slice(0, match.index).trim()
       const tournamentName = line.slice(match.index + match[0].length).trim()
       if (matchPart && tournamentName) {
-        // Em dash / en dash: only use as tournament separator when the match part itself already
-        // has some player separator (VS-type or LOOSE, including another em dash). If not -- e.g.
-        // "Alcaraz — Sinner" where the em dash IS the only separator and IS the player separator
-        // -- fall through so LOOSE_VS_SEPARATOR_PATTERN handles it as a player separator.
-        // Checking both patterns handles "A — B — Tournament" (matchPart = "A — B" has a LOOSE
-        // em-dash separator, so it qualifies) vs "A — Tournament" (matchPart = "A" has none).
         if (/[—–]/.test(match[0]) && !VS_SEPARATOR_PATTERN.test(matchPart) && !LOOSE_VS_SEPARATOR_PATTERN.test(matchPart)) {
           continue
         }
@@ -123,14 +141,10 @@ function splitTournament(line: string): { matchPart: string; tournamentName: str
 }
 
 // ── Date extraction ────────────────────────────────────────────────────────
-//
-// Non-binding annotation only — the extracted date is surfaced alongside the resolved
-// matchup for the user's reference but never used to gate predictions.
-//
-// Patterns recognised (tried in order):
-//   1. ISO date:        2026-07-04
-//   2. Month-day:       July 4 / Jul 4 / July 14th
-//   3. Literal word:    tomorrow
+// Non-binding annotation only. Patterns recognised (tried in order):
+//   1. ISO date:    2026-07-04
+//   2. Month-day:   July 4 / Jul 4 / July 14th
+//   3. Literal:     tomorrow
 
 const ISO_DATE_RE = /\b(\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))\b/
 
@@ -157,29 +171,46 @@ function extractDate(line: string): string | null {
 export function parseMatchupLine(rawLine: string): ParsedMatchupLine {
   const raw = rawLine.trim()
   if (!raw) {
-    return { raw, playerAName: null, playerBName: null, tournamentName: null, matchDate: null, parseError: "Empty line" }
+    return {
+      raw, playerAName: null, playerBName: null, tournamentName: null,
+      matchDate: null, parseError: "Empty line", isTournamentHeader: false,
+    }
   }
-
-  // Extract a date annotation from the raw line independently of player/tournament splitting.
-  const matchDate = extractDate(raw)
 
   const withoutMarker = stripLeadingListMarker(raw)
 
-  // Step 1: strip a parenthetical tournament suffix first — "(Wimbledon)" at end of line.
-  // This has priority over any other tournament-separator logic so "(Tournament)" format always works.
+  // Detect tournament section headers FIRST — before any vs-split attempt.
+  // e.g. "ATP Estoril", "WTA Prague", "Challenger Poznan" with no vs-separator.
+  if (isTournamentHeaderLine(withoutMarker)) {
+    return {
+      raw,
+      playerAName: null,
+      playerBName: null,
+      tournamentName: withoutMarker,
+      matchDate: null,
+      parseError: null,
+      isTournamentHeader: true,
+    }
+  }
+
+  // Extract a date annotation independently of player/tournament splitting.
+  const matchDate = extractDate(raw)
+
+  // Step 1: strip a parenthetical tournament suffix — "(Wimbledon)" at end of line.
   const parenMatch = PAREN_TOURNAMENT_PATTERN.exec(withoutMarker)
   const parenTournament = parenMatch ? parenMatch[1].trim() : null
   const lineForSplit = parenTournament ? withoutMarker.slice(0, parenMatch!.index).trim() : withoutMarker
 
-  // Step 2: split on a trailing tournament separator (em dash, @, at, in, -), then player-split
-  // the remaining match part. Em dash falls through to the LOOSE player-separator if the match
-  // part alone has no VS-type separator (see splitTournament).
+  // Step 2: split on a trailing tournament separator, then player-split the remaining match part.
   const { matchPart, tournamentName: splitTournamentName } = splitTournament(lineForSplit)
   const finalTournament = parenTournament ?? splitTournamentName
 
   const players = splitPlayers(matchPart)
   if (players) {
-    return { raw, playerAName: players[0], playerBName: players[1], tournamentName: finalTournament, matchDate, parseError: null }
+    return {
+      raw, playerAName: players[0], playerBName: players[1],
+      tournamentName: finalTournament, matchDate, parseError: null, isTournamentHeader: false,
+    }
   }
 
   return {
@@ -189,6 +220,7 @@ export function parseMatchupLine(rawLine: string): ParsedMatchupLine {
     tournamentName: finalTournament,
     matchDate,
     parseError: 'Could not find a "vs" separator between two player names',
+    isTournamentHeader: false,
   }
 }
 

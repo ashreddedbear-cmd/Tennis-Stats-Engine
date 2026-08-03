@@ -61,6 +61,35 @@ export function normalizePersonName(name: string): string {
     .trim();
 }
 
+/**
+ * Compares two player names with abbreviation tolerance.
+ * "Tereza Valentova" matches "T. Valentova" / "t valentova" because providers often store
+ * abbreviated names while fixture cards submit full names. normalizePersonName strips dots,
+ * so "T." → "t", making both names have the same word count.
+ */
+function personNamesMatch(submitted: string, resolved: string): boolean {
+  const a = normalizePersonName(submitted);
+  const b = normalizePersonName(resolved);
+  if (a === b) return true;
+
+  const aWords = a.split(" ").filter(Boolean);
+  const bWords = b.split(" ").filter(Boolean);
+
+  // Both names must have the same number of words (abbreviated first name, same surname(s))
+  if (aWords.length !== bWords.length || aWords.length < 2) return false;
+
+  // Check surnames match exactly
+  const aSurnames = aWords.slice(1);
+  const bSurnames = bWords.slice(1);
+  if (!aSurnames.every((w, i) => w === bSurnames[i])) return false;
+
+  // First words: one must be a single-letter initial of the other ("t" vs "tereza")
+  const aFirst = aWords[0]!;
+  const bFirst = bWords[0]!;
+  return (aFirst.length === 1 && bFirst.startsWith(aFirst)) ||
+         (bFirst.length === 1 && aFirst.startsWith(bFirst));
+}
+
 export function assertPredictionIdentityIntegrity(
   body: PredictionIdentityRequestBody,
   integrity: PredictionRequestIntegrity,
@@ -88,7 +117,7 @@ export function assertPredictionIdentityIntegrity(
   }
 
   if (integrity.submittedPlayer1Name) {
-    if (normalizePersonName(integrity.submittedPlayer1Name) !== normalizePersonName(player1.name)) {
+    if (!personNamesMatch(integrity.submittedPlayer1Name, player1.name)) {
       return {
         code: "INTEGRITY_MISMATCH",
         message: `Integrity check failed: submitted player1 name (${integrity.submittedPlayer1Name}) did not match resolved player1 name (${player1.name})`,
@@ -96,7 +125,7 @@ export function assertPredictionIdentityIntegrity(
     }
   }
   if (integrity.submittedPlayer2Name) {
-    if (normalizePersonName(integrity.submittedPlayer2Name) !== normalizePersonName(player2.name)) {
+    if (!personNamesMatch(integrity.submittedPlayer2Name, player2.name)) {
       return {
         code: "INTEGRITY_MISMATCH",
         message: `Integrity check failed: submitted player2 name (${integrity.submittedPlayer2Name}) did not match resolved player2 name (${player2.name})`,

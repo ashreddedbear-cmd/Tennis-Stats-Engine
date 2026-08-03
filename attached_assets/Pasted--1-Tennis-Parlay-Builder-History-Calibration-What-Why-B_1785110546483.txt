@@ -1,0 +1,43 @@
+#1 - Tennis Parlay Builder — History & Calibration
+
+What & Why
+
+Build a full-stack Tennis Parlay Builder web app that stores historical match predictions (with their scoring metrics) and their real outcomes, then surfaces calibration stats so the user can see how reliable each prediction tier actually is before placing future parlays.
+
+The user already has a prediction system that grades every match before it plays — scoring each on Validation %, Risk %, Removal %, Agreement %, an overall score /100, a letter grade (A–F), and a strength tier (ELITE / STRONG / MODERATE / WEAK). They have been tracking real results on Kalshi. The uploaded transcription files contain ~40+ historical match records and known Kalshi outcomes that need to be seeded into the database.
+
+Done looks like
+
+A web app is live at the root URL with a parlay builder interface
+Historical matches from the uploaded transcriptions are seeded into the database (tournament, players, predicted winner, grade, score, validation %, risk %, removal %, agreement %, surface, recommendation, and actual outcome where known)
+A "History" view shows all past predictions with their outcomes and lets the user filter by grade, strength, surface, recommendation tier, and score range
+A "Calibration" panel shows win-rate breakdowns by grade (A–F), strength tier, and score bucket (e.g. 70+, 60–69, 50–59, below 50) so the user can see which tier actually hits and at what rate
+A "Parlay Builder" view lets the user add today's matches (entering the same fields), see how similar past matches performed, and build a multi-leg parlay with an estimated combined confidence
+Matches with KEEP, BORDERLINE, and REMOVE recommendations are visually distinct
+Data warnings (Very Limited Match History, Insufficient Data) are recorded and shown in history
+Out of scope
+
+Automated live data fetching from external tennis APIs (manual entry for now)
+Kalshi account integration or real-money bet placement
+Player profile pages or head-to-head deep dives
+Steps
+
+Database schema — Create tables for matches (tournament, player_a, player_b, predicted_winner, surface, recommendation, strength, grade, score, validation_pct, risk_pct, removal_pct, coverage_pct, agreement_pct, warning_type, warning_detail, match_date, actual_winner, outcome) and parlay_entries (a saved parlay of selected matches with an overall combined confidence).
+API routes — Build REST endpoints: GET/POST matches, GET calibration stats (grouped by grade/strength/score bucket), GET/POST parlays.
+Seed data — Seed the database with all historical matches extracted from the uploaded transcription files, including all known Kalshi outcomes (WON/LOST) and statuses from Part 3.
+History view — Build a filterable, sortable table of all historical predictions with outcome badges (WON / LOST / Pending), grade chips, and warning indicators.
+Calibration panel — Build stat cards and a simple bar/table showing win rate per grade tier, per strength tier, and per score bucket — calculated live from the seeded + user-added history.
+Parlay Builder view — Build a form for entering a new match's prediction metrics, a panel showing "similar past matches" (same grade or score range) and their hit rate, and a multi-leg parlay card that accumulates selected picks and displays a combined confidence estimate.
+Relevant files
+
+attached_assets/Pasted--PART-1-TRANSCRIPTION-START--1785110029072_1785110029072.txt
+attached_assets/Pasted--PART-1-TRANSCRIPTION-CONTINUED-RESPONSE-2--17851100153_1785110015391.txt
+attached_assets/Pasted--PART-1-TRANSCRIPTION-CONTINUED-RESPONSE-3--17851099949_1785109994971.txt
+attached_assets/Pasted--PART-2-TRANSCRIPTION-RESPONSE-4--1785110067709_1785110067710.txt
+attached_assets/Pasted--PART-2-TRANSCRIPTION-RESPONSE-5--1785110082161_1785110082161.txt
+attached_assets/Pasted--PART-2-TRANSCRIPTION-RESPONSE-6--1785110131814_1785110131815.txt
+attached_assets/Pasted--PART-2-TRANSCRIPTION-RESPONSE-7--1785110154614_1785110154616.txt
+attached_assets/Pasted--PART-3-TRANSCRIPTION-RESPONSE-8--1785110200893_1785110200894.txt
+lib/db/src/schema/index.ts
+lib/api-spec/openapi.yaml
+artifacts/api-server/src/routes/index.ts

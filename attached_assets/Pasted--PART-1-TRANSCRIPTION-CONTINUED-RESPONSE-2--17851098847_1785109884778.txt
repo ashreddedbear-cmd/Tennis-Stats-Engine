@@ -1,0 +1,597 @@
+========================================
+PART 1 — TRANSCRIPTION (CONTINUED)
+RESPONSE 2
+========================================
+
+MATCH 13
+----------------------------------------
+Recommendation:
+KEEP
+
+Strength:
+STRONG
+
+Grade:
+C
+
+Score:
+58/100
+
+Tournament:
+ATP Challenger Winnipeg
+
+Match:
+Mochizuki vs Draxl
+
+Predicted Winner:
+Mochizuki
+
+Validation:
+58%
+
+Risk:
+31%
+
+Removal:
+38%
+
+Coverage:
+70%
+
+Agreement:
+67% (6/9)
+
+Surface:
+Hard
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 14
+----------------------------------------
+Recommendation:
+KEEP
+
+Strength:
+STRONG
+
+Grade:
+B
+
+Score:
+63/100
+
+Tournament:
+ATP Challenger Winnipeg
+
+Match:
+Gojo vs Mayo
+
+Predicted Winner:
+Gojo
+
+Validation:
+63%
+
+Risk:
+24%
+
+Removal:
+32%
+
+Coverage:
+70%
+
+Agreement:
+86% (6/7)
+
+Surface:
+Hard
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 15
+----------------------------------------
+Recommendation:
+KEEP
+
+Strength:
+ELITE
+
+Grade:
+B
+
+Score:
+67/100
+
+Tournament:
+ATP Challenger Winnipeg
+
+Match:
+Tobon vs Samuels
+
+Predicted Winner:
+Tobon
+
+Validation:
+67%
+
+Risk:
+18%
+
+Removal:
+25%
+
+Coverage:
+70%
+
+Agreement:
+89% (8/9)
+
+Surface:
+Hard
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 16
+----------------------------------------
+Recommendation:
+KEEP
+
+Strength:
+STRONG
+
+Grade:
+C
+
+Score:
+61/100
+
+Tournament:
+ATP Challenger Winnipeg
+
+Match:
+Poljicak vs Schoolkate
+
+Predicted Winner:
+Poljicak
+
+Validation:
+61%
+
+Risk:
+29%
+
+Removal:
+34%
+
+Coverage:
+70%
+
+Agreement:
+78% (7/9)
+
+Surface:
+Hard
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 17
+----------------------------------------
+Recommendation:
+KEEP
+
+Strength:
+STRONG
+
+Grade:
+C
+
+Score:
+57/100
+
+Tournament:
+ATP Challenger Segovia
+
+Match:
+Martinez vs Skatov
+
+Predicted Winner:
+Martinez
+
+Validation:
+57%
+
+Risk:
+33%
+
+Removal:
+37%
+
+Coverage:
+70%
+
+Agreement:
+67% (6/9)
+
+Surface:
+Hard
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 18
+----------------------------------------
+Recommendation:
+KEEP
+
+Strength:
+STRONG
+
+Grade:
+B
+
+Score:
+64/100
+
+Tournament:
+ATP Challenger Segovia
+
+Match:
+Dellien vs Djere
+
+Predicted Winner:
+Djere
+
+Validation:
+64%
+
+Risk:
+20%
+
+Removal:
+29%
+
+Coverage:
+70%
+
+Agreement:
+89% (8/9)
+
+Surface:
+Clay
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 19
+----------------------------------------
+Recommendation:
+BORDERLINE
+
+Strength:
+MODERATE
+
+Grade:
+C
+
+Score:
+52/100
+
+Tournament:
+ATP Washington
+
+Match:
+Michelsen vs Tien
+
+Predicted Winner:
+Michelsen
+
+Validation:
+52%
+
+Risk:
+43%
+
+Removal:
+45%
+
+Coverage:
+70%
+
+Agreement:
+56% (5/9)
+
+Surface:
+Hard
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 20
+----------------------------------------
+Recommendation:
+KEEP
+
+Strength:
+ELITE
+
+Grade:
+A
+
+Score:
+71/100
+
+Tournament:
+ATP Washington
+
+Match:
+Rublev vs Darderi
+
+Predicted Winner:
+Rublev
+
+Validation:
+71%
+
+Risk:
+16%
+
+Removal:
+21%
+
+Coverage:
+70%
+
+Agreement:
+100% (9/9)
+
+Surface:
+Hard
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 21
+----------------------------------------
+Recommendation:
+KEEP
+
+Strength:
+STRONG
+
+Grade:
+B
+
+Score:
+66/100
+
+Tournament:
+ATP Washington
+
+Match:
+Tsitsipas vs Quinn
+
+Predicted Winner:
+Tsitsipas
+
+Validation:
+66%
+
+Risk:
+19%
+
+Removal:
+27%
+
+Coverage:
+70%
+
+Agreement:
+89% (8/9)
+
+Surface:
+Hard
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 22
+----------------------------------------
+Recommendation:
+KEEP
+
+Strength:
+STRONG
+
+Grade:
+B
+
+Score:
+65/100
+
+Tournament:
+ATP Washington
+
+Match:
+Paul vs Walton
+
+Predicted Winner:
+Paul
+
+Validation:
+65%
+
+Risk:
+22%
+
+Removal:
+29%
+
+Coverage:
+70%
+
+Agreement:
+89% (8/9)
+
+Surface:
+Hard
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 23
+----------------------------------------
+Recommendation:
+KEEP
+
+Strength:
+STRONG
+
+Grade:
+C
+
+Score:
+60/100
+
+Tournament:
+ATP Washington
+
+Match:
+Nakashima vs Vukic
+
+Predicted Winner:
+Nakashima
+
+Validation:
+60%
+
+Risk:
+30%
+
+Removal:
+35%
+
+Coverage:
+70%
+
+Agreement:
+78% (7/9)
+
+Surface:
+Hard
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 24
+----------------------------------------
+Recommendation:
+REMOVE
+
+Strength:
+WEAK
+
+Grade:
+D
+
+Score:
+39/100
+
+Tournament:
+WTA Prague
+
+Match:
+(As displayed in screenshot)
+
+Predicted Winner:
+(As displayed)
+
+Validation:
+39%
+
+Risk:
+54%
+
+Removal:
+58%
+
+Coverage:
+70%
+
+Agreement:
+Low
+
+Surface:
+Hard
+
+Warning:
+Very Limited Match History
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+END OF RESPONSE 2

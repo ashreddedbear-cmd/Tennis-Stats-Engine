@@ -39,12 +39,17 @@ export interface CalibrationPoint {
 }
 
 /**
- * The reliability-bucket boundaries the Accuracy dashboard uses for display (distance from a
- * coin flip toward the predicted winner: 50-54.9%, ..., 80%+). Defined here (not in metrics.ts)
- * so calibration fitting can reuse the exact same boundaries without a circular import --
- * metrics.ts imports this constant back for its own display bucketing.
+ * 5%-wide reliability-bucket boundaries for both display (calibration chart / table) and for
+ * the calibration-fitting full-range grid. Defined here (not in metrics.ts) so calibration
+ * fitting can reuse the exact same boundaries without a circular import — metrics.ts imports
+ * this constant for its own bucketing.
+ *
+ * Previously [50,55,60,65,70,75,80,100] — expanded to 5% bands through 100 so the high-
+ * confidence tail (80–100%) gets the same granularity as lower bands.
+ * These edges are identical to what was `ECE_BUCKET_EDGES` in metrics.ts, so that constant
+ * has been removed and this one is used everywhere.
  */
-export const BUCKET_EDGES = [50, 55, 60, 65, 70, 75, 80, 100];
+export const BUCKET_EDGES = [50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100];
 
 /**
  * Same interval structure as `BUCKET_EDGES`, mirrored around 50 so it spans the full 0-1

@@ -38,6 +38,7 @@ function normalizePredictionInsert(values: InsertPrediction): InsertPrediction {
     actualWinnerName: values.actualWinnerName ?? null,
     decisionTrace: values.decisionTrace ?? null,
     resolvedAt: values.resolvedAt ?? null,
+    clerkUserId: values.clerkUserId ?? null,
   };
 }
 

@@ -1,0 +1,110 @@
+Here's that follow-up prompt again — the one for Phase 4, which Replit claimed was done but isn't in the code:
+
+---
+
+**Follow-up for Replit — Phase 4 was not applied**
+
+Phases 1 and 2 are confirmed done (tie-break cascade fix in `tieBreakers.ts`; walk-forward fold/held-out-segment logic exists in `walkForward.ts`). **Phase 4 was not applied** — `src/services/parlayBuilder/builderScoringService.ts` still contains only the original risk-score block. None of the closeness-floor logic (`closenessScore`, `preClosenessRisk`, `riskFloor`, `matchupCloseness`) exists in the file, and the import-boundary safeguard between Parlay Builder and Prediction Engine was never added anywhere in the repo.
+
+Please apply this now, exactly as specified:
+
+1. Apply this diff to `src/services/parlayBuilder/builderScoringService.ts` — do not modify the logic, only integrate it. Do not touch any file under `predictionEngine/`.
+
+Find:
+```
+  // ── 5. Risk Score (independent calculation) ───────────────────────────────
+
+  let risk = 35; // baseline
+
+  // Raise risk for negative signals
+  if (sel.recentWinRate < 0.4) risk += 12;
+  if (surface && sel.surfaceWinRate < 0.4 && sel.surfaceTotal >= 5) risk += 10;
+  if (marketOdds != null && 1 / marketOdds < 0.42) risk += 18;
+  if (selDaysRest != null && selDaysRest <= 1) risk += 10;
+  if (sel.retirementRate > 0.12) risk += 8;
+  if (opp.recentWinRate > 0.7) risk += 8;
+  if (sel.total < 10) risk += 12;  // insufficient data = more risk
+  if (dataCoverage < 60) risk += 10;
+
+  // Lower risk for positive signals
+  if (sel.winRate > 0.65 && sel.total >= 15) risk -= 10;
+  if (surface && sel.surfaceWinRate > 0.65 && sel.surfaceTotal >= 8) risk -= 10;
+  if (agreementRate > 0.75) risk -= 8;
+  if (marketOdds != null && 1 / marketOdds > 0.60) risk -= 12;
+  if (selRank != null && oppRank != null && selRank < oppRank * 0.5) risk -= 8;
+
+  const riskScore = clamp(Math.round(risk), 0, 100);
+```
+
+Replace with:
+```
+  // ── 5. Risk Score (independent calculation) ───────────────────────────────
+
+  let risk = 35; // baseline
+
+  // Raise risk for negative signals
+  if (sel.recentWinRate < 0.4) risk += 12;
+  if (surface && sel.surfaceWinRate < 0.4 && sel.surfaceTotal >= 5) risk += 10;
+  if (marketOdds != null && 1 / marketOdds < 0.42) risk += 18;
+  if (selDaysRest != null && selDaysRest <= 1) risk += 10;
+  if (sel.retirementRate > 0.12) risk += 8;
+  if (opp.recentWinRate > 0.7) risk += 8;
+  if (sel.total < 10) risk += 12;  // insufficient data = more risk
+  if (dataCoverage < 60) risk += 10;
+
+  // Lower risk for positive signals
+  if (sel.winRate > 0.65 && sel.total >= 15) risk -= 10;
+  if (surface && sel.surfaceWinRate > 0.65 && sel.surfaceTotal >= 8) risk -= 10;
+  if (agreementRate > 0.75) risk -= 8;
+  if (marketOdds != null && 1 / marketOdds > 0.60) risk -= 12;
+  if (selRank != null && oppRank != null && selRank < oppRank * 0.5) risk -= 8;
+
+  const preClosenessRisk = clamp(Math.round(risk), 0, 100);
+
+  // ── 5b. Matchup Closeness Floor ─────────────────────────────────────────
+  // Bug found 2026-07 (K. Day vs. M. Hontama, WTA 125 Vancouver): the risk formula above only
+  // rewards "conventional favorite" stats and never checks how close the two players actually
+  // are. This computes an independent closeness signal (win rate gap, surface win rate gap,
+  // market-implied probability, ranking gap) and uses it as a FLOOR, not an offsettable bonus.
+
+  const closenessSignals: number[] = [];
+
+  const winRateGap = Math.abs(sel.winRate - opp.winRate);
+  closenessSignals.push(clamp(Math.round((1 - winRateGap / 0.4) * 100), 0, 100));
+
+  if (surface && sel.surfaceTotal >= 5 && opp.surfaceTotal >= 5) {
+    const surfaceGap = Math.abs(sel.surfaceWinRate - opp.surfaceWinRate);
+    closenessSignals.push(clamp(Math.round((1 - surfaceGap / 0.4) * 100), 0, 100));
+  }
+
+  if (marketOdds != null) {
+    const impliedProb = 1 / marketOdds;
+    closenessSignals.push(clamp(Math.round((1 - Math.abs(impliedProb - 0.5) * 2) * 100), 0, 100));
+  }
+
+  if (selRank != null && oppRank != null) {
+    const relGap = Math.abs(selRank - oppRank) / Math.max(selRank, oppRank);
+    closenessSignals.push(clamp(Math.round((1 - relGap) * 100), 0, 100));
+  }
+
+  const closenessScore = closenessSignals.length > 0
+    ? Math.round(closenessSignals.reduce((s, v) => s + v, 0) / closenessSignals.length)
+    : 50;
+
+  let riskFloor = 0;
+  if (closenessScore >= 80) riskFloor = 55;
+  else if (closenessScore >= 65) riskFloor = 40;
+
+  const riskScore = clamp(Math.max(preClosenessRisk, riskFloor), 0, 100);
+```
+
+Then in the return block, right after `riskScore,` add:
+```
+    matchupCloseness: closenessScore, // new -- surface this on the card so it's not a silent internal-only number
+```
+
+2. Add a build-time/test-time check that fails if any file under the Parlay Builder directory imports anything from the Prediction Engine directory or its results/history/calibration/cards tables. Run before every build and every test.
+
+3. Run the existing test suite and walk-forward evaluation job. Report before/after risk-score distributions and any test failures.
+
+4. Paste back the actual `git diff` — not a status report — so this can be verified the same way Phases 1–2 were, instead of taking your word for it.

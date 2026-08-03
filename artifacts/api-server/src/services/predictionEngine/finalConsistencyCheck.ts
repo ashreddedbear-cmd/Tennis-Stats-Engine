@@ -35,8 +35,15 @@ export interface FinalConsistencyInput {
   upsetRisk: UpsetRisk;
   /** The upset-risk tier as recorded on the detailed breakdown object -- checked against `upsetRisk` above to catch the two ever silently diverging (rule 5, "single source of truth"). */
   upsetRiskBreakdownTier: UpsetRisk;
-  /** "STRONG_RECOMMENDATION" | "MODERATE_LEAN" | "HIGH_RISK" | "NO_STRONG_SIGNAL" | "DO_NOT_RECOMMEND" from recommendation.ts. Typed loosely here to avoid a circular import; validated as a plain string. */
+  /** "HIGHEST_CONFIDENCE" | "HIGH_CONFIDENCE" | "MODERATE_CONFIDENCE" | "LOW_CONFIDENCE" | "INSUFFICIENT_EDGE" from recommendation.ts (or legacy values for stored rows predating the rename). Typed loosely here to avoid a circular import; validated as a plain string. */
   recommendation: string;
+  /**
+   * True when all three primary signals — Surface Elo, Serve & Return, and Recent Form —
+   * independently point at the same player. Must be forwarded to `computeRecommendation` in
+   * Rule 10 so the freshness check uses the same inputs the original call used. Absent on rows
+   * that predate the coreSignalsAlign parameter — default false so those rows are not flagged.
+   */
+  coreSignalsAlign?: boolean;
   /** True when calibration/specialist/simulator blending flipped the pick away from the raw evidence vote (index.ts's `modelConflict`). */
   modelConflict: boolean;
   /** Non-null only when modelAgreement isn't "Strong" (disagreement.ts's `buildDisagreementNote` contract). */
@@ -133,25 +140,26 @@ export function checkFinalConsistency(input: FinalConsistencyInput): FinalConsis
     );
   }
 
-  // Rule 6: a Strong Recommendation is a confident directional claim -- it can never coexist with
-  // High/Extreme upset risk (genuine upset danger) or Mixed/HighDisagreement model agreement (the
-  // underlying models don't actually agree). `recommendation.ts` already gates STRONG_RECOMMENDATION
-  // on these same conditions structurally; this is a defense-in-depth check against future drift,
-  // mirroring how Rule 4 already guards the separate Elite tier claim.
-  if (input.recommendation === "STRONG_RECOMMENDATION") {
-    if (input.upsetRisk === "HIGH" || input.upsetRisk === "EXTREME") {
-      violations.push(`Rule 6 (Strong Recommendation vs. upset risk): recommendation is STRONG_RECOMMENDATION while upsetRisk is ${input.upsetRisk}.`);
-    }
+  // Rule 6: HIGHEST_CONFIDENCE is the engine's top tier — it requires Strong model agreement by
+  // construction (`recommendation.ts` gates it on modelAgreement === "Strong"). Upset risk is NOT
+  // checked here because upset risk is no longer an input to computeRecommendation; it is a
+  // separate, independent signal. This rule guards only the model-agreement invariant.
+  if (input.recommendation === "HIGHEST_CONFIDENCE") {
     if (input.modelAgreement === "Mixed" || input.modelAgreement === "HighDisagreement") {
-      violations.push(`Rule 6 (Strong Recommendation vs. model agreement): recommendation is STRONG_RECOMMENDATION while modelAgreement is ${input.modelAgreement}.`);
+      violations.push(`Rule 6 (Highest Confidence vs. model agreement): recommendation is HIGHEST_CONFIDENCE while modelAgreement is ${input.modelAgreement} -- HIGHEST_CONFIDENCE requires Strong model agreement.`);
     }
   }
 
-  // Rule 7: Elite tier is a strictly narrower, MORE demanding bar than a Strong Recommendation
-  // (eliteTier.ts's doc comment) -- it can never be true at the same time as NO_STRONG_SIGNAL
-  // ("the engine simply doesn't have a lean at all", recommendation.ts) or DO_NOT_RECOMMEND (data
-  // quality too poor to trust). Those two recommendation tiers are the opposite claim from Elite.
-  if (input.isEliteTier && (input.recommendation === "NO_STRONG_SIGNAL" || input.recommendation === "DO_NOT_RECOMMEND")) {
+  // Rule 7: Elite tier is a strictly narrower, MORE demanding bar than any confident recommendation
+  // (eliteTier.ts's doc comment) -- it can never be true at the same time as INSUFFICIENT_EDGE
+  // ("available evidence does not support a reliable directional pick", recommendation.ts). Also
+  // preserves backward-compat for the old tier names stored in pre-rename rows.
+  if (
+    input.isEliteTier &&
+    (input.recommendation === "INSUFFICIENT_EDGE" ||
+      input.recommendation === "NO_STRONG_SIGNAL" ||
+      input.recommendation === "DO_NOT_RECOMMEND")
+  ) {
     violations.push(`Rule 7 (Elite vs. recommendation): isEliteTier is true while recommendation is ${input.recommendation} -- Elite requires a real, well-supported lean.`);
   }
 
@@ -200,10 +208,31 @@ export function checkFinalConsistency(input: FinalConsistencyInput): FinalConsis
   //    older version of `computeRecommendation`'s logic and never recomputed -- is flagged the
   //    moment `checkFinalConsistency` is re-run against it (e.g. via the live-ledger batch scan),
   //    even though nothing about that specific bug's root cause needs to be known in advance.
-  const expectedRecommendation = computeRecommendation(input.calibratedProbability, input.dataQuality, input.dataQualityLabel, input.upsetRisk, input.modelAgreement, input.tieBreakerApplied ?? false);
-  if (input.recommendation !== expectedRecommendation) {
+  // upsetRisk is intentionally NOT passed to computeRecommendation — it is a separate, independent
+  // signal that is no longer an input to the recommendation function (see recommendation.ts).
+  const expectedRecommendation = computeRecommendation(
+    input.calibratedProbability,
+    input.dataQuality,
+    input.dataQualityLabel,
+    input.modelAgreement,
+    input.tieBreakerApplied ?? false,
+    input.coreSignalsAlign ?? false,
+  );
+  // IMPORTANT: rows stored before the v2 rename keep their original recommendation value
+  // (STRONG_RECOMMENDATION, MODERATE_LEAN, etc.). Rule 10 exists to catch staleness in LIVE
+  // calls, not to retroactively flag every historical row. We skip the freshness check for any
+  // row whose stored recommendation is a legacy name — those should be audited via the
+  // recommendation-calibration shadow replay, not flagged as live violations on every read.
+  const legacyRecommendationValues = new Set([
+    "STRONG_RECOMMENDATION",
+    "MODERATE_LEAN",
+    "HIGH_RISK",
+    "NO_STRONG_SIGNAL",
+    "DO_NOT_RECOMMEND",
+  ]);
+  if (!legacyRecommendationValues.has(input.recommendation) && input.recommendation !== expectedRecommendation) {
     violations.push(
-      `Rule 10 (recommendation freshness): stored recommendation "${input.recommendation}" does not match what computeRecommendation currently produces ("${expectedRecommendation}") for calibratedProbability=${input.calibratedProbability}, dataQuality=${input.dataQuality}, dataQualityLabel=${input.dataQualityLabel}, upsetRisk=${input.upsetRisk}, modelAgreement=${input.modelAgreement} -- this recommendation is stale and was not recomputed under the current logic.`,
+      `Rule 10 (recommendation freshness): stored recommendation "${input.recommendation}" does not match what computeRecommendation currently produces ("${expectedRecommendation}") for calibratedProbability=${input.calibratedProbability}, dataQuality=${input.dataQuality}, dataQualityLabel=${input.dataQualityLabel}, modelAgreement=${input.modelAgreement}, tieBreakerApplied=${input.tieBreakerApplied ?? false}, coreSignalsAlign=${input.coreSignalsAlign ?? false} -- this recommendation is stale and was not recomputed under the current logic.`,
     );
   }
 
@@ -241,25 +270,22 @@ export function checkFinalConsistency(input: FinalConsistencyInput): FinalConsis
   }
 
   // Rule 12 (recommendation catch-all-gap): re-checks, independently of `computeRecommendation`,
-  // for exactly the margin 9-12 gap that recommendation.ts's own catch-all could mislabel as
-  // HIGH_RISK -- a real but modest lean (LOW/MODERATE upset risk, non-Mixed/HighDisagreement
-  // agreement) is not "genuine upset danger" (HIGH_RISK's documented meaning). Deliberately
-  // hardcodes the expected outcome here rather than calling `computeRecommendation` (that's
-  // already Rule 10's job): if a FUTURE change reopens this exact branch inside
-  // `computeRecommendation` itself, Rule 10 alone could not catch it -- it would just recompute
-  // the same newly-buggy value and "match". This rule stands guard against that regression
-  // specifically, independent of whatever `computeRecommendation`'s current implementation does.
+  // that margin 9-12 with Strong agreement never falls through to LOW_CONFIDENCE. Deliberately
+  // hardcodes the expected outcome rather than calling `computeRecommendation` (that's Rule 10's
+  // job): if a FUTURE change reopens this exact branch inside `computeRecommendation` itself,
+  // Rule 10 alone could not catch it — it would just recompute the same newly-buggy value and
+  // "match". This rule stands guard independently, regardless of whatever the current
+  // `computeRecommendation` implementation does. upsetRisk is intentionally NOT checked here
+  // because it is no longer an input to computeRecommendation.
   const catchAllGapMargin = Math.abs(input.calibratedProbability - 50);
   if (
     catchAllGapMargin >= 9 &&
     catchAllGapMargin < 12 &&
-    (input.upsetRisk === "LOW" || input.upsetRisk === "MODERATE") &&
-    input.modelAgreement !== "Mixed" &&
-    input.modelAgreement !== "HighDisagreement" &&
-    input.recommendation === "HIGH_RISK"
+    input.modelAgreement === "Strong" &&
+    input.recommendation === "LOW_CONFIDENCE"
   ) {
     violations.push(
-      `Rule 12 (recommendation catch-all gap): recommendation is HIGH_RISK for a margin-${catchAllGapMargin.toFixed(1)} pick (calibratedProbability=${input.calibratedProbability}) with upsetRisk=${input.upsetRisk} and modelAgreement=${input.modelAgreement} -- a modest real lean like this is not genuine upset danger and must never fall into the HIGH_RISK catch-all.`,
+      `Rule 12 (recommendation catch-all gap): recommendation is LOW_CONFIDENCE for a margin-${catchAllGapMargin.toFixed(1)} pick (calibratedProbability=${input.calibratedProbability}) with modelAgreement=${input.modelAgreement} -- a real lean with Strong model agreement and margin ≥ 9 must be at least HIGH_CONFIDENCE, not LOW_CONFIDENCE.`,
     );
   }
 

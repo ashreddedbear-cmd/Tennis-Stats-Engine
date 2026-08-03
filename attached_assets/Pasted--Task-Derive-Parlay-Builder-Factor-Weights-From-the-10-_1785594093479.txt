@@ -1,0 +1,34 @@
+**Task — Derive Parlay Builder Factor Weights From the 10,000-Match Backfill (Replace Hand-Set DEFAULT_WEIGHTS)**
+
+**What & Why**
+
+`DEFAULT_WEIGHTS` in `builderScoringService.ts` is a hand-set table (overallAdvantage 0.18, surfaceAdvantage 0.10, etc.) — nobody's ever fit these against real outcomes. The Prediction Engine already solved this exact problem for its own ensemble: `ENSEMBLE_WEIGHT_PRIOR` in `dataQuality.ts` was derived from a real leave-one-out ablation study, not guessed. The Parlay Builder should get the same treatment now that the 10,000-match backfill gives enough sample size to do it properly — the earlier 1,500-leg calibration run already found real problems (Recent Form and Surface Record showing *negative* edge from double-counting; several factors returning flat neutral-50 for lack of live data) but n=23 for H2H's headline finding was too thin to act on with confidence. This backfill fixes that.
+
+**Done looks like**
+
+- A script that runs a leave-one-out ablation over the 10,000-match backfill: for each factor in `DEFAULT_WEIGHTS`, compute accuracy/log-loss with the factor included vs. excluded from the vote, the same methodology the Prediction Engine already uses.
+- A report showing, per factor: real sample size (how many rows the factor actually had live data for, not neutral-default), directional edge (pp), and accuracy/log-loss delta when removed.
+- `DEFAULT_WEIGHTS` updated to reflect the ablation results — factors with confirmed negative or negligible edge (starting candidates: Recent Form, Surface Record, Hard Advantage, Tournament Experience, Overall Win Rate) get weight reduced to near-zero or removed from the vote entirely; factors with confirmed real edge get weight scaled up accordingly.
+- The `sourceAgreement` vote-count mechanism itself is reviewed against this data — if the ablation shows equal-weight voting doesn't reflect real predictive value even after reweighting individual factors, note that as a separate follow-up rather than silently patching it here.
+- Old vs. new weight table both documented in a findings doc (mirroring `.agents/memory/parlay-calibration-findings.md`'s format) so this doesn't need to be re-derived from scratch next time data volume grows again.
+
+**Out of scope**
+
+- Changing the KEEP/BORDERLINE/REJECT decision thresholds (validationScore/riskScore/coverage cutoffs) — this task only touches which factors get how much weight, not what score triggers what label.
+- Re-running the coverage-ceiling or same-day-fatigue verification — already confirmed separately; this backfill is a good opportunity to spot-check those at scale but isn't the primary goal here.
+- Touching the Prediction Engine's own `ENSEMBLE_WEIGHT_PRIOR` — that's a separate, already-validated system.
+
+**Steps**
+
+1. Confirm the 10,000-match backfill has actually landed and has real (non-neutral-default) data coverage for a meaningful share of the previously-neutral factors — Strength of Schedule, Market Consensus, Ranking Trend, Rest & Fatigue, Injury Risk, Historical Consistency/Volatility. Report actual per-factor sample counts before doing anything else; if most factors still return neutral-50 across the new data too, that's itself the finding (means the ablation depends on a live-data gap, not sample size, and adding more data won't fix it).
+2. Build the leave-one-out ablation script (reuse the standard `ablation.ts` framework's approach if applicable, or a Parlay-Builder-specific version if the standard one doesn't apply to this scoring path).
+3. Run it across the full 10,000-match set, per factor.
+4. Update `DEFAULT_WEIGHTS` based on results — set near-zero/remove for confirmed dead-weight factors, scale others based on their measured edge.
+5. Re-run `analyzeParlayCalibration.ts` with the new weights against a held-out slice (not the same rows used to fit the weights) to confirm the overall win rate improves from the prior 53.3% baseline — this is the real pass/fail check, not just individual factor deltas looking better in isolation.
+6. Document old weights vs. new weights and the supporting numbers in `.agents/memory/parlay-calibration-findings.md` so this is traceable later.
+
+**Relevant files**
+
+- `artifacts/api-server/src/services/parlayBuilder/builderScoringService.ts`
+- `artifacts/api-server/src/scripts/analyzeParlayCalibration.ts`
+- `.agents/memory/parlay-calibration-findings.md`

@@ -1,0 +1,399 @@
+# TASK 105 – Independent Parlay Builder System (Part 4)
+
+# Auto Parlay Builder
+
+The Auto Builder must operate independently from the Prediction Engine.
+
+It may only use Builder results.
+
+Never use Engine Confidence, Engine Recommendation, or Engine Probability when selecting legs.
+
+---
+
+# Auto Build Options
+
+Create the following builder modes:
+
+• Best 3
+
+• Best 5
+
+• Best 8
+
+• Best 10
+
+• Highest Validation
+
+• Lowest Risk
+
+• Highest Reliability
+
+• Highest Stability
+
+• Highest Source Agreement
+
+• Lowest Volatility
+
+---
+
+# Auto Build Rules
+
+Default rules:
+
+Only KEEP legs are eligible.
+
+Never include REMOVE legs.
+
+BORDERLINE legs may only be included if enabled by the administrator.
+
+Do not duplicate the same match.
+
+Do not include duplicate players.
+
+Avoid correlated risk whenever possible.
+
+Warn when several selections come from the same tournament.
+
+Warn when several selections depend heavily on one external source.
+
+---
+
+# Builder Selection Priority
+
+When selecting between two KEEP legs:
+
+Prefer:
+
+Higher Validation Score
+
+↓
+
+Lower Risk Score
+
+↓
+
+Higher Reliability
+
+↓
+
+Higher Source Agreement
+
+↓
+
+Higher Data Coverage
+
+↓
+
+Lower Historical Volatility
+
+↓
+
+Lower Injury Risk
+
+↓
+
+Better Surface Matchup
+
+↓
+
+Better Recent Form
+
+---
+
+# Leg Card
+
+Every match card must display:
+
+Player
+
+Opponent
+
+Tournament
+
+Tour
+
+Round
+
+Surface
+
+Scheduled Time
+
+Validation Score
+
+Risk Score
+
+Reliability Grade
+
+Parlay Grade
+
+Removal Probability
+
+KEEP / BORDERLINE / REMOVE
+
+Data Coverage
+
+Source Agreement
+
+Critical Flags
+
+Builder Version
+
+---
+
+# Expandable Details
+
+Each leg should have expandable sections.
+
+## Validation Sources
+
+Tennis Abstract
+
+UTR
+
+ATP/WTA/ITF
+
+Recent Form
+
+Surface Analysis
+
+Head-to-Head
+
+Market Consensus
+
+Travel & Fatigue
+
+Injuries
+
+Data Quality
+
+Engine Output (Reference Only)
+
+---
+
+# Builder Summary
+
+Display:
+
+Total Legs
+
+KEEP Legs
+
+BORDERLINE Legs
+
+REMOVE Legs
+
+Average Validation Score
+
+Average Risk Score
+
+Average Reliability
+
+Average Data Coverage
+
+Overall Parlay Grade
+
+Expected Stability
+
+Builder Version
+
+Session Date
+
+---
+
+# Filtering
+
+Allow filtering by:
+
+KEEP
+
+REMOVE
+
+BORDERLINE
+
+Validation Score
+
+Risk Score
+
+Reliability Grade
+
+Parlay Grade
+
+Tournament
+
+Tour
+
+Surface
+
+Source Agreement
+
+Data Coverage
+
+Critical Flags
+
+Builder Version
+
+---
+
+# Sorting
+
+Allow sorting by:
+
+Highest Validation
+
+Lowest Validation
+
+Lowest Risk
+
+Highest Risk
+
+Highest Reliability
+
+Highest Source Agreement
+
+Highest Data Coverage
+
+Tournament
+
+Surface
+
+Match Time
+
+---
+
+# Session History
+
+Store every Builder session separately from Prediction History.
+
+Save:
+
+Session ID
+
+Uploaded Screenshot
+
+OCR Results
+
+Resolved Matches
+
+Builder Snapshot
+
+Validation Scores
+
+Risk Scores
+
+Reliability Grades
+
+Parlay Grades
+
+Removal Probability
+
+KEEP / REMOVE Decisions
+
+Decision Reasons
+
+Generated Parlays
+
+Builder Version
+
+Configuration Version
+
+Date Created
+
+Date Updated
+
+---
+
+# Rescoring
+
+Allow old sessions to be rescored using newer Builder configurations.
+
+Never overwrite historical results.
+
+Instead:
+
+Original Score → Version 1
+
+New Score → Version 2
+
+Store both.
+
+---
+
+# Builder Independence Test
+
+Verify:
+
+Changing Builder weights
+
+MUST NOT
+
+change Prediction Engine outputs.
+
+Changing Prediction Engine calibration
+
+MUST NOT
+
+change Builder Validation Scores.
+
+Prediction Engine and Builder must remain permanently isolated.
+
+---
+
+# Acceptance Criteria
+
+Task 105 is complete only if:
+
+✓ Builder uses only Builder scoring.
+
+✓ Prediction Engine remains untouched.
+
+✓ Builder validates using Tennis Abstract, UTR, ATP, WTA, ITF, Recent Form, Surface Analysis, Head-to-Head, Market Consensus, Injuries, and Travel/Fatigue.
+
+✓ KEEP/REMOVE decisions are fully independent.
+
+✓ Every decision includes evidence-based reasons.
+
+✓ Auto Builder never uses Prediction Engine confidence.
+
+✓ Builder sessions are stored separately.
+
+✓ Builder can evolve without modifying the Prediction Engine.
+
+## FINAL ARCHITECTURE
+
+Prediction Engine
+
+↓
+
+Read-Only Builder Snapshot
+
+↓
+
+Independent Validation Sources
+
+↓
+
+Independent Builder Scoring
+
+↓
+
+KEEP / BORDERLINE / REMOVE
+
+↓
+
+Auto Parlay Builder
+
+↓
+
+Session History
+
+No shared scoring.
+
+No shared logic.
+
+No write-back.
+
+No Engine influence.
+
+The Prediction Engine predicts.
+
+The Independent Parlay Builder judges.

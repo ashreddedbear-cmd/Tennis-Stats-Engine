@@ -144,6 +144,39 @@ test("deriveMatchSeed: differs when surface, format, or either player differs", 
   assert.notEqual(deriveMatchSeed("p1", "p2", "Hard", "BestOf5"), base, "a different match format must be a different match");
 });
 
+test("runMatchSimulation: player1WinProbability, rangeLow, rangeHigh never hit exactly 0% or 100%", () => {
+  // When DB-backed match history gives strong surface Elo to a dominant player, service-point
+  // inputs can reach their clamp bounds and drive meanWinRate to ≥0.9995, which
+  // Math.round(x * 1000) / 10 rounds to exactly 100.0 — a rounding artefact, not real certainty.
+  // The safeRate cap in runMatchSimulation must prevent this for all realistic inputs.
+  const cases: Array<{ p1: number; p2: number; label: string }> = [
+    { p1: 0.82, p2: 0.45, label: "extreme favourite (p1 at upper clamp, p2 at lower clamp)" },
+    { p1: 0.45, p2: 0.82, label: "extreme underdog" },
+    { p1: 0.92, p2: 0.30, label: "absolute clamp bounds from jitter expansion" },
+    { p1: 0.63, p2: 0.63, label: "symmetric 50/50 baseline" },
+    { p1: 0.75, p2: 0.55, label: "moderate favourite" },
+  ];
+
+  for (const { p1, p2, label } of cases) {
+    const estimate: ServicePointEstimate = { player1ServicePointProbability: p1, player2ServicePointProbability: p2, reliability: 90, note: "test" };
+    const result = runMatchSimulation(estimate, "BestOf3", { seed: 99, outerDraws: 200, innerSimulationsPerDraw: 100 });
+    assert.ok(result.player1WinProbability > 0, `player1WinProbability must be > 0 for: ${label} (got ${result.player1WinProbability})`);
+    assert.ok(result.player1WinProbability < 100, `player1WinProbability must be < 100 for: ${label} (got ${result.player1WinProbability})`);
+    assert.ok(result.rangeLow < 100, `rangeLow must be < 100 for: ${label} (got ${result.rangeLow})`);
+    assert.ok(result.rangeHigh < 100, `rangeHigh must be < 100 for: ${label} (got ${result.rangeHigh})`);
+    assert.ok(result.rangeLow > 0, `rangeLow must be > 0 for: ${label} (got ${result.rangeLow})`);
+    assert.ok(result.straightSetsProbabilityPlayer1 > 0, `straightSetsProbabilityPlayer1 must be > 0 for: ${label} (got ${result.straightSetsProbabilityPlayer1})`);
+    assert.ok(result.straightSetsProbabilityPlayer1 < 100, `straightSetsProbabilityPlayer1 must be < 100 for: ${label} (got ${result.straightSetsProbabilityPlayer1})`);
+    assert.ok(result.straightSetsProbabilityPlayer2 > 0, `straightSetsProbabilityPlayer2 must be > 0 for: ${label} (got ${result.straightSetsProbabilityPlayer2})`);
+    assert.ok(result.straightSetsProbabilityPlayer2 < 100, `straightSetsProbabilityPlayer2 must be < 100 for: ${label} (got ${result.straightSetsProbabilityPlayer2})`);
+  }
+
+  // Symmetric case must stay in realistic range
+  const symEstimate: ServicePointEstimate = { player1ServicePointProbability: 0.63, player2ServicePointProbability: 0.63, reliability: 80, note: "test" };
+  const symResult = runMatchSimulation(symEstimate, "BestOf3", { seed: 1, outerDraws: 150, innerSimulationsPerDraw: 80 });
+  assert.ok(symResult.player1WinProbability >= 45 && symResult.player1WinProbability <= 55, `symmetric matchup must stay within [45,55], got ${symResult.player1WinProbability}`);
+});
+
 test("re-predicting the exact same match twice produces an identical simulated outcome", () => {
   const estimate: ServicePointEstimate = { player1ServicePointProbability: 0.63, player2ServicePointProbability: 0.6, reliability: 70, note: "test" };
   const seed = deriveMatchSeed("alice", "bob", "Clay", "BestOf3");

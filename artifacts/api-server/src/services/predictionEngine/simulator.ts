@@ -286,6 +286,11 @@ export function runMatchSimulation(estimate: ServicePointEstimate, matchFormat: 
 
   const meanWinRate = drawWinRates.reduce((s, w) => s + w, 0) / drawWinRates.length;
 
+  // Cap before rounding: service-point inputs near their clamp bounds can drive meanWinRate to
+  // ≥0.9995, which Math.round(x * 1000) / 10 rounds to exactly 100.0. That's a rounding
+  // artefact, not a real certainty — cap to [0.001, 0.999] so the display never shows 100%/0%.
+  const safeRate = (r: number) => Math.max(0.001, Math.min(0.999, r));
+
   const setScoreDistribution = Array.from(setScoreCounts.entries())
     .map(([key, count]) => {
       const [score, favors] = key.split("|") as [string, "player1" | "player2"];
@@ -294,11 +299,12 @@ export function runMatchSimulation(estimate: ServicePointEstimate, matchFormat: 
     .sort((a, b) => b.probability - a.probability);
 
   return {
-    player1WinProbability: Math.round(meanWinRate * 1000) / 10,
-    rangeLow: Math.round(percentile(0.1) * 1000) / 10,
-    rangeHigh: Math.round(percentile(0.9) * 1000) / 10,
-    straightSetsProbabilityPlayer1: Math.round((straightSetsPlayer1 / totalSims) * 1000) / 10,
-    straightSetsProbabilityPlayer2: Math.round((straightSetsPlayer2 / totalSims) * 1000) / 10,
+    player1WinProbability: Math.round(safeRate(meanWinRate) * 1000) / 10,
+    rangeLow: Math.round(safeRate(percentile(0.1)) * 1000) / 10,
+    rangeHigh: Math.round(safeRate(percentile(0.9)) * 1000) / 10,
+    // straightSets can hit 100 % in simulated dominant matchups — apply same safe cap.
+    straightSetsProbabilityPlayer1: Math.round(safeRate(straightSetsPlayer1 / totalSims) * 1000) / 10,
+    straightSetsProbabilityPlayer2: Math.round(safeRate(straightSetsPlayer2 / totalSims) * 1000) / 10,
     setScoreDistribution,
     expectedGamesPlayer1: Math.round((totalGamesPlayer1 / totalSims) * 10) / 10,
     expectedGamesPlayer2: Math.round((totalGamesPlayer2 / totalSims) * 10) / 10,

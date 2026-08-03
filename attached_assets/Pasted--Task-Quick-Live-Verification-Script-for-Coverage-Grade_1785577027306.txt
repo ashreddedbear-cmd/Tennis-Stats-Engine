@@ -1,0 +1,33 @@
+**Task — Quick Live Verification Script for Coverage/Grade/Risk Fix (no backfill wait)**
+
+**What & Why**
+
+The coverage-ceiling and same-day-fatigue fixes just shipped, but `analyzeParlayCalibration.ts` reads `data_coverage` from `parlay_leg_outcomes`, which only reflects legs created *after* the fix — that table won't show a real before/after shift for days/weeks. We don't need historical backfill data to verify this; we need to call the live scoring path directly against currently-available fixtures and print the results. This should take under a minute to run.
+
+**Done looks like**
+
+- A standalone script (`verifyScoringFix.ts` or similar) that calls the same scoring function the Parlay Builder UI uses (`builderScoringService.ts`'s exported scoring function) directly against a batch of current/live fixtures — not through the DB, not waiting on stored legs.
+- Console output is a simple table: match name, coverage%, grade, risk%, whether `criticalFlags` contains "may have played today".
+- Summary line at the bottom: count of matches by grade (A/B/C/D/F), min/max/avg coverage, and — critically — a direct comparison pair if one exists in the batch: a same-day-played match's risk vs. a similar non-flagged match's risk.
+- Runs against either (a) whatever fixtures the live provider chain currently returns, or (b) a hardcoded list of ~15-20 real matchups (can reuse names from the screenshots already on hand) if pulling fresh fixtures takes too long.
+- No new DB writes, no leg creation — pure read/compute/print.
+
+**Out of scope**
+
+- Any change to `builderScoringService.ts` itself (already done).
+- Waiting on or backfilling `parlay_leg_outcomes` — that's a separate, slower verification track for later.
+- Any UI changes.
+
+**Steps**
+
+1. Find the exported scoring function in `artifacts/api-server/src/services/parlayBuilder/builderScoringService.ts` (the one the Parlay Builder route calls per-card) and import it directly into a new script.
+2. Pull a batch of current fixtures the fastest way available — reuse whatever fetch the `/api/parlay/*` route already calls (composite provider), capped to ~20 matches, OR skip live fetch entirely and hardcode 15-20 `{selectedPlayerName, opponentName, surface, ...}` inputs matching real recent matchups if that's faster to wire up in the time box.
+3. Call the scoring function for each, collect `{name, dataCoverage, reliabilityGrade, riskScore, criticalFlags}`.
+4. Print a formatted table to console (a simple `console.table` is fine — this is a throwaway diagnostic, not a UI feature).
+5. Print summary stats: coverage min/max/avg, grade counts, and flag any match where `criticalFlags` includes "may have played today" alongside its riskScore so it's easy to eyeball whether the +18 fatigue penalty actually landed.
+6. Run it once, paste the output back — don't wire it into any scheduled job or route.
+
+**Relevant files**
+
+- `artifacts/api-server/src/services/parlayBuilder/builderScoringService.ts` (import the scoring function from here)
+- New file: `artifacts/api-server/src/scripts/verifyScoringFix.ts`

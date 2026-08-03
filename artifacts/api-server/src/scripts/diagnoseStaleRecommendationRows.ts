@@ -4,6 +4,7 @@
 // Usage: pnpm --filter @workspace/api-server exec tsx src/scripts/diagnoseStaleRecommendationRows.ts
 import { db, predictionsTable, pool } from "@workspace/db";
 import { computeRecommendation } from "../services/predictionEngine/recommendation";
+import type { ModelAgreement } from "../services/predictionEngine/ensemble";
 import type { EngineBreakdown } from "../services/predictionEngine";
 
 const TARGET_IDS = [4, 9, 10, 14, 15, 16, 19, 24];
@@ -16,7 +17,8 @@ async function main(): Promise<void> {
   for (const row of rows) {
     if (!TARGET_IDS.includes(row.id)) continue;
     const engine = row.engine as EngineBreakdown;
-    const recomputed = computeRecommendation(row.calibratedProbability, row.dataQuality, row.dataQualityLabel as never, row.upsetRisk as never, engine.modelAgreement);
+    // upsetRisk removed from computeRecommendation signature (v2 recommendation system, Task #102).
+    const recomputed = computeRecommendation(row.calibratedProbability, row.dataQuality, row.dataQualityLabel as never, engine.modelAgreement as ModelAgreement);
     console.log(`--- id ${row.id}: ${row.player1Name} vs ${row.player2Name} ---`);
     console.log(`  createdAt:            ${row.createdAt?.toISOString()}`);
     console.log(`  resolvedAt:           ${row.resolvedAt ? row.resolvedAt.toISOString() : "null (NOT resolved)"}`);
@@ -32,7 +34,8 @@ async function main(): Promise<void> {
   for (const row of rows) {
     const engine = row.engine as EngineBreakdown;
     if (!engine || typeof engine !== "object" || !("modelAgreement" in engine)) continue; // legacy rows without modelAgreement can't be recomputed the same way
-    const recomputed = computeRecommendation(row.calibratedProbability, row.dataQuality, row.dataQualityLabel as never, row.upsetRisk as never, engine.modelAgreement);
+    // upsetRisk removed from computeRecommendation signature (v2 recommendation system, Task #102).
+    const recomputed = computeRecommendation(row.calibratedProbability, row.dataQuality, row.dataQualityLabel as never, engine.modelAgreement as ModelAgreement);
     if (recomputed !== row.recommendation) {
       categoryMismatchCounts[row.recommendation] = (categoryMismatchCounts[row.recommendation] ?? 0) + 1;
       if (!TARGET_IDS.includes(row.id)) {

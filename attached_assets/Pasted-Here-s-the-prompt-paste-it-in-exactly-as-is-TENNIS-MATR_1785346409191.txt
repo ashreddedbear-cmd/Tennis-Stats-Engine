@@ -1,0 +1,31 @@
+Here's the prompt — paste it in exactly as-is.
+
+---
+
+**TENNIS MATRIX AI — VERIFICATION AND PARALLEL VALIDATION REQUEST**
+
+You've reported that Phases 1–5 of the improvement plan are implemented. Before this is considered done, produce concrete evidence for each phase — not a summary of what changed, the actual numbers.
+
+**Immediate historical backtest (do this now, don't wait on anything):**
+
+Run the full historical backtest against existing data for Phase 1 and Phase 2 specifically:
+
+- Re-measure accuracy for predictions that the tie-break cascade decides, split out by which module made the call (Serve & Return, Surface Elo, etc.), the same way the original Task #163 finding measured it. Report the new numbers directly next to the old ones (46.7%, 53.7%, 66.7% baseline) so I can see the before/after side by side.
+- Confirm this backtest is running against a genuinely held-out test segment, not data the model was also tuned on. Run the test suite twice in a row and confirm evaluation_runs still retains multiple folds after the second run, not wiped back to nothing.
+- Report total sample size used for this backtest, and flag if it's too small to draw a confident conclusion either way.
+
+**Parlay Builder check (also immediate, also historical):**
+
+Pull the K. Day vs. M. Hontama match (or a similarly close historical matchup) and report its risk score before and after the closeness-floor fix. Separately, deliberately introduce a file under the Parlay Builder directory that imports something from the Prediction Engine, confirm the build or test run fails because of it, then revert that test change and confirm it passes again. Report both results.
+
+**Paper trading (runs in parallel, starting now, not blocking on the above):**
+
+Confirm the real paper-trading schedule is actually active — not just written, but running — and confirm the quiet-pipeline alert has been tested with a deliberate gap and actually fired. This will take real time to accumulate meaningful volume, so this track keeps running in the background regardless of how the backtest results above look.
+
+**Do-not-touch confirmation:**
+
+Explicitly confirm, yes or no, whether anything changed to the Elite/Strong recommendation thresholds, Head-to-Head's model weight, or the cross-checking between winner selection, risk, recommendation, and Elite status. If anything there changed without a fresh walk-forward result justifying it, revert it and say so.
+
+**Report format:**
+
+Give me actual numbers and pass/fail against each phase's stated criteria — not descriptions of code changes. If any phase can't produce real evidence yet, say so plainly rather than reporting it as complete.

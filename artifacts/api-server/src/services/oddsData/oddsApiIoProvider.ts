@@ -1,4 +1,6 @@
 import { logger } from "../../lib/logger";
+import { withRetry, isTransientError } from "../../lib/retry";
+import { CircuitBreaker } from "../../lib/circuitBreaker";
 import { TtlCache } from "../tennisData/cache";
 import { matchPlayersToEvent } from "./nameMatch";
 import { OddsProviderRateLimitedError, OddsProviderUnavailableError, type OddsProvider, type OddsProviderStatusInfo, type OddsQuote } from "./types";
@@ -51,6 +53,11 @@ export class OddsApiIoProvider implements OddsProvider {
   private cache = new TtlCache();
   private lastSuccessfulCallAt: string | null = null;
   private lastError: string | null = null;
+  private readonly breaker = new CircuitBreaker("odds-api-io", {
+    failureThreshold: 4,
+    openDurationMs: 60_000, // odds providers can stay down longer; wait a full minute
+    windowMs: 120_000,
+  });
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
@@ -65,36 +72,56 @@ export class OddsApiIoProvider implements OddsProvider {
     url.searchParams.set("apiKey", this.apiKey);
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
 
-    let response: Response;
     try {
-      response = await fetch(url.toString(), { signal: AbortSignal.timeout(10_000) });
+      const body = await this.breaker.execute(() =>
+        withRetry(
+          async () => {
+            let response: Response;
+            try {
+              response = await fetch(url.toString(), { signal: AbortSignal.timeout(10_000) });
+            } catch (err) {
+              throw err; // Network errors bubble up to withRetry
+            }
+            // 401/429 are not transient — don't retry; let the error propagate immediately
+            if (response.status === 401 || response.status === 429) {
+              const msg = `Odds-API.io reported ${response.status} (rate/usage limit or invalid key)`;
+              throw Object.assign(new OddsProviderRateLimitedError(msg), { status: response.status });
+            }
+            if (!response.ok) {
+              throw Object.assign(
+                new Error(`Odds-API.io responded with HTTP ${response.status}`),
+                { status: response.status },
+              );
+            }
+            const data = (await response.json()) as T | { error: string };
+            if (data && typeof data === "object" && "error" in data) {
+              throw new OddsProviderUnavailableError(
+                `Odds-API.io error: ${(data as { error: string }).error}`,
+              );
+            }
+            return data as T;
+          },
+          {
+            attempts: 3,
+            baseDelayMs: 400,
+            maxDelayMs: 5_000,
+            // Don't retry on 4xx (client errors / rate limits)
+            retryOn: (err) =>
+              !(err instanceof OddsProviderRateLimitedError) && isTransientError(err),
+            onRetry: (err, attempt) =>
+              logger.warn({ err, path, attempt }, "Odds-API.io request retrying"),
+          },
+        ),
+      );
+      this.lastSuccessfulCallAt = new Date().toISOString();
+      this.lastError = null;
+      return body;
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Unknown network error calling Odds-API.io";
+      const message = err instanceof Error ? err.message : "Unknown error calling Odds-API.io";
       this.lastError = message;
+      if (err instanceof OddsProviderRateLimitedError) throw err;
       throw new OddsProviderUnavailableError(message);
     }
-
-    if (response.status === 401 || response.status === 429) {
-      const message = `Odds-API.io reported ${response.status} (rate/usage limit or invalid key)`;
-      this.lastError = message;
-      throw new OddsProviderRateLimitedError(message);
-    }
-    if (!response.ok) {
-      const message = `Odds-API.io responded with HTTP ${response.status}`;
-      this.lastError = message;
-      throw new OddsProviderUnavailableError(message);
-    }
-
-    const body = (await response.json()) as T | { error: string };
-    if (body && typeof body === "object" && "error" in body) {
-      const message = `Odds-API.io error: ${(body as { error: string }).error}`;
-      this.lastError = message;
-      throw new OddsProviderUnavailableError(message);
-    }
-
-    this.lastSuccessfulCallAt = new Date().toISOString();
-    this.lastError = null;
-    return body as T;
   }
 
   private async getTennisEvents(): Promise<EventRow[]> {

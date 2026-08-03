@@ -14,6 +14,8 @@
 import { db, predictionsTable, pool } from "@workspace/db";
 import { eq, inArray } from "drizzle-orm";
 import { computeRecommendation } from "../services/predictionEngine/recommendation";
+import type { DataQualityLabel } from "../services/predictionEngine/dataQuality";
+import type { ModelAgreement } from "../services/predictionEngine/ensemble";
 import type { EngineBreakdown } from "../services/predictionEngine";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -63,12 +65,12 @@ async function main(): Promise<void> {
       );
       process.exit(1);
     }
+    // upsetRisk removed from computeRecommendation signature (v2 recommendation system, Task #102).
     const newRec = computeRecommendation(
       row.calibratedProbability,
       row.dataQuality,
-      row.dataQualityLabel as never,
-      row.upsetRisk as never,
-      engine.modelAgreement,
+      row.dataQualityLabel as DataQualityLabel,
+      engine.modelAgreement as ModelAgreement,
     );
     const graded = row.actualWinnerId !== null || row.resolvedAt !== null;
     plan.push({ id: row.id, before: row.recommendation, after: newRec, graded, row });

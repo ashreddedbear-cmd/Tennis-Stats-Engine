@@ -1,0 +1,30 @@
+Here's a prompt you can paste into the Replit Agent to pick up exactly where this left off:
+
+```
+This project has uncommitted work in progress that needs to be finished, tested, and committed. Do NOT start new features — first stabilize what's already half-built.
+
+Priority order:
+
+1. Run the full test suite first and report what's currently passing/failing before touching anything. Note: playerIdentity.uchijima.test.ts was already failing before recent changes (separate issue with ambiguous abbreviated names, not a regression).
+
+2. Untracked, uncommitted files with no safety net yet — review each, run their tests, and either finish or flag issues:
+   - artifacts/api-server/src/scripts/checkParlayBoundary.ts (+ .test.ts)
+   - artifacts/api-server/src/services/evaluation/paperTradingQuiet.ts (+ .test.ts)
+   - artifacts/api-server/src/services/historicalData/sackmannBackfill.ts (+ .test.ts)
+   - artifacts/api-server/src/services/tennisData/wikidataResolver.ts (+ .test.ts)
+
+3. Modified files with active in-progress changes — verify these are complete and consistent with each other:
+   - artifacts/api-server/src/services/tennisData/playerIdentity.ts and compositeProvider.ts (abbreviated-name last-resort fallback for WTA 125K/ITF players when API circuit breaker is open)
+   - artifacts/api-server/src/services/evaluation/walkForward.ts and walkForward.test.ts
+   - artifacts/api-server/src/services/predictionEngine/availability.ts, index.ts, types.ts
+   - artifacts/api-server/src/routes/adminParlay.ts and artifacts/tennis-predictor/src/pages/AdminParlayBuilder.tsx (Parlay Builder admin feature — appears to be the main unfinished feature)
+   - lib/db/src/index.ts (pg pool idle-client crash fix — confirmed working in production, do not revert)
+
+4. Once tests pass and each piece is verified working end-to-end, commit in logical groups (not one giant commit) with clear messages.
+
+5. Do not modify anything in .agents/memory/ — those are architecture/decision notes, treat them as documentation, read them for context before changing related code.
+
+After stabilizing, report back what's done, what's still broken, and what would be the next logical feature to build.
+```
+
+This tells the agent to consolidate before expanding — which is what actually needs to happen given how much is uncommitted right now.

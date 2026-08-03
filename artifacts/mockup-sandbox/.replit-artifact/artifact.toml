@@ -1,17 +1,27 @@
-kind = "design"
-previewPath = "/__mockup"
+kind = "web"
+previewPath = "/__mockup/"
 title = "Canvas"
 version = "1.0.0"
-id = "XegfDyZt7HqfW2Bb8Ghoy"
+id = "artifacts/mockup-sandbox"
+router = "path"
 
 [[services]]
-localPort = 8081
-name = "Component Preview Server"
-paths = ["/__mockup"]
-
-[services.env]
-PORT = "8081"
-BASE_PATH = "/__mockup"
+name = "web"
+paths = [ "/__mockup/" ]
+localPort = 22554
 
 [services.development]
 run = "pnpm --filter @workspace/mockup-sandbox run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/mockup-sandbox", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/mockup-sandbox/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22554"
+BASE_PATH = "/__mockup/"

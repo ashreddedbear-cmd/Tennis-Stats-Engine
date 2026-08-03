@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import {
   useGetPredictionStats,
   useListPredictions,
+  listPredictions,
   useDeletePrediction,
   useBulkDeletePredictions,
   useGradePendingLedgerPredictions,
@@ -163,11 +164,18 @@ function PredictionRow({
   const isCorrect = prediction.actualWinnerName === prediction.predictedWinnerName;
 
   const renderRecommendationBadge = () => {
-    switch (prediction.recommendation) {
+    switch (prediction.recommendation as string) {
+      // Current v2 tiers
+      case 'HIGHEST_CONFIDENCE': return <Badge variant="success" title="All three core signals agree on the same player — Surface Elo, Serve & Return, and Recent Form.">{getShortRecommendationLabel("HIGHEST_CONFIDENCE")}</Badge>
+      case 'HIGH_CONFIDENCE': return <Badge variant="success">{getShortRecommendationLabel("HIGH_CONFIDENCE")}</Badge>
+      case 'MODERATE_CONFIDENCE': return <Badge variant="secondary">{getShortRecommendationLabel("MODERATE_CONFIDENCE")}</Badge>
+      case 'LOW_CONFIDENCE': return <Badge variant="warning">{getShortRecommendationLabel("LOW_CONFIDENCE")}</Badge>
+      case 'INSUFFICIENT_EDGE': return <Badge variant="outline" className="gap-1 text-muted-foreground border-muted-foreground/30" title="Available evidence does not support a reliable directional edge."><Scale className="w-3 h-3" /> NO EDGE</Badge>
+      // Legacy stored values
       case 'STRONG_RECOMMENDATION': return <Badge variant="success" title="Engine's highest-confidence tier -- validation is still limited and this tier hasn't yet been shown to beat other tiers.">{getShortRecommendationLabel("STRONG_RECOMMENDATION")}</Badge>
       case 'MODERATE_LEAN': return <Badge variant="secondary">{getShortRecommendationLabel("MODERATE_LEAN")}</Badge>
       case 'HIGH_RISK': return <Badge variant="warning">{getShortRecommendationLabel("HIGH_RISK")}</Badge>
-      case 'NO_STRONG_SIGNAL': return <Badge variant="outline" className="gap-1 text-muted-foreground border-muted-foreground/30" title="Task #37: prediction was within ±3% of a coin flip — backtesting shows these picks perform at or below chance. Flagged separately so you can track your borderline pick accuracy."><Scale className="w-3 h-3" /> COIN FLIP</Badge>
+      case 'NO_STRONG_SIGNAL': return <Badge variant="outline" className="gap-1 text-muted-foreground border-muted-foreground/30" title="Prediction was within ±3% of a coin flip — these picks perform at or below chance in backtesting."><Scale className="w-3 h-3" /> COIN FLIP</Badge>
       case 'DO_NOT_RECOMMEND': return <Badge variant="destructive">{getShortRecommendationLabel("DO_NOT_RECOMMEND")}</Badge>
       default: return null
     }
@@ -271,7 +279,14 @@ function PlayerFocusRow({ prediction }: { prediction: PredictionSummary }) {
   const isCorrect = prediction.actualWinnerName === prediction.predictedWinnerName;
 
   const renderRecommendationBadge = () => {
-    switch (prediction.recommendation) {
+    switch (prediction.recommendation as string) {
+      // Current v2 tiers
+      case 'HIGHEST_CONFIDENCE': return <Badge variant="success" className="shadow-sm" title="All three core signals agree on the same player — Surface Elo, Serve & Return, and Recent Form.">{getShortRecommendationLabel("HIGHEST_CONFIDENCE")}</Badge>
+      case 'HIGH_CONFIDENCE': return <Badge variant="success" className="shadow-sm">{getShortRecommendationLabel("HIGH_CONFIDENCE")}</Badge>
+      case 'MODERATE_CONFIDENCE': return <Badge variant="secondary" className="shadow-sm">{getShortRecommendationLabel("MODERATE_CONFIDENCE")}</Badge>
+      case 'LOW_CONFIDENCE': return <Badge variant="warning" className="shadow-sm">{getShortRecommendationLabel("LOW_CONFIDENCE")}</Badge>
+      case 'INSUFFICIENT_EDGE': return <Badge variant="outline" className="shadow-sm bg-background gap-1 text-muted-foreground border-muted-foreground/30"><Scale className="w-3 h-3" /> NO EDGE</Badge>
+      // Legacy stored values
       case 'STRONG_RECOMMENDATION': return <Badge variant="success" className="shadow-sm" title="Engine's highest-confidence tier -- validation is still limited and this tier hasn't yet been shown to beat other tiers.">{getShortRecommendationLabel("STRONG_RECOMMENDATION")}</Badge>
       case 'MODERATE_LEAN': return <Badge variant="secondary" className="shadow-sm">{getShortRecommendationLabel("MODERATE_LEAN")}</Badge>
       case 'HIGH_RISK': return <Badge variant="warning" className="shadow-sm">{getShortRecommendationLabel("HIGH_RISK")}</Badge>
@@ -349,10 +364,32 @@ function PlayerFocusRow({ prediction }: { prediction: PredictionSummary }) {
   )
 }
 
+const PAGE_SIZE = 50
+
 export default function HistoryPage() {
   const queryClient = useQueryClient()
   const { data: stats, isLoading: statsLoading } = useGetPredictionStats()
-  const { data: predictions, isLoading: predictionsLoading } = useListPredictions({ limit: 50 })
+  const { data: predictions, isLoading: predictionsLoading } = useListPredictions({ limit: PAGE_SIZE })
+
+  // "View more" state — extra pages loaded imperatively and appended below the initial query result
+  const [extraPredictions, setExtraPredictions] = useState<PredictionSummary[]>([])
+  const [nextOffset, setNextOffset] = useState(PAGE_SIZE)
+  const [isLoadingMore, setIsLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
+
+  const loadMore = async () => {
+    setIsLoadingMore(true)
+    try {
+      const more = await listPredictions({ limit: PAGE_SIZE, offset: nextOffset })
+      setExtraPredictions((prev) => [...prev, ...more])
+      setNextOffset((prev) => prev + PAGE_SIZE)
+      setHasMore(more.length === PAGE_SIZE)
+    } catch {
+      // silently allow retry
+    } finally {
+      setIsLoadingMore(false)
+    }
+  }
 
   // Restore scroll position when returning from a prediction detail via "Back to Ledger".
   // The position is saved in sessionStorage by PredictionRow's Link onClick; we restore it
@@ -501,7 +538,7 @@ export default function HistoryPage() {
     })
   }
 
-  // The "Search Players" / "Paste Search" lookup tools now live on Build Matchup
+  // The "Search Players" / "Paste Search" lookup tools now live on Run Model
   // (`SavedPredictionsLookup.tsx`), since they're for finding an *existing* saved prediction
   // before starting a new one -- but the focus/step-through UI they drive only exists here. A
   // selection there navigates here with a handoff: a single player via plain URL params (small,
@@ -533,7 +570,11 @@ export default function HistoryPage() {
   const safePasteMatchIndex = pasteMatches.length > 0 ? Math.min(pasteMatchIndex, pasteMatches.length - 1) : 0
 
   const invalidateLedger = () => {
-    queryClient.invalidateQueries({ queryKey: getListPredictionsQueryKey({ limit: 50 }) })
+    // Reset "View more" state so the list returns to page 1 after any mutation
+    setExtraPredictions([])
+    setNextOffset(PAGE_SIZE)
+    setHasMore(true)
+    queryClient.invalidateQueries({ queryKey: getListPredictionsQueryKey({ limit: PAGE_SIZE }) })
     queryClient.invalidateQueries({ queryKey: getGetPredictionStatsQueryKey() })
     if (activePlayer) {
       queryClient.invalidateQueries({ queryKey: getGetLedgerPlayerPredictionsQueryKey(activePlayer.id) })
@@ -560,11 +601,12 @@ export default function HistoryPage() {
     })
   }
 
-  const allSelected = !!predictions && predictions.length > 0 && selectedIds.size === predictions.length
+  const allPredictions: PredictionSummary[] = [...(predictions ?? []), ...extraPredictions]
+
+  const allSelected = allPredictions.length > 0 && selectedIds.size === allPredictions.length
 
   const toggleSelectAll = () => {
-    if (!predictions) return
-    setSelectedIds(allSelected ? new Set() : new Set(predictions.map((p) => p.id)))
+    setSelectedIds(allSelected ? new Set() : new Set(allPredictions.map((p) => p.id)))
   }
 
   return (
@@ -698,9 +740,9 @@ export default function HistoryPage() {
           <div className="space-y-3">
             {[1, 2, 3, 4, 5].map(i => <Skeleton key={i} className="h-24 w-full" />)}
           </div>
-        ) : predictions && predictions.length > 0 ? (
+        ) : allPredictions.length > 0 ? (
           <div className="space-y-3">
-            {predictions.map(pred => (
+            {allPredictions.map(pred => (
               <PredictionRow
                 key={pred.id}
                 prediction={pred}
@@ -710,6 +752,25 @@ export default function HistoryPage() {
                 isDeleting={deletePrediction.isPending && deletePrediction.variables?.predictionId === pred.id}
               />
             ))}
+
+            {/* View more — only shown when the last fetched page was full */}
+            {hasMore && (predictions?.length ?? 0) >= PAGE_SIZE && (
+              <div className="pt-4 flex justify-center">
+                <Button
+                  variant="outline"
+                  className="font-mono w-full max-w-xs"
+                  disabled={isLoadingMore}
+                  onClick={loadMore}
+                >
+                  {isLoadingMore ? (
+                    <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <ChevronRight className="w-4 h-4 mr-2" />
+                  )}
+                  {isLoadingMore ? "LOADING..." : "VIEW MORE"}
+                </Button>
+              </div>
+            )}
           </div>
         ) : (
           <div className="p-12 border border-dashed rounded-lg text-center text-muted-foreground">

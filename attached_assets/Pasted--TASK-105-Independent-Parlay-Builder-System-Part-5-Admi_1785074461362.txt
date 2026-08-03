@@ -1,0 +1,259 @@
+# TASK 105 – Independent Parlay Builder System (Part 5)
+
+# Admin Configuration
+
+Create a dedicated Builder Admin Panel.
+
+This panel must be completely separate from the Prediction Engine settings.
+
+Changing Builder settings must NEVER affect Prediction Engine predictions.
+
+---
+
+# Adjustable Thresholds
+
+Allow the administrator to configure:
+
+Validation Score thresholds
+
+Risk Score thresholds
+
+Reliability Grade thresholds
+
+Parlay Grade thresholds
+
+KEEP threshold
+
+BORDERLINE threshold
+
+REMOVE threshold
+
+Minimum Data Coverage
+
+Minimum Source Agreement
+
+Maximum Risk
+
+Maximum Removal Probability
+
+Every change should immediately rescore Builder results.
+
+Prediction Engine predictions must remain unchanged.
+
+---
+
+# Adjustable Source Weights
+
+Allow administrators to edit the weight of every validation source.
+
+Examples:
+
+Tennis Abstract
+
+UTR
+
+ATP
+
+WTA
+
+ITF
+
+Recent Form
+
+Surface Statistics
+
+Head-to-Head
+
+Market Consensus
+
+Travel
+
+Fatigue
+
+Injury
+
+Historical Consistency
+
+Data Quality
+
+Source Agreement
+
+Weights must always total 100%.
+
+---
+
+# Builder Versioning
+
+Every scoring update creates a new Builder Version.
+
+Store:
+
+Builder Version
+
+Date
+
+Configuration
+
+Weight Set
+
+Threshold Set
+
+Administrator
+
+Historical sessions should always remember which Builder version produced them.
+
+---
+
+# Audit Log
+
+Record every Builder action.
+
+Examples:
+
+Configuration changed
+
+Threshold updated
+
+Weight updated
+
+Leg rescored
+
+Session rescored
+
+Parlay generated
+
+Builder version changed
+
+Store:
+
+Timestamp
+
+User
+
+Action
+
+Old Value
+
+New Value
+
+---
+
+# Database Separation
+
+Create Builder-only tables.
+
+Suggested tables:
+
+parlay_builder_sessions
+
+parlay_builder_snapshots
+
+parlay_builder_scores
+
+parlay_builder_decisions
+
+parlay_builder_reasons
+
+parlay_builder_slips
+
+parlay_builder_versions
+
+parlay_builder_settings
+
+parlay_builder_audit_logs
+
+Prediction Engine tables must never contain Builder calculations.
+
+---
+
+# Service Separation
+
+Create independent services.
+
+PredictionEngineService
+
+BuilderSnapshotService
+
+BuilderValidationService
+
+BuilderScoringService
+
+BuilderRiskService
+
+BuilderDecisionService
+
+BuilderExplanationService
+
+BuilderAutoBuilderService
+
+BuilderHistoryService
+
+BuilderConfigurationService
+
+Each external source should have its own adapter.
+
+Examples:
+
+TennisAbstractAdapter
+
+UTRAdapter
+
+ATPAdapter
+
+WTAAdapter
+
+ITFAdapter
+
+MarketAdapter
+
+RecentFormAdapter
+
+SurfaceAdapter
+
+InjuryAdapter
+
+TravelAdapter
+
+Each adapter should be replaceable without affecting Builder logic.
+
+---
+
+# Automated Testing
+
+Verify:
+
+✓ Builder cannot write to Prediction Engine.
+
+✓ Builder scores never reference Engine Confidence.
+
+✓ Builder scores never reference Engine Probability.
+
+✓ Builder scores never reference Engine Recommendation.
+
+✓ Prediction Engine predictions remain identical after Builder changes.
+
+✓ Builder configuration changes only affect Builder outputs.
+
+✓ Missing validation sources reduce confidence without crashing Builder.
+
+✓ Historical sessions remain unchanged after new Builder versions are released.
+
+---
+
+# Final Rule
+
+The Prediction Engine and Independent Parlay Builder are permanently separate systems.
+
+Prediction Engine:
+
+Predicts winners.
+
+Parlay Builder:
+
+Determines whether those predicted winners are suitable for inclusion in a parlay.
+
+Neither system may influence, modify, retrain, calibrate, or score the other.
+
+They communicate only through a read-only Builder Snapshot.
+
+This separation is a permanent architectural requirement and must never be violated.

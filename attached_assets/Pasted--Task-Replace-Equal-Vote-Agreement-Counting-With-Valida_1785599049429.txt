@@ -1,0 +1,26 @@
+**Task — Replace Equal-Vote Agreement Counting With Validated-Edge-Weighted Agreement**
+
+**What & Why**
+
+The Parlay Builder's Agreement stat (`sourceAgreement`, `builderScoringService.ts`) currently counts every opinionated factor as exactly one vote, regardless of whether that factor has ever shown real predictive value. The isolated reweighting test (n=9,978) confirmed that fixing the *score's* weights contributed essentially zero improvement (+0.0pp overall) — but Agreement is computed separately from the composite score, by simple count (`agreeing / available`), so it still lets weak or dead-weight factors outvote strong ones. A match can show "1/5 agree" where the 4 factors against the pick are noise-level (near-zero validated edge) and the 1 factor for it is the one with real signal. The vote count doesn't know the difference.
+
+**Done looks like**
+
+- Agreement is computed as a weighted measure of validated support, not a raw headcount — a factor's vote counts in proportion to its confirmed predictive edge (the same per-factor edge numbers already produced by `auditParlayFactorWeights.ts`'s leave-one-out ablation), not as a flat +1.
+- Factors with confirmed near-zero or negative edge (e.g., `historicalVolatility` at -0.7pp) either carry negligible vote weight or are excluded from the Agreement count entirely — consistent with how they're already near-zero-weighted in the composite score, so the two numbers stop telling contradictory stories.
+- The UI's "N of M sources agree" display reflects this same weighting — no separate unweighted count left showing a misleading raw tally alongside a properly-weighted score.
+- Re-run `analyzeParlayCalibration.ts` after the change and confirm whether the KEEP-tier win rate improves once Agreement itself carries real signal instead of noise — this is the actual test of whether this fix does what the reweighting alone didn't.
+- Findings appended to `.agents/memory/parlay-calibration-findings.md`: old (count-based) vs new (edge-weighted) Agreement, and the resulting win-rate comparison.
+
+**Out of scope**
+
+- Any further change to `DEFAULT_WEIGHTS` itself — those are confirmed stable and correct as of the n=9,366 re-validation.
+- The KEEP/BORDERLINE/REJECT decision thresholds — only what feeds the Agreement number, not what score triggers what label.
+- Market-odds / Task #83/#84/#85 track — unrelated, no action needed here.
+
+**Relevant files**
+
+- `artifacts/api-server/src/services/parlayBuilder/builderScoringService.ts` (`sourceAgreement` computation, ~line 1182-1204)
+- `artifacts/api-server/src/scripts/auditParlayFactorWeights.ts` (source of per-factor edge numbers)
+- `artifacts/api-server/src/scripts/analyzeParlayCalibration.ts`
+- `.agents/memory/parlay-calibration-findings.md`

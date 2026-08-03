@@ -1,0 +1,155 @@
+These screenshots actually point to one underlying problem, and it’s not that every player has no data.
+
+Your Validation Engine is failing to retrieve data, then assuming “0 matches found.”
+
+What’s happening
+
+For example, it says:
+
+* 0 of 13 available sources agree
+* Data coverage: 0%
+* Insufficient match history
+* No hard court matches found
+
+For players like J.D. Hara Friend, H. Moriya, and C. Church, that can happen occasionally because they’re less documented.
+
+But it should not happen for every player.
+
+If you’re seeing this across nearly every leg, your data pipeline is broken.
+
+⸻
+
+What Replit needs to investigate
+
+1. Data adapters are likely failing
+
+One or more of these is probably not returning data:
+
+* Tennis Abstract
+* ATP
+* WTA
+* ITF
+* UTR
+* Internal statistics database
+
+Instead of reporting:
+
+“Source unavailable”
+
+your code is interpreting it as:
+
+“Player has zero matches.”
+
+Those are completely different things.
+
+⸻
+
+2. “No data” ≠ “No matches”
+
+Right now your engine appears to do this:
+
+Source failed
+↓
+Return empty array
+↓
+0 matches
+↓
+Coverage = 0%
+↓
+Agreement = 0%
+
+It should instead do:
+
+Source failed
+↓
+Source unavailable
+↓
+Skip this source
+↓
+Continue with remaining sources
+↓
+Reduce confidence slightly
+
+⸻
+
+3. Agreement calculation is wrong
+
+Your screen shows:
+
+0 of 13 available sources agree
+
+If every source failed to load, then there are not 13 available sources.
+
+It should instead display something like:
+
+* Sources checked: 13
+* Sources available: 6
+* Sources responding: 5
+* Agreement: 4/5 (80%)
+
+Not:
+
+0/13
+
+⸻
+
+What to tell Replit
+
+# Bug Fix – Validation Engine Data Retrieval
+The Validation Engine is incorrectly treating failed data retrieval as missing player history.
+Current behavior:
+- Coverage = 0%
+- Agreement = 0%
+- No matches found
+- No hard court matches
+This occurs even for players who clearly have match history.
+Required fixes:
+1. Distinguish between:
+   - Source unavailable
+   - Player not found
+   - No historical matches
+These are three different states.
+2. If a source fails:
+DO NOT return an empty match history.
+Return:
+status = SOURCE_UNAVAILABLE
+3. Skip unavailable sources when calculating:
+- Coverage
+- Agreement
+- Validation
+- Risk
+Only use sources that successfully returned data.
+4. Never report:
+0 matches
+unless the player genuinely has no recorded professional matches.
+5. Add diagnostics showing:
+- Sources queried
+- Sources succeeded
+- Sources failed
+- Reason each source failed
+6. If more than 50% of sources fail,
+display:
+"Validation confidence reduced due to temporary data source availability."
+instead of
+"0 matches found."
+
+I also noticed something else
+
+Your app currently treats low data as a negative prediction.
+
+Those are not the same thing.
+
+For example:
+
+* Low data → “I’m not confident.”
+* Bad player → “I’m confident this is a poor pick.”
+
+Those should produce different outcomes.
+
+I would never assign a Grade D just because data is missing. Instead, the app should assign something like:
+
+* Status: Insufficient Data
+* Validation: Pending
+* Confidence: Low due to missing information
+
+That distinction will make your Validation Engine much more trustworthy, because it won’t confuse “I don’t know” with “this is a bad bet.”

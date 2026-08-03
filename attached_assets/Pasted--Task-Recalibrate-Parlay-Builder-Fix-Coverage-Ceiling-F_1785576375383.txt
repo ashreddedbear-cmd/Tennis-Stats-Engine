@@ -1,0 +1,42 @@
+**Task — Recalibrate Parlay Builder: Fix Coverage Ceiling, Fold Fatigue Flag Into Risk, Re-map Grade Bands**
+
+**What & Why**
+
+Live sample of 47 Parlay Builder cards shows every single one at exactly `Coverage: 73%`, and nothing above Grade B. Root cause: `DEFAULT_WEIGHTS` in `builderScoringService.ts` marks `utr`, `serveAdvantage`, `returnAdvantage`, and `holdBreak` (27% combined weight) as `STRUCTURALLY_UNAVAILABLE` — there's no UTR API and no serve/return/hold-break data in `historical_matches`. Since `dataCoverage = (1 - unavailWeight) * 100`, coverage is hardcoded at 73% for every match regardless of how good the underlying data actually is. `toReliabilityGrade` then caps the grade at B whenever coverage is 65–79%, so **no match can ever reach Grade A** — this isn't a per-match measurement, it's a permanent structural ceiling.
+
+Separately, the `"{player} may have played today"` critical flag forces the decision to BORDERLINE but never touches the risk score itself — so cards can show a STRONG/MODERATE risk shield sitting right next to a same-day-fatigue red flag, which reads as contradictory to the user.
+
+**Done looks like**
+
+- Coverage % reflects data availability from factors that could realistically vary (not permanently-dead ones) — structurally-unavailable factors no longer suppress the achievable ceiling.
+- A match with a strong validation score and no live-data gaps beyond the permanent UTR/serve/return/hold-break gap can reach Grade A.
+- The same-day-played flag adds a measurable risk penalty (+15–20) to the risk score, not just a decision-label gate.
+- `toReliabilityGrade`'s coverage bands are re-mapped against the new realistic ceiling (documented in a comment, since 73% is now closer to "full data" than "partial data").
+- Existing `builderScoringService.test.ts` suite still passes; new tests cover both changes.
+
+**Out of scope**
+
+- Actually sourcing UTR ratings or serve/return/hold-break stats (future work — this task only fixes how their permanent absence is scored).
+- Changing the KEEP/BORDERLINE/REJECT thresholds themselves (validationScore ≥ 58, riskScore ≤ 44, coverage ≥ 50) — only what feeds into coverage and risk.
+- Changing `closenessRiskFloor` or any other risk-floor logic.
+
+**Steps**
+
+1. **Redistribute structurally-dead weight** — in the validation-score calculation (`availFactors.reduce(...)` block, ~line 1210), this already excludes unavailable factors from the weighted average correctly. The fix is in the **coverage** calculation only: introduce a `STRUCTURAL_MAX_UNAVAIL_WEIGHT` constant (sum of `STRUCTURALLY_UNAVAILABLE` factor weights, currently 0.27) and compute `dataCoverage` as a percentage of the *realistically achievable* weight instead of total spec weight: `dataCoverage = Math.round((1 - (unavailWeight - structuralUnavailWeight)) / (1 - structuralUnavailWeight) * 100)`. This makes 73% (only permanent gaps missing) map to 100% coverage, while genuinely missing *variable* data (a thin-history player, no market odds, etc.) still drags coverage down properly.
+
+2. **Re-map `toReliabilityGrade` coverage bands** (~line 574–589) — since coverage is now normalized against realistic-max instead of spec-max, review whether the existing 80/65/50/35 cutoffs still make sense post-normalization, or need retuning against a fresh backfill run. Add a comment explaining the normalization so future devs don't reintroduce the same bug by comparing coverage against raw spec weight elsewhere.
+
+3. **Fold same-day-played into risk score** — in the risk calculation block (~line 1220–1250, and the duplicate block ~1680–1700), add a check mirroring the existing `criticalFlags.push(...may have played today...)` condition (~line 1391) and add `risk += 18` (or similar) when it fires, instead of leaving risk computation blind to it. Apply to both risk-computation code paths in the file (there appear to be two near-duplicate implementations — confirm and fix both, or better, DRY them into one function while you're in there).
+
+4. **Add regression tests** in `builderScoringService.test.ts`:
+   - A mock match where only the 4 structural factors are unavailable (nothing else missing) should now show `dataCoverage === 100` and be A-grade-eligible.
+   - A mock match with additionally-missing variable data (e.g., no market odds, thin history) should show coverage meaningfully below 100.
+   - A mock match with the same-day-played flag should show a higher `riskScore` than an otherwise-identical match without the flag.
+
+5. **Re-run `analyzeParlayCalibration.ts`** against the existing backfill data after the change and compare grade/coverage distribution before vs after — confirm Grade A becomes reachable and the KEEP rate isn't blown out unintentionally.
+
+**Relevant files**
+
+- `artifacts/api-server/src/services/parlayBuilder/builderScoringService.ts`
+- `artifacts/api-server/src/services/parlayBuilder/builderScoringService.test.ts`
+- `artifacts/api-server/src/scripts/analyzeParlayCalibration.ts`

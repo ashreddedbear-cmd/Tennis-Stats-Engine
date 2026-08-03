@@ -1,0 +1,16 @@
+Two build items and one re-check pass:
+
+1. AUTOMATIC GRADING FOR BOTH SYSTEMS
+   - Prediction Engine: currently grade-pending only runs as a side effect of the paper-trading job. Give it its own independent recurring schedule (e.g. hourly or however frequently matches actually complete), not dependent on an unrelated job.
+   - Parlay Builder: build the equivalent — a recurring job that calls resolveParlayLegOutcomes.ts / backfillParlayLegOutcomes.ts automatically, writing into the new Parlay History table (from the previous prompt), on its own independent schedule.
+
+2. EXTEND THE PROVIDER FALLBACK CHAIN CONSISTENTLY
+   No single source covers all match levels — confirm this by auditing coverage gaps already visible in the codebase (Sofascore-only paths in Parlay Builder's builderProviderFetch.ts). Ensure BOTH grading paths (ledgerGrading.ts for Prediction Engine, the new parlay grading job) attempt the full provider chain in fallback order: Sackmann/tennis-data.co.uk historical DB first (fast, free, now includes Challenger/ITF), then live providers (RapidAPI, Matchstat, Sofascore, API-Tennis) in fallback order, with Wikidata name resolution applied to EVERY attempt, not just the first.
+
+3. RE-CHECK PASS ON EXISTING STUCK PREDICTIONS
+   Since FORWARD_LOOKUP_WINDOW_MS is anchored to each prediction's original createdAt (not today), old pending predictions are still validly checkable — nothing expires them. Run grade-pending now, with the current expanded provider stack + Wikidata resolution, against ALL currently-pending predictions regardless of age. Report:
+   - How many previously-stuck predictions now resolve successfully (this validates whether the new data sources actually closed the gap)
+   - For any that still fail, the SPECIFIC reason per prediction (name never resolvable anywhere, match genuinely not covered by any provider, etc.) — distinguish "will never resolve" from "might resolve with yet another source," don't lump them together
+   - Do the same re-check pass conceptually once the Parlay Builder's grading job (item 1) exists, for any parlay legs that would have hit the same historical gap
+
+Report real before/after counts, not estimates.

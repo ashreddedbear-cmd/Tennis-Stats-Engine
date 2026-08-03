@@ -1,0 +1,30 @@
+**Task #83 — Fix Market Odds So Accuracy Gain Doesn't Come With Worse Probability Estimates (Conditional)**
+
+**⚠️ Gate: only run this task if it's still needed.** Before touching any weight, confirm the calibration-refit task has run and check its result. If the refit market-odds-aware curve brings log-loss back to parity (or better) with the without-market-odds arm, the original regression was a stale-curve artifact, not a real over-adjustment problem — **skip this task entirely** and go straight to #84's decision. Only proceed past this point if log-loss is still meaningfully worse under the *refit* curve.
+
+**What & Why**
+
+Section B of the market odds ablation (n=180) found a tension: +1.6pp accuracy with market odds included, but +0.0243 worse log-loss. The original read was that the module over-adjusts raw probabilities. That may still be true — but it may also be that the log-loss number itself was measured through a calibration curve that was never fit on market-odds-inclusive predictions (see calibration-refit task). Tuning the module's weight against that stale number risks landing on a weight that compensates for a measurement bug rather than a real modeling problem — and could throw away real accuracy gain for no reason if the module was never actually miscalibrated.
+
+If the gate above confirms this is still a real issue after refitting, then: the module is shifting picks in the right direction but applying too much force on the underlying probability, producing overconfident outputs — a real risk for a parlay app where leg probabilities compound.
+
+**Done looks like**
+
+- Confirmed via the gate above that log-loss is still worse than the without-market-odds arm even when measured against the refit, market-odds-aware calibration curve — not the original stale one.
+- Identify the market module's blend weight in `artifacts/api-server/src/services/predictionEngine/` (the `weightPrior: 0.5` set on `marketConsensusInput` in `index.ts`).
+- Try weight values in the range 0.1–0.4 (vs. the current 0.5), re-scoring **each candidate against the refit calibration curve**, not Section B's original log-loss numbers.
+- Find a weight where Δacc stays ≥+1pp **and** Δlog-loss ≤0, both measured on the refit curve.
+- Update the weight constant with a comment referencing this finding, including both the pre-refit and post-refit numbers so the reasoning is auditable later.
+- Re-run the ablation script to confirm both metrics hold at the new weight.
+
+**Out of scope**
+
+- Running this at all if the calibration-refit task alone resolves the log-loss gap — see gate above.
+- Any change to how market odds' implied probability is computed (already correctly devigged, confirmed in `index.ts` ~line 493).
+- The n≥200 KEEP/EXCLUDE call itself — that's task #84, which runs after this one (or after the gate clears this one as unnecessary).
+
+**Relevant files**
+
+- `artifacts/api-server/src/services/predictionEngine/index.ts` (`weightPrior` on `marketConsensusInput`)
+- `artifacts/api-server/src/scripts/auditMarketConsensusAblation.ts`
+- `artifacts/api-server/src/services/evaluation/calibration.ts` (refit curve source)

@@ -26,6 +26,17 @@ export const MIN_HISTORICAL_MATCHES_FOR_SEGMENT = 150;
  */
 export const MIN_VALIDATION_SAMPLES_FOR_SEGMENT = 30;
 
+/**
+ * Task #68: a specialist that achieves less than this raw accuracy on its own held-out slice is
+ * rejected as too close to random to be worth blending. At 53% (barely above a coin flip) the
+ * segment adds measurement noise rather than signal -- even at 0.809 blend weight it pulls
+ * predictions away from the general model's better-calibrated estimate. 55% is the minimum
+ * threshold at which a specialist shows meaningful, separable skill beyond the base rate.
+ * `computeOneSegment` checks this BEFORE calling `computeSpecialistWeight` so the segment is
+ * cleanly excluded even when log-loss degradation is within noise.
+ */
+export const MIN_SPECIALIST_ACCURACY = 55;
+
 export interface SpecialistSegmentSummary extends SpecialistModelRow {}
 
 /**
@@ -209,12 +220,37 @@ async function computeOneSegment(segment: SegmentDefinition, generalMapping: Cal
   const segmentBrier = brierScore(segmentPredictions.map((p) => ({ rawProbability: p.calibrated, outcome: p.outcome })));
   const generalBrier = brierScore(generalPredictions.map((p) => ({ rawProbability: p.calibrated, outcome: p.outcome })));
 
+  // Task #68: absolute accuracy floor — a specialist below MIN_SPECIALIST_ACCURACY is too close
+  // to random to add value; reject it before calling computeSpecialistWeight so the outcome is
+  // clearly attributed to the accuracy gate rather than the logLoss comparison.
+  // Accuracy numbers are stored for diagnostics even when the segment is rejected.
+  if (segmentAccuracy !== null && segmentAccuracy < MIN_SPECIALIST_ACCURACY) {
+    logger.warn(
+      { segmentKey: segment.segmentKey, segmentAccuracy, minRequired: MIN_SPECIALIST_ACCURACY, n: points.length },
+      "Task #68: specialist rejected — accuracy below minimum threshold; falling back to general model",
+    );
+    return {
+      ...base,
+      meetsThreshold: false,
+      validationSampleSize: points.length,
+      accuracy: segmentAccuracy,
+      logLoss: segmentLogLoss,
+      brier: segmentBrier,
+      generalAccuracy,
+      generalLogLoss,
+      generalBrier,
+      calibrationMapping: [],
+      weight: 0,
+    };
+  }
+
   const weight = computeSpecialistWeight(points.length, segmentLogLoss, generalLogLoss);
 
-  // Task #68: downgrade `meetsThreshold` when the specialist is rejected by `computeSpecialistWeight`
-  // (weight=0). Storing false here ensures the engine correctly falls back to the general model
-  // and preserves the reliability discounts that would be skipped if a "met" specialist were active
-  // with a no-op 0 weight. The accuracy/logLoss numbers are still stored for diagnostic purposes.
+  // Task #68: also downgrade `meetsThreshold` when `computeSpecialistWeight` rejects the segment
+  // due to logLoss degradation (weight=0). Storing false here ensures the engine correctly falls
+  // back to the general model and preserves the reliability discounts that would be skipped if a
+  // "met" specialist were active with a no-op 0 weight. The accuracy/logLoss numbers are still
+  // stored for diagnostic purposes.
   if (weight === 0 && segmentLogLoss !== null && generalLogLoss !== null) {
     logger.warn(
       { segmentKey: segment.segmentKey, segmentLogLoss, generalLogLoss, degradation: segmentLogLoss - generalLogLoss },

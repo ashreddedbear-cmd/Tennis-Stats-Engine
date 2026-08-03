@@ -1,8 +1,14 @@
 import type { Response } from "express";
+import { isAdminSessionCookieValid } from "./adminAuth";
 
 type EntitlementCheck = () => Promise<boolean>;
 
 export async function enforceEntitlement(res: Response, check: EntitlementCheck, capability: string): Promise<boolean> {
+  // Admin session bypasses every entitlement gate — the owner has full access.
+  if (isAdminSessionCookieValid((res.req as { signedCookies?: Record<string, unknown> }).signedCookies ?? {})) {
+    return true;
+  }
+
   try {
     const allowed = await check();
     if (allowed) return true;

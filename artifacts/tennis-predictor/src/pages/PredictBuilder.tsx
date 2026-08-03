@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react"
 import { useLocation, useSearch } from "wouter"
-import { useGetPlayer, getGetPlayerQueryKey, useGetPlayerStats, Surface, MatchFormat, TournamentLevel } from "@workspace/api-client-react"
+import { useGetPlayer, getGetPlayerQueryKey, useGetPlayerStats, useGetAdminAuthStatus, Surface, MatchFormat, TournamentLevel } from "@workspace/api-client-react"
 import type { PredictionSummary } from "@workspace/api-client-react"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -11,8 +11,9 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs"
 import { PlayerSearch } from "@/components/PlayerSearch"
 import { PasteMatchupPredictor } from "@/components/PasteMatchupPredictor"
 import { BulkMatchupPredictor } from "@/components/BulkMatchupPredictor"
-import { Activity, Search, Swords, Settings2, RefreshCw, ClipboardPaste, Layers, ChevronDown } from "lucide-react"
+import { Activity, Search, Swords, Settings2, RefreshCw, ClipboardPaste, Layers, ChevronDown, FolderOpen, X } from "lucide-react"
 import { buildClientMatchId, createPredictionWithIntegrity } from "@/lib/predictionRequestIntegrity"
+import { SavedPredictionCards } from "@/components/SavedPredictionCards"
 
 function PlayerCard({ 
   playerId, 
@@ -152,6 +153,8 @@ function PlayerCard({
 export default function PredictBuilderPage() {
   const [, setLocation] = useLocation()
   const searchString = useSearch()
+  const { data: adminAuth } = useGetAdminAuthStatus()
+  const isAdmin = adminAuth?.authenticated === true
   const searchParams = new URLSearchParams(searchString)
   
   const p1 = searchParams.get('p1')
@@ -177,6 +180,13 @@ export default function PredictBuilderPage() {
   const wasAutoDetected = !!(prefillSurface || prefillFormat || prefillLevel)
 
   // Match Conditions collapsed/expanded state — persisted to localStorage so it survives refreshes.
+  const [isPredictionPending, setIsPredictionPending] = useState(false)
+  const [isPredictionError, setIsPredictionError] = useState(false)
+  // Expose mutation-like shape so JSX can reference createPrediction.isPending / isError
+  const createPrediction = { isPending: isPredictionPending, isError: isPredictionError }
+
+  const [savedCardsOpen, setSavedCardsOpen] = useState(false)
+
   const [conditionsExpanded, setConditionsExpanded] = useState<boolean>(() => {
     try { return localStorage.getItem("matchConditionsExpanded") === "true" } catch { return false }
   })
@@ -210,6 +220,8 @@ export default function PredictBuilderPage() {
       matchFormat: format,
     })
 
+    setIsPredictionPending(true)
+    setIsPredictionError(false)
     try {
       const prediction = await createPredictionWithIntegrity(
         {
@@ -228,7 +240,9 @@ export default function PredictBuilderPage() {
       )
       setLocation(`/predictions/${prediction.id}`)
     } catch {
-      // Integrity failures and provider issues are surfaced by the route's error UI.
+      setIsPredictionError(true)
+    } finally {
+      setIsPredictionPending(false)
     }
   }
 
@@ -263,20 +277,32 @@ export default function PredictBuilderPage() {
       <Card className="border-border shadow-md glass-panel">
         <CardContent className="p-4 pt-4">
           <Tabs defaultValue="search">
-            <TabsList className="mb-3 w-full">
-              <TabsTrigger value="search" className="font-mono gap-1.5 flex-1">
-                <Search className="w-3.5 h-3.5 shrink-0" />
-                <span className="hidden sm:inline">PLAYER </span>SEARCH
-              </TabsTrigger>
-              <TabsTrigger value="paste" className="font-mono gap-1.5 flex-1">
-                <ClipboardPaste className="w-3.5 h-3.5 shrink-0" />
-                PASTE<span className="hidden sm:inline"> SEARCH</span>
-              </TabsTrigger>
-              <TabsTrigger value="bulk" className="font-mono gap-1.5 flex-1">
-                <Layers className="w-3.5 h-3.5 shrink-0" />
-                BULK<span className="hidden sm:inline"> UPLOAD</span>
-              </TabsTrigger>
-            </TabsList>
+            <div className="mb-3 flex items-center gap-2">
+              <TabsList className="flex-1">
+                <TabsTrigger value="search" className="font-mono gap-1.5 flex-1">
+                  <Search className="w-3.5 h-3.5 shrink-0" />
+                  <span className="hidden sm:inline">PLAYER </span>SEARCH
+                </TabsTrigger>
+                <TabsTrigger value="paste" className="font-mono gap-1.5 flex-1">
+                  <ClipboardPaste className="w-3.5 h-3.5 shrink-0" />
+                  PASTE<span className="hidden sm:inline"> SEARCH</span>
+                </TabsTrigger>
+                <TabsTrigger value="bulk" className="font-mono gap-1.5 flex-1">
+                  <Layers className="w-3.5 h-3.5 shrink-0" />
+                  BULK<span className="hidden sm:inline"> UPLOAD</span>
+                </TabsTrigger>
+              </TabsList>
+              {/* Saved Prediction Cards — toggle the saved cards panel */}
+              <Button
+                variant="outline"
+                size="sm"
+                className={`font-mono gap-1.5 shrink-0 h-9 text-xs border-primary/40 text-primary hover:bg-primary/10 transition-colors ${savedCardsOpen ? "bg-primary/10" : ""}`}
+                onClick={() => setSavedCardsOpen(prev => !prev)}
+              >
+                <FolderOpen className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden xs:inline">SAVED </span>CARDS
+              </Button>
+            </div>
 
             <TabsContent value="search">
               <PlayerSearch 
@@ -302,6 +328,27 @@ export default function PredictBuilderPage() {
           </Tabs>
         </CardContent>
       </Card>
+
+      {/* Saved Prediction Cards panel — toggled by the SAVED CARDS button above */}
+      {savedCardsOpen && (
+        <Card className="border-border/60 shadow-sm glass-panel animate-in fade-in duration-200">
+          <div className="flex items-center justify-between px-4 pt-4 pb-2">
+            <p className="text-[10px] font-mono font-bold text-muted-foreground tracking-widest uppercase">
+              Saved Prediction Cards
+            </p>
+            <button
+              onClick={() => setSavedCardsOpen(false)}
+              className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded"
+              aria-label="Close saved cards"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          <CardContent className="px-4 pb-4 pt-0">
+            <SavedPredictionCards isAdmin={isAdmin} />
+          </CardContent>
+        </Card>
+      )}
 
       {/* Match Conditions — only visible once both players are selected */}
       {player1Id && player2Id && (

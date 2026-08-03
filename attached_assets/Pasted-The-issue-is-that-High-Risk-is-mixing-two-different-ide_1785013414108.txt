@@ -1,0 +1,244 @@
+The issue is that “High Risk” is mixing two different ideas:
+
+* How confident the model was before the match
+* How competitive the match looks after it starts
+
+A player dominating live does not automatically mean the pre-match warning was wrong. In your screenshot, the model only had 55% Data Quality, Extreme Upset Risk, and model disagreement. Before the match, a cautious recommendation could still have been reasonable—even if the player later won easily.
+
+However, Replit should verify whether those warnings are historically useful or being applied too aggressively.
+
+Copy and paste this into Replit:
+
+⸻
+
+Recalibrate the Recommendation System Using Historical Results
+
+Review and recalibrate the Tennis Matrix AI recommendation system using recently completed predictions, including both wins and losses.
+
+Replace the current recommendation wording with this confidence-based scale:
+
+1. Highest Confidence
+2. High Confidence
+3. Moderate Confidence
+4. Low Confidence
+5. Insufficient Edge
+
+Do not simply rename the existing categories. Recalculate and validate the rules that assign each recommendation.
+
+Main Objective
+
+Determine whether each recommendation category accurately reflects the historical reliability of the prediction at the time it was generated.
+
+The system must review completed predictions and compare:
+
+* Pre-match win probability
+* Final match result
+* Data Quality
+* Upset Risk
+* Model Agreement
+* Monte Carlo result
+* Competitive Balance
+* Missing-data flags
+* Injury, fatigue and travel signals
+* Surface performance
+* Recent form
+* Serve and return advantage
+* Whether the prediction was forced
+* Whether the match was marked Too Close to Call
+* Original recommendation
+* Final score and margin of victory, when available
+
+Important Evaluation Rule
+
+Do not use live match performance to retroactively decide whether the pre-match recommendation was correct.
+
+A player dominating after the match starts does not prove that the original uncertainty assessment was wrong. Recommendations must be evaluated using only information that was available before the match.
+
+The final result and score may be used to evaluate historical performance, but never as an input when recreating the original pre-match recommendation.
+
+Historical Audit
+
+Audit at least the most recent:
+
+* 100 completed predictions, when available
+* 100 winning predictions
+* 100 losing predictions
+* 50 predictions from each existing recommendation category, when available
+
+Also separate results by:
+
+* ATP
+* WTA
+* Challenger
+* ITF
+* Surface
+* Data Quality range
+* Upset Risk level
+* Model Agreement level
+* Win-probability range
+
+For every recommendation category, calculate:
+
+* Number of predictions
+* Wins
+* Losses
+* Accuracy
+* Average predicted probability
+* Calibration gap
+* Average Data Quality
+* Average Upset Risk
+* Average Model Agreement
+* Average margin of victory
+* Percentage of straight-set wins
+* Percentage of matches that were genuinely close
+* Percentage of matches where the recommendation was downgraded because of missing or conflicting evidence
+
+Detect Incorrect Recommendation Behavior
+
+Specifically identify cases where:
+
+* A 60%–70% projected winner is repeatedly classified as Low Confidence despite strong supporting evidence
+* Extreme Upset Risk is being assigned too often
+* A single disagreement signal overrides several stronger signals
+* Low Data Quality automatically causes Low Confidence even when the available evidence strongly agrees
+* High Confidence is being awarded despite weak evidence
+* Recommendation labels are based mainly on win probability instead of total evidence reliability
+* Recommendation and Upset Risk duplicate each other
+* Winning predictions are systematically being placed in overly cautious categories
+* Losing predictions are systematically receiving overly strong recommendations
+
+Separate Recommendation From Upset Risk
+
+These must remain separate measurements.
+
+Recommendation should answer:
+
+How strongly does the total available evidence support this predicted winner?
+
+Upset Risk should answer:
+
+How likely is uncertainty, volatility or conflicting evidence to produce an unexpected result?
+
+A prediction may correctly show:
+
+* High Confidence with Moderate Upset Risk
+* Moderate Confidence with Low Upset Risk
+* Low Confidence with Extreme Upset Risk
+
+Do not automatically force the recommendation label to match the Upset Risk label.
+
+New Recommendation Logic
+
+Base the recommendation on a weighted Evidence Confidence Score using:
+
+* Calibrated win probability
+* Core-model agreement
+* Data completeness
+* Data freshness
+* Surface-specific evidence
+* Recent-form reliability
+* Serve and return evidence
+* Monte Carlo agreement
+* Competitive Balance
+* Injury and availability confidence
+* Fatigue and travel uncertainty
+* Out-of-distribution detection
+* Historical reliability of the relevant tournament level
+* Missing or conflicting signals
+
+Do not use one fixed threshold alone.
+
+Apply learned calibration from completed predictions. Use sample-size safeguards so small segments cannot cause unstable changes.
+
+Intended Meaning of Each Category
+
+Highest Confidence
+
+Use only when there is strong, reliable and consistent evidence across several independent signals. Data Quality must be sufficient, model disagreement must be limited, and no major unresolved risk flags may exist.
+
+High Confidence
+
+Use when the predicted winner has a meaningful, well-supported advantage, but the match does not satisfy every Highest Confidence requirement.
+
+Moderate Confidence
+
+Use when the model identifies a real advantage, but evidence is mixed, incomplete or the match remains reasonably competitive.
+
+Low Confidence
+
+Use when the model projects a winner but the advantage is weak, fragile or heavily affected by uncertainty.
+
+Insufficient Edge
+
+Use when the evidence does not reliably separate the players. This should act as a pass or abstain recommendation rather than a forced confident pick.
+
+Reclassification Requirements
+
+After the audit:
+
+1. Produce the proposed thresholds and logic for all five categories.
+2. Show how many historical predictions would move from one category to another.
+3. Compare old-category accuracy against new-category accuracy.
+4. Confirm whether each category becomes progressively more accurate from Insufficient Edge through Highest Confidence.
+5. Do not deploy the new thresholds unless the ordering is logically consistent and historically supported.
+6. Run a shadow replay before replacing the existing production logic.
+7. Preserve every original recommendation in the database for comparison.
+8. Add fields for:
+    * originalRecommendation
+    * recalibratedRecommendation
+    * recommendationVersion
+    * recommendationChanged
+    * recommendationChangeReason
+
+Dashboard Output
+
+Create an admin-only Recommendation Calibration report showing:
+
+* Current recommendation
+* Proposed recommendation
+* Match result
+* Predicted winner
+* Win probability
+* Data Quality
+* Upset Risk
+* Model Agreement
+* Final score
+* Reason for the proposed change
+* Accuracy by old category
+* Accuracy by new category
+* Calibration gap by category
+* Recommendation migration matrix
+
+Include filters for tour, surface, tournament level, date range, result, recommendation and Data Quality.
+
+Specific Screenshot-Type Scenario
+
+Investigate predictions similar to this example:
+
+* Predicted winner around 62%
+* Recommendation shown as High Risk
+* Data Quality around 55%
+* Extreme Upset Risk
+* Core-model disagreement
+
+Determine whether the cautious recommendation was historically justified for similar pre-match profiles.
+
+Do not change the recommendation simply because this individual player later dominated. Instead, calculate how often predictions with this exact profile win, lose, win in straight sets and underperform.
+
+If this profile wins significantly more often than its current recommendation implies, recalibrate the rules. If it remains historically volatile, retain the cautious category and improve the explanation shown to users.
+
+User-Facing Explanation
+
+Under each recommendation, add a short explanation such as:
+
+* Highest Confidence: Strong evidence agreement with limited uncertainty.
+* High Confidence: Clear model-supported advantage with manageable risk.
+* Moderate Confidence: Meaningful advantage, but some evidence is mixed.
+* Low Confidence: Projected winner, but the advantage is fragile.
+* Insufficient Edge: Available evidence does not support a reliable advantage.
+
+Complete the audit first, show the findings, and then implement the revised recommendation system only after validating it through shadow replay.
+
+⸻
+
+For that screenshot specifically, I would expect the label to become Low Confidence, not “High Risk.” The Extreme Upset Risk box already communicates the risk, so using “High Risk” again as the recommendation is repetitive and confusing.

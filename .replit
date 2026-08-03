@@ -29,7 +29,7 @@ isValidation = true
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd artifacts/api-server && pnpm exec tsx --test $(find src/services/predictionEngine -name '*.test.ts') && cd ../tennis-predictor && pnpm exec tsx --test src/lib/monteCarloHeadline.test.ts"
+args = "cd artifacts/api-server && pnpm exec tsx --test $(find src/services/predictionEngine -name '*.test.ts') src/services/parlayBuilder/builderScoringService.test.ts && cd ../tennis-predictor && pnpm exec tsx --test src/lib/monteCarloHeadline.test.ts"
 
 [agent]
 stack = "PNPM_WORKSPACE"
@@ -47,6 +47,17 @@ channel = "stable-25_05"
 [userenv.shared]
 AI_INTEGRATIONS_OPENAI_BASE_URL = "https://api.openai.com/v1"
 RAPIDAPI_HOST = "tennis-api-atp-wta-itf.p.rapidapi.com"
+PAYMENTS_PLAN_KEY = "pro"
+PAYMENTS_PLAN_NAME = "Pro"
+PAYMENTS_V2_ENABLED = "true"
+VITE_PAYMENTS_V2_ENABLED = "true"
+APP_PUBLIC_URL = "https://tennis-stats-engine.replit.app"
+STRIPE_ELITE_PRICE_ID = "price_1TwuumGYBq3EbAKF6TIir0BU"
+STRIPE_PRICE_ID = "price_1TwuteGYBq3EbAKFQb1xOqzy"
+STRIPE_ELITE_ANNUAL_PRICE_ID = "price_1TwuwCGYBq3EbAKFKj19qVAw"
+STRIPE_PRO_ANNUAL_PRICE_ID = "price_1Tx5jGGYBq3EbAKF3iDHIw52"
+STRIPE_TEAM_PRICE_ID = "price_1TwuxDGYBq3EbAKFyjKklp3D"
+ADMIN_ACCESS_KEY = "54321"
 
 [userenv.development]
 NODE_OPTIONS = "--max-old-space-size=6144"

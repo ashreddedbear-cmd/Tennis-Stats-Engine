@@ -19,6 +19,10 @@ import type { RawScreenshotRecognition, RawMatchupEntry } from "./screenshotReco
 export interface ScreenshotPlayerMatch {
   recognizedName: string | null;
   player: PlayerSummary | null;
+  /** "resolved" | "best-guess" | "ambiguous" | "not-found" | "unreadable". Included in API response for UI disambiguation. */
+  status?: string;
+  /** Populated when status === "ambiguous". The confident candidates the resolver couldn't narrow to one. */
+  candidates?: PlayerSummary[];
 }
 
 export interface ScreenshotEventMatch {
@@ -51,7 +55,21 @@ export interface ScreenshotMatchupResult {
 
 interface PlayerResolveOutcome {
   match: ScreenshotPlayerMatch;
-  status: "resolved" | "unreadable" | "ambiguous" | "not-found";
+  /**
+   * - resolved    — exactly one confident match.
+   * - best-guess  — zero confident matches, but OCR fuzzy fallback found exactly one surname
+   *                 within edit-distance ≤1. Player is set but a disclaimer warning is emitted.
+   * - ambiguous   — multiple distinct confident matches.
+   * - not-found   — no match at all (no fuzzy candidate either).
+   * - unreadable  — the name field was null/empty in the OCR result.
+   */
+  status: "resolved" | "best-guess" | "unreadable" | "ambiguous" | "not-found";
+  /**
+   * Populated when status === "ambiguous".
+   * The confident candidates that caused the tie — used by the caller to attempt
+   * opponent-fixture cross-disambiguation before giving up.
+   */
+  candidates?: PlayerSummary[];
 }
 
 interface FixtureCandidate {
@@ -133,6 +151,11 @@ function normalizeName(name: string): string {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "") // strip combining diacritics (accents, etc.)
     .toLowerCase()
+    // Expand dot-separated multi-initial patterns ("j.j." → "j j ") so each initial
+    // becomes a separate token. Without this, "J.J. Wolf" collapses to "jj wolf" and
+    // the bijective initial-expansion in wordsMatch (which only handles 1-char tokens)
+    // can't match it against "jeffrey john wolf".
+    .replace(/\b([a-z])\.([a-z])\./g, "$1 $2 ")
     .replace(/[^a-z0-9\s]/g, "")    // keep only ASCII letters, digits, spaces
     .replace(/\s+/g, " ")
     .trim();
@@ -570,6 +593,103 @@ function isConfidentMatch(recognizedNorm: string, candidateNorm: string): boolea
   return false;
 }
 
+// ── OCR fuzzy fallback ─────────────────────────────────────────────────────
+
+/**
+ * Levenshtein edit distance between two strings.
+ * Used only on short surname tokens (≤30 chars each) so the O(m·n) allocation is fine.
+ */
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  const prev: number[] = Array.from({ length: n + 1 }, (_, j) => j);
+  const curr: number[] = new Array(n + 1) as number[];
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      curr[j] = a[i - 1] === b[j - 1]
+        ? prev[j - 1]!
+        : 1 + Math.min(prev[j]!, curr[j - 1]!, prev[j - 1]!);
+    }
+    for (let j = 0; j <= n; j++) prev[j] = curr[j]!;
+  }
+  return prev[n]!;
+}
+
+/**
+ * Extract the surname token from an OCR name.
+ * Skips leading initials ("P. Badosa" → "Badosa") and returns the last substantive word.
+ */
+function extractOcrSurname(searchName: string): string | null {
+  const words = searchName.trim().split(/\s+/).filter(Boolean);
+  // Filter out single-letter initials with optional dot
+  const nonInitials = words.filter((w) => w.replace(/\.$/, "").length > 1);
+  const surname = nonInitials[nonInitials.length - 1] ?? null;
+  return surname && surname.length >= 3 ? surname : null;
+}
+
+/**
+ * Common OCR misread substitutions applied to a surname to widen the search pool.
+ * Each entry generates one alternative search term (not all combinations — targeted swaps only).
+ */
+function ocrVariants(surname: string): string[] {
+  const variants = new Set<string>();
+  variants.add(surname.replace(/l/g, "I"));      // lowercase-l → capital-I
+  variants.add(surname.replace(/I/g, "l"));      // capital-I → lowercase-l
+  variants.add(surname.replace(/0/g, "O"));      // digit-zero → letter-O
+  variants.add(surname.replace(/O/g, "0"));      // letter-O → digit-zero
+  variants.add(surname.replace(/rn/g, "m"));     // OCR "rn" fused as "m"
+  variants.add(surname.replace(/m/g, "rn"));     // OCR "m" split as "rn"
+  variants.add(surname.replace(/VV/g, "W"));     // double-V → W
+  variants.delete(surname);                       // already searched — no-op if unchanged
+  return Array.from(variants).filter((v) => v !== surname && v.length >= 3);
+}
+
+/**
+ * When the primary resolution finds zero confident matches, attempt a lenient OCR-error
+ * recovery by:
+ *   1. Extracting the surname token from the OCR name.
+ *   2. Generating common misread variants (l↔I, 0↔O, rn↔m, VV→W).
+ *   3. Searching for each variant via searchKnownPlayers.
+ *   4. Keeping candidates whose normalized surname is within edit-distance ≤1 of the OCR surname.
+ *   5. Returning the single match if unambiguous; null otherwise.
+ *
+ * Only triggers on surnames ≥3 characters to avoid false positives on very short names.
+ */
+async function ocrFuzzyFallback(
+  provider: TennisDataProvider,
+  searchName: string,
+): Promise<PlayerSummary | null> {
+  const surname = extractOcrSurname(searchName);
+  if (!surname) return null;
+
+  const surnameNorm = normalizeName(surname);
+
+  const variantResults = await Promise.all(
+    ocrVariants(surname).map((v) => searchKnownPlayers(provider, v)),
+  );
+
+  // Deduplicate across all variant searches
+  const pool = new Map<string, PlayerSummary>();
+  for (const results of variantResults) {
+    for (const p of results) {
+      if (!pool.has(p.id)) pool.set(p.id, p);
+    }
+  }
+
+  if (pool.size === 0) return null;
+
+  // Filter to candidates whose surname is within edit-distance ≤1
+  const fuzzyMatches = Array.from(pool.values()).filter((p) => {
+    const pWords = normalizeName(p.name).split(/\s+/).filter(Boolean);
+    const pSurname = pWords[pWords.length - 1] ?? "";
+    return pSurname.length >= 3 && levenshtein(surnameNorm, pSurname) <= 1;
+  });
+
+  // Exactly one unambiguous best-guess — multiple still means "don't guess"
+  return fuzzyMatches.length === 1 ? fuzzyMatches[0]! : null;
+}
+
 // ── Candidate gathering ────────────────────────────────────────────────────
 
 /**
@@ -590,7 +710,8 @@ async function gatherCandidates(provider: TennisDataProvider, searchName: string
   if (primaryConfident.length > 0) return primary;
 
   // Word-by-word fallback (surname first — most distinctive, fewest false positives)
-  const words = searchName.trim().split(/\s+/).filter((w) => w.length >= 3).reverse();
+  // Min length of 2 catches very short surnames (e.g. "Lea Ma" → "Ma" is 2 chars).
+  const words = searchName.trim().split(/\s+/).filter((w) => w.length >= 2).reverse();
   const accumulated = new Map<string, PlayerSummary>();
   for (const p of primary) accumulated.set(p.id, p);
 
@@ -613,10 +734,17 @@ async function gatherCandidates(provider: TennisDataProvider, searchName: string
  * Strict OCR resolution: requires exactly one confident match or returns null.
  * Never substitutes a different player due to specificity/ranking heuristics.
  * All ambiguity is reported to the user for manual disambiguation.
+ *
+ * @param eventName  Raw OCR event/tournament name from the screenshot. When provided alongside
+ *   todayFixtures, used to break ties when multiple distinct players share the matched name —
+ *   only the candidate scheduled in that tournament's fixtures is accepted.
+ * @param todayFixtures  Today's live fixture list for fixture-context tie-breaking.
  */
 async function resolvePlayerMatch(
   provider: TennisDataProvider,
   recognizedName: string | null,
+  eventName?: string | null,
+  todayFixtures?: Fixture[],
 ): Promise<PlayerResolveOutcome> {
   if (!recognizedName) {
     return {
@@ -633,6 +761,16 @@ async function resolvePlayerMatch(
   const candidates = await gatherCandidates(provider, searchName);
   const confident = candidates.filter((c) => isConfidentMatch(norm, normalizeName(c.name)));
 
+  // A single confident candidate is unambiguous by definition — resolve it even when the OCR
+  // name is in an abbreviated "X. Surname" or "X. Y. Surname" form.  The weak-key guard below
+  // is only meaningful when multiple candidates match (genuine ambiguity), so checking for a
+  // unique hit first prevents ITF/lower-tier players whose canonical DB names are abbreviated
+  // (e.g. "S. Kopp", "E. Meri", "T. Pereira") from being permanently stuck as "not-found"
+  // when the live provider is unavailable and the historical DB is the only source.
+  if (confident.length === 1) {
+    return { match: { recognizedName, player: confident[0] }, status: "resolved" };
+  }
+
   if (isWeakOcrIdentityKey(norm)) {
     return {
       match: { recognizedName, player: null },
@@ -640,16 +778,91 @@ async function resolvePlayerMatch(
     };
   }
 
-  if (confident.length === 1) {
-    return { match: { recognizedName, player: confident[0] }, status: "resolved" };
-  }
-
-  // Zero or multiple matches: ALWAYS report as unresolved, NEVER substitute
-  // This strict behavior ensures OCR never silently picks the "most likely" player
-  // when the real player remains ambiguous or unidentified.
   if (confident.length > 1) {
-    return { match: { recognizedName, player: null }, status: "ambiguous" };
+    // When every confident match shares the same normalized name they are the same player
+    // recorded under different MatchStat season IDs (e.g. "J. Monday" id=10071 and id=28099).
+    // Collapse to the single best candidate rather than surfacing a spurious "ambiguous" error.
+    // Only truly different names (different country codes / different players) remain ambiguous.
+    const firstNorm = normalizeName(confident[0]!.name);
+    const allSameName = confident.every((c) => normalizeName(c.name) === firstNorm);
+    if (allSameName) {
+      const best = confident.slice().sort((a, b) => {
+        // Prefer live standings over historical-match records
+        const aLive = a.source !== "historical-match" ? 0 : 1;
+        const bLive = b.source !== "historical-match" ? 0 : 1;
+        if (aLive !== bLive) return aLive - bLive;
+        // Prefer ranked players
+        const aR = a.currentRank != null ? 0 : 1;
+        const bR = b.currentRank != null ? 0 : 1;
+        if (aR !== bR) return aR - bR;
+        // Prefer lower rank number (higher-ranked player)
+        if (a.currentRank != null && b.currentRank != null) return a.currentRank - b.currentRank;
+        return 0;
+      })[0]!;
+      return { match: { recognizedName, player: best }, status: "resolved" };
+    }
+    // Fixture-context tie-break: when multiple genuinely distinct players share the
+    // matched name (e.g. two different "Jordan Lee"s), check whether exactly one of
+    // them is scheduled in today's fixtures for the screenshot's tournament. This
+    // resolves common-name ambiguity without guessing when the context is unambiguous.
+    if (eventName && todayFixtures && todayFixtures.length > 0) {
+      const eventNorm = normalizeName(eventName);
+      if (eventNorm.length > 0) {
+        const tournamentFixtures = todayFixtures.filter((f) => {
+          const tNorm = normalizeName(f.tournamentName ?? "");
+          return tNorm.length > 0 && (tNorm.includes(eventNorm) || eventNorm.includes(tNorm));
+        });
+        if (tournamentFixtures.length > 0) {
+          const inFixture = confident.filter((c) =>
+            tournamentFixtures.some(
+              (f) =>
+                resolvedPlayerFitsFixtureSlot(c, f.player1Id, f.player1Name) ||
+                resolvedPlayerFitsFixtureSlot(c, f.player2Id, f.player2Name),
+            ),
+          );
+          if (inFixture.length === 1) {
+            return { match: { recognizedName, player: inFixture[0]! }, status: "resolved" };
+          }
+        }
+      }
+    }
+
+    // Tour-based tie-break: "ATP Washington" → only ATP candidates; "WTA Memphis" → WTA only.
+    // The tour prefix in the event name is an unambiguous signal that narrows common-name
+    // ambiguity (e.g. "Jordan Lee" ATP vs. WTA, "A. Sharma" ATP vs. WTA) without guessing.
+    if (eventName) {
+      const eventUpper = eventName.toUpperCase();
+      const inferredTour: "ATP" | "WTA" | null =
+        /\batp\b/.test(eventUpper) ? "ATP" :
+        /\bwta\b/.test(eventUpper) ? "WTA" :
+        null;
+      if (inferredTour) {
+        const tourFiltered = confident.filter((c) => c.tour === inferredTour);
+        if (tourFiltered.length === 1) {
+          return { match: { recognizedName, player: tourFiltered[0]! }, status: "resolved" };
+        }
+      }
+    }
+
+    // Auto-pick the best candidate rather than surfacing an ambiguous error.
+    // Prefer: live-standings > historical-match; ranked > unranked; lower rank number (higher-ranked).
+    const autoPick = confident.slice().sort((a, b) => {
+      const aLive = a.source !== "historical-match" ? 0 : 1;
+      const bLive = b.source !== "historical-match" ? 0 : 1;
+      if (aLive !== bLive) return aLive - bLive;
+      const aR = a.currentRank != null ? 0 : 1;
+      const bR = b.currentRank != null ? 0 : 1;
+      if (aR !== bR) return aR - bR;
+      if (a.currentRank != null && b.currentRank != null) return a.currentRank - b.currentRank;
+      return 0;
+    })[0]!;
+    return { match: { recognizedName, player: autoPick }, status: "best-guess", candidates: confident };
   } else {
+    // OCR misread recovery: try edit-distance ≤1 on the surname before giving up entirely.
+    const fuzzyMatch = await ocrFuzzyFallback(provider, searchName);
+    if (fuzzyMatch) {
+      return { match: { recognizedName, player: fuzzyMatch }, status: "best-guess" };
+    }
     return { match: { recognizedName, player: null }, status: "not-found" };
   }
 }
@@ -667,10 +880,30 @@ async function resolveEventMatch(
   // because live fixtures get a tournament_key → surface lookup instead.
   // A screenshot import has no tournament_key, so fall back to a real name search.
   if (eventName && surface === null && provider.findTournamentSurfaceByName) {
-    const found = await provider.findTournamentSurfaceByName(eventName);
+    let found: Awaited<ReturnType<NonNullable<typeof provider.findTournamentSurfaceByName>>> | null = null;
+    try {
+      found = await provider.findTournamentSurfaceByName(eventName);
+    } catch {
+      // Provider unavailable (e.g. circuit breaker open) — surface stays null, not an error.
+    }
     if (found) {
       surface = found.surface;
-      level = found.level ?? level;
+      // Suppress a provider-returned level that contradicts the event's known tour.
+      // The provider's tournament DB sometimes returns a stale ATP-era label (e.g. "ATP250")
+      // for a city that now hosts a WTA event (Memphis, Vancouver). The event name prefix is
+      // a stronger signal than the provider's coarse category label.
+      let providerLevel = found.level ?? level;
+      if (providerLevel && eventName) {
+        const eUpper = eventName.toUpperCase();
+        const isWtaEvent = /\bwta\b/.test(eUpper);
+        const isAtpEvent = /\batp\b/.test(eUpper);
+        const isAtpLevel = providerLevel === "ATP250" || providerLevel === "ATP500" || providerLevel === "Masters1000";
+        const isWtaLevel = providerLevel === "WTA250" || providerLevel === "WTA500" || providerLevel === "WTA1000";
+        if ((isWtaEvent && isAtpLevel) || (isAtpEvent && isWtaLevel)) {
+          providerLevel = null; // tour mismatch — drop the stale label
+        }
+      }
+      level = providerLevel;
     }
   }
 
@@ -694,14 +927,80 @@ async function resolveOneMatchup(
   const warnings: string[] = [];
 
   const [player1Outcome, player2Outcome, event] = await Promise.all([
-    resolvePlayerMatch(provider, entry.player1Name),
-    resolvePlayerMatch(provider, entry.player2Name),
+    resolvePlayerMatch(provider, entry.player1Name, entry.eventName, todayFixtures),
+    resolvePlayerMatch(provider, entry.player2Name, entry.eventName, todayFixtures),
     resolveEventMatch(provider, entry.eventName, warnings),
   ]);
 
   let player1 = player1Outcome.match;
   let player2 = player2Outcome.match;
-  const hasAmbiguousSide = player1Outcome.status === "ambiguous" || player2Outcome.status === "ambiguous";
+  let hasAmbiguousSide = player1Outcome.status === "ambiguous" || player2Outcome.status === "ambiguous";
+
+  // ── Opponent-context disambiguation ──────────────────────────────────────────
+  // When one player is "ambiguous" (multiple confident candidates) but the other
+  // player IS resolved, use live fixtures to pick the one candidate that actually
+  // appears in a scheduled match alongside the resolved opponent. This is the only
+  // reliable way to resolve compound names (Hong Yi Cody Wong, Aran Teixido Garcia)
+  // and tour collisions (Astra Sharma ATP vs WTA) without guessing.
+  //
+  // We use resolvedPlayerFitsFixtureSlot (name+ID) rather than ID equality so that
+  // MatchStat local IDs and API-Tennis fixture IDs are interchangeable.
+  if (hasAmbiguousSide) {
+    const p1Ambiguous = player1Outcome.status === "ambiguous" && !player1.player;
+    const p2Ambiguous = player2Outcome.status === "ambiguous" && !player2.player;
+
+    /**
+     * Looks for the unique candidate from `ambiguousCandidates` that shares a live
+     * fixture with `resolvedPlayer`.  Returns null if 0 or ≥2 distinct candidates match.
+     */
+    const tryFixtureDisambiguate = (
+      resolvedPlayer: PlayerSummary,
+      ambiguousCandidates: PlayerSummary[],
+    ): PlayerSummary | null => {
+      const byId = new Map<string, PlayerSummary>();
+
+      for (const fixture of todayFixtures) {
+        const fitsSlot1 = resolvedPlayerFitsFixtureSlot(resolvedPlayer, fixture.player1Id, fixture.player1Name);
+        const fitsSlot2 = resolvedPlayerFitsFixtureSlot(resolvedPlayer, fixture.player2Id, fixture.player2Name);
+        if (!fitsSlot1 && !fitsSlot2) continue;
+
+        const opponentSlotId   = fitsSlot1 ? fixture.player2Id   : fixture.player1Id;
+        const opponentSlotName = fitsSlot1 ? fixture.player2Name : fixture.player1Name;
+
+        for (const c of ambiguousCandidates) {
+          if (resolvedPlayerFitsFixtureSlot(c, opponentSlotId, opponentSlotName)) {
+            byId.set(c.id, c);
+          }
+        }
+      }
+
+      return byId.size === 1 ? [...byId.values()][0]! : null;
+    };
+
+    if (p2Ambiguous && player1.player && player2Outcome.candidates?.length) {
+      const resolved = tryFixtureDisambiguate(player1.player, player2Outcome.candidates);
+      if (resolved) {
+        player2 = { recognizedName: player2.recognizedName, player: resolved };
+        warnings.splice(0, warnings.length, ...prunePlayerWarningsForLabel(warnings, "Player 2"));
+        warnings.push(`[resolver-debug] P2 opponent-fixture disambiguated → ${resolved.name}.`);
+      }
+    }
+
+    if (p1Ambiguous && player2.player && player1Outcome.candidates?.length) {
+      const resolved = tryFixtureDisambiguate(player2.player, player1Outcome.candidates);
+      if (resolved) {
+        player1 = { recognizedName: player1.recognizedName, player: resolved };
+        warnings.splice(0, warnings.length, ...prunePlayerWarningsForLabel(warnings, "Player 1"));
+        warnings.push(`[resolver-debug] P1 opponent-fixture disambiguated → ${resolved.name}.`);
+      }
+    }
+
+    // Recalculate: if disambiguation resolved the ambiguous side, lift the gate so the
+    // downstream fixture inference can handle any remaining "not-found" side normally.
+    hasAmbiguousSide =
+      (player1Outcome.status === "ambiguous" && !player1.player) ||
+      (player2Outcome.status === "ambiguous" && !player2.player);
+  }
 
   if ((!player1.player || !player2.player) && !hasAmbiguousSide) {
     const singleSideInference = inferUniqueOpponentFromSingleResolvedSide({
@@ -775,12 +1074,29 @@ async function resolveOneMatchup(
     }
   }
 
+  // Best-guess disclaimer: player IS set but may be wrong — OCR may have misread a character.
+  // The warning is emitted before the prediction proceeds so the user can correct it.
+  if (player1Outcome.status === "best-guess" && player1.player) {
+    warnings.push(
+      `Read "${entry.player1Name}" for Player 1 — OCR may have misread a character. Best guess: ${player1.player.name}. Please confirm via Search Players.`,
+    );
+  }
+  if (player2Outcome.status === "best-guess" && player2.player) {
+    warnings.push(
+      `Read "${entry.player2Name}" for Player 2 — OCR may have misread a character. Best guess: ${player2.player.name}. Please confirm via Search Players.`,
+    );
+  }
+
   if (!player1.player) {
     if (player1Outcome.status === "unreadable") {
       warnings.push("Player 1 could not be read from the screenshot -- use Search Players to add them manually.");
     } else if (player1Outcome.status === "ambiguous") {
       warnings.push(
         `Read "${entry.player1Name}" for Player 1, but multiple matching players were found -- please select the right one from Search Players.`,
+      );
+    } else if (player1Outcome.status === "not-found") {
+      warnings.push(
+        `Read "${entry.player1Name}" for Player 1, but they were not found in any known player source. They may be a very low-ranked player not yet in the database.`,
       );
     } else {
       warnings.push(
@@ -796,6 +1112,10 @@ async function resolveOneMatchup(
       warnings.push(
         `Read "${entry.player2Name}" for Player 2, but multiple matching players were found -- please select the right one from Search Players.`,
       );
+    } else if (player2Outcome.status === "not-found") {
+      warnings.push(
+        `Read "${entry.player2Name}" for Player 2, but they were not found in any known player source. They may be a very low-ranked player not yet in the database.`,
+      );
     } else {
       warnings.push(
         `Read "${entry.player2Name}" for Player 2, but couldn't confidently match them to a known player -- please use Search Players.`,
@@ -807,6 +1127,19 @@ async function resolveOneMatchup(
   if (player1.player && player2.player && player1.player.id === player2.player.id) {
     warnings.push(`Player 2 resolved to the same player as Player 1 -- please pick Player 2 manually from Search Players.`);
     player2 = { recognizedName: player2.recognizedName, player: null };
+  }
+
+  // Attach resolution status + candidates to each player object so the API response
+  // can expose them for UI disambiguation (e.g. parlay builder candidate picker).
+  if (player1Outcome.status === "ambiguous" && !player1.player) {
+    player1 = { ...player1, status: "ambiguous", candidates: player1Outcome.candidates };
+  } else if (!player1.player) {
+    player1 = { ...player1, status: player1Outcome.status };
+  }
+  if (player2Outcome.status === "ambiguous" && !player2.player) {
+    player2 = { ...player2, status: "ambiguous", candidates: player2Outcome.candidates };
+  } else if (!player2.player) {
+    player2 = { ...player2, status: player2Outcome.status };
   }
 
   const resolved = !!player1.player && !!player2.player;

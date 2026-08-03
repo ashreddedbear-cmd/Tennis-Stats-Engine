@@ -37,7 +37,10 @@ function toRawPoint(row: EvaluationPredictionRow): CalibrationPoint | null {
  * and by the binned isotonic calibration fit). If the dashboard's display buckets ever change,
  * ECE stays comparable release over release instead of silently shifting with them.
  */
-export const ECE_BUCKET_EDGES = [50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100];
+// ECE_BUCKET_EDGES is now identical to BUCKET_EDGES (imported from calibration.ts above).
+// Both used 5% steps [50, 55, ..., 100]. The separate constant is retained as an alias here
+// so that the computeECE function below can continue to reference it by its original name.
+const ECE_BUCKET_EDGES = BUCKET_EDGES;
 
 /**
  * A bucket with fewer than this many points has an observed accuracy that's either 0% or (close
@@ -129,31 +132,53 @@ export interface CalibrationBucket {
   n: number;
   avgPredicted: number | null;
   observedAccuracy: number | null;
+  /** Absolute difference between avgPredicted and observedAccuracy (0–100 scale). Null when either is null. */
+  calibrationError: number | null;
 }
 
-/** Buckets predictions by "distance from a coin flip toward the predicted winner", 50-54.9%, ..., 80%+. */
+/**
+ * Buckets predictions by "distance from a coin flip toward the predicted winner" into 5%-wide
+ * bands: 50–55%, 55–60%, ..., 95–100%.
+ *
+ * Each bucket returns avgPredicted (model's stated confidence), observedAccuracy (actual win
+ * rate), and calibrationError (absolute gap between the two). The bucket with the smallest
+ * calibrationError is the most trustworthy prediction band.
+ */
 export function computeCalibrationBuckets(rows: EvaluationPredictionRow[]): CalibrationBucket[] {
-  const included = rows.filter((r) => (r.status === "graded" || r.status === "void") && r.includedInAccuracy && r.calibratedProbability !== null);
+  const included = rows.filter(
+    (r) => (r.status === "graded" || r.status === "void") && r.includedInAccuracy && r.calibratedProbability !== null,
+  );
 
   return BUCKET_EDGES.slice(0, -1).map((min, i) => {
-    const max = BUCKET_EDGES[i + 1];
+    const max = BUCKET_EDGES[i + 1]!;
     const inBucket = included.filter((r) => {
       const confidence = Math.max(r.calibratedProbability!, 100 - r.calibratedProbability!);
       return confidence >= min && (max === 100 ? confidence <= 100 : confidence < max);
     });
     const correct = inBucket.filter((r) => r.actualWinnerId === r.predictedWinnerId).length;
-    const avgPredicted =
+    const avgPredictedRaw =
       inBucket.length > 0
-        ? inBucket.reduce((sum, r) => sum + Math.max(r.calibratedProbability!, 100 - r.calibratedProbability!), 0) / inBucket.length
+        ? inBucket.reduce((sum, r) => sum + Math.max(r.calibratedProbability!, 100 - r.calibratedProbability!), 0) /
+          inBucket.length
+        : null;
+
+    const avgPredicted = avgPredictedRaw !== null ? Math.round(avgPredictedRaw * 10) / 10 : null;
+    const observedAccuracy =
+      inBucket.length > 0 ? Math.round((correct / inBucket.length) * 1000) / 10 : null;
+    const calibrationError =
+      avgPredicted !== null && observedAccuracy !== null
+        ? Math.round(Math.abs(avgPredicted - observedAccuracy) * 10) / 10
         : null;
 
     return {
-      label: max === 100 ? `${min}%+` : `${min}-${max - 0.1}%`,
+      // Label uses "50–55%" notation (en-dash, both bounds shown) — human-readable band name.
+      label: `${min}–${max}%`,
       min,
       max,
       n: inBucket.length,
-      avgPredicted: avgPredicted !== null ? Math.round(avgPredicted * 10) / 10 : null,
-      observedAccuracy: inBucket.length > 0 ? Math.round((correct / inBucket.length) * 1000) / 10 : null,
+      avgPredicted,
+      observedAccuracy,
+      calibrationError,
     };
   });
 }

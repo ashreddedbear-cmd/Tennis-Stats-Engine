@@ -1,0 +1,79 @@
+Here's the consolidated Replit prompt — Doc 4's architecture, scoped to your actual keys, with a hard wall against the Prediction Engine.
+
+---
+
+**TENNIS MATRIX AI — PARLAY BUILDER IMPLEMENTATION PROMPT**
+
+**Non-negotiable separation rule (read first):**
+Parlay Builder and Prediction Engine are two independent products sharing only two neutral utility tables: `canonical_players` and `canonical_tournaments`. Parlay Builder must never import from, call, or read: `prediction_results`, `prediction_batches`, `prediction_history`, `prediction_calibration`, `prediction_cards`, or any validation/risk/grade/agreement field. If Prediction Engine is deleted entirely, Parlay Builder must still run. Add a lint/CI check that fails the build if any file under `/parlay-builder` imports anything from `/prediction-engine`.
+
+**1. Environment variables (normalize casing now)**
+```
+API_SPORTS_KEY
+API_TENNIS_KEY
+ODDS_API_IO_KEY
+THE_ODDS_API_KEY
+RAPIDAPI_KEY          // consolidate x_rapidapi_key / X_RAPIDAPI_KEY into this one name
+```
+All requests to these route through the backend only — never exposed to the browser.
+
+**2. Provider adapters** (each independently disable-able, each reports health)
+```
+adapters/
+  apiSportsAdapter.ts      // event provider #1: fixtures, live scores, rankings
+  apiTennisAdapter.ts      // event provider #2: cross-check source
+  rapidApiTennisAdapter.ts // ITF/Challenger depth, whichever sub-API is subscribed
+  theOddsApiAdapter.ts     // odds provider #1
+  oddsApiIoAdapter.ts      // odds provider #2 (better Challenger/ITF odds coverage)
+  sackmannHistoricalAdapter.ts  // free GitHub CSV pull, scheduled job not live query
+  tennisDataUkAdapter.ts        // free historical odds CSV, for backtesting only
+```
+Each adapter implements: `fetchEvents()`, `fetchOdds()`, `healthCheck()`, `lastUpdated()`. No adapter throws on failure — all return `{ data, error, source, timestamp }`.
+
+**3. Historical backfill job (separate from live path)**
+```
+jobs/backfillHistoricalData.ts
+```
+Runs on a schedule (e.g. weekly), pulls Sackmann repo + tennis-data.co.uk CSVs, normalizes into `parlay_historical_matches` and `parlay_historical_odds`. This powers surface-volatility and player-reliability shrinkage calculations — it is never called during a live parlay-building session.
+
+**4. Source conflict resolution (two providers each, now meaningful)**
+```
+services/reconcileEvents.ts   // API-Sports vs API-Tennis vs RapidAPI
+services/reconcileOdds.ts     // The Odds API vs Odds-API.io
+```
+When event providers disagree on surface/round/status → apply Doc 4 §10 authority order, log the conflict, surface a visible warning. When odds providers disagree beyond a configurable threshold (e.g. >8% implied-probability gap) → flag `marketDisagreement: true` on that leg; this is itself a useful signal, not just noise to hide.
+
+**5. Data tables (Parlay Builder's own, per Doc 4 §12)**
+```
+parlay_provider_events
+parlay_provider_odds_snapshots
+parlay_match_reconciliation
+parlay_provider_conflicts
+parlay_historical_matches
+parlay_historical_odds
+parlay_candidate_analysis
+parlay_active_drafts
+parlay_saved_parlays
+parlay_provider_health
+```
+Shared only: `canonical_players`, `canonical_tournaments`, `provider_player_aliases`, `provider_tournament_aliases`.
+
+**6. Parlay Builder's own analysis (independent of Prediction Engine)**
+Compute from provider data only:
+- No-vig probability per player (average across both odds providers, weighted by market freshness)
+- Market disagreement / stability score
+- Data completeness score (per Doc 4 §5 pattern — did we get stable IDs, surface, recent history, odds from both providers?)
+- Player reliability (shrinkage-adjusted, from `parlay_historical_matches`)
+- Tournament/round volatility (shrinkage-adjusted, from historical upset rates)
+
+Name these `Parlay Reliability`, `Market Stability`, `Leg Risk`, `Data Completeness` — never "Validation," "Grade," or "Confidence," which are Prediction Engine terms.
+
+**7. Failure/degradation behavior**
+If one odds provider is down, fall back to the other and mark `singleSourceOdds: true`. If both are down, show the match with "Odds temporarily unavailable" — never fabricate a number. If RapidAPI/ITF coverage is thin, lower `dataCompleteness` rather than guessing.
+
+**8. Build Parlay UI/persistence**
+Reuse the Build Parlay UX mechanics from the earlier spec (persistent draft, sort/filter, safe auto-eligibility, no-clear-without-confirmation, mobile layout requirements) — but wire the `ParlayMatch` type to Parlay Builder's own computed fields instead of prediction-engine fields. Drop `predictedWinProbability`, `validationScore`, `evidenceQuality`, `grade`, `recommendation` from the type entirely; replace with `noVigProbability`, `parlayReliability`, `marketStability`, `dataCompleteness`, `legRisk`.
+
+---
+
+Want me to also draft the CI check (a simple grep-based import-boundary test) that fails the build if any Parlay Builder file ever imports a Prediction Engine module — a concrete guardrail so the separation holds even months from now when someone (or an AI) is refactoring quickly?

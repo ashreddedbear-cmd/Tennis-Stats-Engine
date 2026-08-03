@@ -47,16 +47,39 @@ export const MODULE_IMPORTANCE = {
  * Modules excluded from the numeric Data Quality BLEND entirely (but still fully computed and
  * shown in `EngineBreakdown` for transparency -- reliability/notes/warnings are never hidden).
  *
- * Head-to-Head was excluded per the 2026-07-13 "stop low-value signals from dragging down
- * quality scores" audit: most real matchups (especially first rounds and lower tiers) have no
- * prior meeting on record at all, which is the NORMAL case, not a fixable data gap -- yet its
- * reliability collapses toward its floor exactly then, so even a low importance weight (see
- * `MODULE_IMPORTANCE.headToHead` above) let this expected rarity visibly drag down an otherwise
- * well-supported prediction's Data Quality score. Head-to-Head keeps voting in the ensemble
- * probability (`ENSEMBLE_WEIGHT_PRIOR.headToHead`) and stays fully visible in the UI -- only its
- * effect on the numeric Data Quality score is removed.
+ * Rule: any module whose reliability score cannot affect model inputs, player matching, feature
+ * calculations, prediction output, calibration, or recommendation reliability must have zero
+ * prediction-DQ weight. These modules can still surface warnings and be monitored for technical
+ * issues -- only their reliability score is cut from the blend.
+ *
+ * Head-to-Head: most real matchups (especially first rounds and lower tiers) have no prior meeting
+ * on record at all -- the NORMAL case, not a fixable data gap -- yet its reliability collapses
+ * toward its floor exactly then. Even a low importance weight let this expected rarity visibly drag
+ * down an otherwise well-supported score. Head-to-Head keeps voting in the ensemble
+ * (`ENSEMBLE_WEIGHT_PRIOR.headToHead`) and stays fully visible in the UI.
+ *
+ * Fatigue: excluded from the ensemble vote entirely (see `EXCLUDED_FROM_ENSEMBLE`). Its reliability
+ * is a fixed constant (70) -- not a real per-match signal of data richness -- so including it adds
+ * a constant drag on every prediction regardless of the match. Its warnings (missing set-score
+ * data) still feed `upsetRiskUncertaintyWarnings` in `index.ts` as before; that path is
+ * independent of the reliability score and is unchanged by this exclusion.
+ *
+ * Availability: excluded from the ensemble vote (see `EXCLUDED_FROM_ENSEMBLE`). Its warnings
+ * (venue-coverage gaps, travel distance) are deliberately excluded from `upsetRiskUncertaintyWarnings`
+ * in `index.ts` (see the comment there). Its reliability genuinely tracks per-match data resolution,
+ * but since neither its reliability nor its warnings reach any prediction-output path, including it
+ * in DQ silently penalises predictions where venue data is unavailable even though that gap never
+ * affects the probability, calibration, recommendation, or Elite tier.
+ *
+ * Match Load Recovery: excluded from the ensemble vote (see `EXCLUDED_FROM_ENSEMBLE`). Its
+ * reliability is a fixed constant (70), same as Fatigue above. Its warnings do not feed into any
+ * prediction-output path. Including it adds a constant drag identical in form to Fatigue's.
  */
-export const EXCLUDED_FROM_DATA_QUALITY = new Set(["headToHead"]);
+// marketOdds: excluded from Data Quality because the absence of live odds for a matchup is not
+// a data-richness gap -- the core prediction signals (match history, form, Elo) are independent
+// of whether a bookmaker happens to have listed odds today. Including it would silently penalise
+// every non-covered tournament even though the underlying prediction evidence is unchanged.
+export const EXCLUDED_FROM_DATA_QUALITY = new Set(["headToHead", "fatigue", "availability", "matchLoadRecovery", "marketOdds"]);
 
 /**
  * Fixed prior on how much each module's vote counts toward the ACTUAL blended probability
@@ -140,14 +163,24 @@ export const ENSEMBLE_WEIGHT_PRIOR = {
 // live if the ablation shows real accuracy benefit"), the default without a finished, positive
 // result is EXCLUDED, matching how Availability was excluded pending its own proof.
 // matchLoadRecovery stays excluded: a 4,001-match representative-sample leave-one-out ablation
-// (Task #96, 2026-07-14) found removing it changes ~2.9% of individual predictions (83/2,820
-// scored matches flip) but moves OVERALL accuracy by exactly 0.0pp (57.3% both with and without
-// it) -- the flips roughly cancel out. Per-surface/per-tour deltas look inconsistent in sign and
-// sit on small subsamples (e.g. Grass n=35, Junior n=27), so they read as noise, not a real
+// (2026-07-14) found removing it changes ~2.9% of individual predictions (83/2,820 scored matches
+// flip) but moves OVERALL accuracy by exactly 0.0pp (57.3% both with and without it) -- the
+// flips roughly cancel out. Per-surface/per-tour deltas look inconsistent in sign and sit on
+// small subsamples (e.g. Grass n=35, Junior n=27), so they read as noise, not a real
 // surface-specific edge. See docs/audit-matchloadrecovery-live-revalidation.md for the full
 // breakdown; re-run the ablation if the historical corpus grows substantially and this decision
 // should be revisited.
-export const EXCLUDED_FROM_ENSEMBLE = new Set(["availability", "fatigue", "matchLoadRecovery"]);
+// marketOdds: excluded pending the live paper-trade Section B ablation reaching n≥500 accuracy-
+// eligible paired rows. As of 2026-08-01 the sample is n=184 (below the 500-row floor). Section B
+// shows Δacc=+1.1pp (directionally positive) but Δlog-loss=+0.0205 (worse) — the log-loss
+// regression is a calibration-vintage mismatch artifact (B-CAL analysis: global knots fit on
+// 2017-2020 data, live rows are 2025-2026), but it has not been fully resolved. Section C
+// (historical, n=5,400): Δacc=+3.0pp, Δlog-loss=−0.0331 — strong corroborating signal but
+// explicitly hindsight-biased (tennis-data.co.uk player1 = actual winner); cannot serve as the
+// primary KEEP gate. Will be removed from this set once Section B reaches n≥500 with
+// Δacc ≥ +0.5pp — see docs/audit-market-consensus-ablation.md and the follow-up tasks for the
+// live re-confirmation and calibration-refit work.
+export const EXCLUDED_FROM_ENSEMBLE = new Set(["availability", "fatigue", "matchLoadRecovery", "marketOdds"]);
 
 /**
  * Per-model confidence shrink (see `EnsembleModuleInput.confidenceShrink`), derived directly from

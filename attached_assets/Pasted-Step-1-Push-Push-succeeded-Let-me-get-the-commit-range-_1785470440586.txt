@@ -1,0 +1,43 @@
+Step 1 — Push
+Push succeeded. Let me get the commit range and run the full test suite in parallel:
+Push confirmed — 2 commits landed on origin/main:
+
+ce3ff2b fix: guard getPlayerMatches/getHeadToHead against circuit-breaker open
+72f85c2 fix: resolve all 37 TypeScript errors across 6 frontend pages
+The old-field-name grep is clean: every remaining .n, .logLoss, .brier hit is on EvaluationDashboardSegment (which legitimately carries those fields), not on the renamed PatternSegmentItem. The BulkMatchupPredictor ScreenshotMatchupEntry is a local type definition now, not an import. BacktestingPortal extended-type cast lines are the intentional fix. No false positives.
+
+Step 2 — Full test suite
+
+Running all api-server non-smoke tests and frontend tests in parallel:
+The evaluation and tennisData groups timed out — likely one slow test within them. Let me run those in smaller batches while reading the Parlay files:
+Two batches had failures. Let me identify which specific tests are failing in parallel while reading the Parlay files:
+Let me check the two failing tests and read the AdminParlayBuilder in sections in parallel:
+Let me read the two failing test cases and the rest of AdminParlayBuilder in parallel:
+Two failing tests to fix. Let me read both in detail in parallel:
+Let me read the searchKnownPlayers implementation and the shadowReplay source in parallel:
+Let me read the mock provider setup in the Uchijima test and the shadow replay failure context:
+Two clear bugs to fix. Let me read the relevant implementation sections:
+Let me read the historicalScoring types and the shadowReplay middle section in parallel:
+Let me look at how activeCalibration flows through the prediction engine and find the CalibrationKnot type:
+Let me look at the prediction engine calibration logic and the CalibrationKnotJson type:
+Let me look at how calibratedProbability is set in the prediction engine output and find what CalibrationKnotJson looks like:
+Let me find the CalibrationKnotJson type definition and also check if there's something about simulatorAdoption that might override the calibration:
+Let me look at the calibration_models schema and check why the calibration override might not be working:
+Let me look at applyCalibration and also check what fittedAt column looks like for DB rows returned by Drizzle:
+Let me read applyCalibration and look at the fittedAt column handling:
+Let me check the DB pool setup and how timestamps come back from Drizzle, plus quickly scan the test flow more carefully:
+Let me check the imports in shadowReplay.ts and look at how fittedAt might be typed in the actual Drizzle return:
+Let me look at how rawEnsembleProbability is defined in the prediction engine and check if there are two different calibrated probability variables:
+Let me add a temporary debug log to see what calibrationHistory contains during the test:
+The debug shows calibrationHistoryCount: 26 — the existing calibration rows weren't deleted before runShadowPaperTradingReplay ran. The delete must be failing silently. Let me add more debug to understand why:
+Let me look at the full imports and calibration test body in shadowReplay.test.ts:
+Let me count the test 1 calls to runShadowPaperTradingReplay:
+The 6th debug call was cut off by head -20. Let me run with a larger limit to see test 2's calibration history:
+Now I have the full picture. Let me add the debug back and check what the calibration history actually contains when test 2 runs — specifically whether the fittedAt values are the expected 2021 dates or today:
+The 6th call shows the calibration history IS correctly loaded with 2 entries. The data is right — fittedAt 2021-05-18 and 2021-07-01, match cutoff at 2021-06-01. getCalibrationMappingAsOf should find the first entry. Let me trace the exact handoff from getCalibrationMappingAsOf to scoreHistoricalMatch:
+Let me look at the CalibrationKnot type in evaluation/types.ts and also look at lines 540-600 in index.ts to verify the exact code path for generalProbability:
+Let me look at the full scoreHistoricalMatch signature and the portion between the signature and runPredictionEngine:
+Let me add debug directly inside the prediction engine where the calibration branch is:
+The calibration IS being applied (sample {x:0,y:0.05} confirmed, ensembleProb=67.9). But calibrated=66.2. Something after line 558 is overriding the 5% result. Let me check the full output object construction:
+The calibration IS being applied (confirmed by debug). Something after line 558 produces 66.2 instead of 5. Let me add more precise debugging around the output:
+applyCalibration returns 0.05, generalWillBe=5 — yet the stored value is 66.2. The bug must be between generalProbability=5 and what gets stored in the DB. Let me look at the insert in shadowReplay.ts and find how calibratedProbability is mapped:

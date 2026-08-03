@@ -1,0 +1,66 @@
+I dug into the actual code for both. #45 checks out exactly as described — here's the real fix. #46 I need to flag: I can't find it.
+
+## #45 — Sackmann bridge (confirmed, here's the fix)
+
+I traced this to `services/tennisData/playerIdentity.ts`. You're right about the ID mismatch (`sackmann-104925` vs api-tennis.com's `2072`), but the fix isn't just "add a name lookup" — there's already a name-bridging mechanism (`buildPlayerIdentityIndex`), and it's *specifically disabled* for exactly this case:
+
+```ts
+// Never alias multiple IDs together on an abbreviated key like "m uchijima".
+if (idMap.size > 1 && isWeakIdentityNameKey(normalized)) {
+  for (const id of idMap.keys()) {
+    if (!canonicalIdById.has(id)) canonicalIdById.set(id, id);
+  }
+  continue;  // <-- bails out, no aliasing happens
+}
+```
+
+`isWeakIdentityNameKey` correctly refuses to merge two IDs sharing an abbreviated name like "j sinner" — because two *different* real players could share that abbreviated form, and merging them would silently corrupt both players' stats. That guard is doing its job; it's just too blunt to tell "two different Sinner-surname players" apart from "one Sinner, two provider eras."
+
+**The fix:** add a second, narrower signal — date-range disjointness — that only fires for the Sackmann-specific pattern:
+
+```ts
+// Bridge Sackmann-imported IDs to their live-provider counterpart under an abbreviated name,
+// WITHOUT weakening the general collision guard above. This only fires when exactly one
+// sackmann-* id and one non-sackmann id share the abbreviated name, AND their active date
+// ranges don't overlap -- the actual signature of "same player, two provider eras" (Sackmann
+// stops ~2024, api-tennis.com picks up from ~2024/2025) as opposed to "two different real
+// players who happen to share an abbreviated name" (which would show overlapping date ranges
+// -- both playing matches in the same window).
+if (idMap.size === 2 && isWeakIdentityNameKey(normalized)) {
+  const entries = [...idMap.entries()]; // [id, {minSeenAt, maxSeenAt}]
+  const sackmannEntry = entries.find(([id]) => id.startsWith(`${SACKMANN_PROVIDER}-`));
+  const liveEntry = entries.find(([id]) => !id.startsWith(`${SACKMANN_PROVIDER}-`));
+
+  if (sackmannEntry && liveEntry) {
+    const [sackmannId, sackmannRange] = sackmannEntry;
+    const [liveId, liveRange] = liveEntry;
+    const disjoint = sackmannRange.maxSeenAt <= liveRange.minSeenAt
+                   || liveRange.maxSeenAt <= sackmannRange.minSeenAt;
+
+    if (disjoint) {
+      // Live id is canonical (more likely to be actively queried); Sackmann id becomes its alias.
+      canonicalIdByName.set(normalized, liveId);
+      canonicalIdById.set(sackmannId, liveId);
+      canonicalIdById.set(liveId, liveId);
+      aliasIdsByCanonicalId.set(liveId, [liveId, sackmannId]);
+      continue;
+    }
+  }
+  // Not the bridgeable pattern (overlapping ranges, or not a sackmann/live pair) — fall through
+  // to the existing no-alias behavior.
+  for (const id of idMap.keys()) {
+    if (!canonicalIdById.has(id)) canonicalIdById.set(id, id);
+  }
+  continue;
+}
+```
+
+This requires tracking `minSeenAt` alongside the existing `maxSeenAt` in the `idMap` build loop above it (currently only tracks the max/most-recent sighting) — trivial one-line addition to that loop.
+
+This unlocks the ~134k Sackmann rows *only* where it's safe to, and leaves the collision guard fully intact for genuine ambiguous cases.
+
+## #46 — BSD search fallback
+
+I can't verify this one. I searched the entire uploaded codebase for `fetchFromBsdTennis`, `BsdTennis`, `Bsd`, and any rankings-cache/"top 500" logic — none of it exists anywhere in `Tennis-Stats-Engine`. It's possible this lives in a different repo, a branch that wasn't included in the tar you uploaded, or a file that hasn't been pushed yet.
+
+Can you point me to the file (or upload it), or confirm this is a newer module not yet in this snapshot? Once I can see the actual `fetchFromBsdTennis` implementation and how the rankings cache is populated, I'll write the same kind of concrete, verified patch for the search-fallback instead of a generic guess.

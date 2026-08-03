@@ -10,8 +10,39 @@ export const ADMIN_SESSION_COOKIE = "admin_session";
 const ADMIN_SESSION_VALUE = "ok";
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
+function isTruthyEnv(value: string | undefined): boolean {
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function readHeaderValue(value: string | string[] | undefined): string | undefined {
+  if (!value) return undefined;
+  if (Array.isArray(value)) return value[0]?.trim() || undefined;
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
 function isProduction(): boolean {
   return process.env.NODE_ENV === "production";
+}
+
+export function getOwnerAutoLoginToken(): string | undefined {
+  // Dedicated token for the owner-only magic-link login endpoint.
+  // MUST be a separate secret from ADMIN_ACCESS_KEY: the magic-link token travels in a URL
+  // query string, which exposes it through browser history, server access logs, and proxy logs.
+  // Using the long-lived admin key as a URL parameter would compromise it permanently.
+  // Callers who haven't set a dedicated token get a 403 ("not configured") rather than
+  // a silent fallback to the admin key.
+  const candidates = [
+    process.env.OWNER_AUTO_LOGIN_TOKEN,
+    process.env.OWNER_MAGIC_LINK_TOKEN,
+  ];
+  for (const value of candidates) {
+    const trimmed = value?.trim();
+    if (trimmed) return trimmed;
+  }
+  return undefined;
 }
 
 export function getAdminAccessKey(): string | undefined {
@@ -34,6 +65,26 @@ export function isAdminSessionCookieValid(signedCookies: Record<string, unknown>
   return signedCookies?.[ADMIN_SESSION_COOKIE] === ADMIN_SESSION_VALUE;
 }
 
+export function isOwnerAutoAuthenticated(req: Request): boolean {
+  // Owner-only bypass for Replit-hosted access.
+  // Enable with OWNER_REPLIT_AUTO_AUTH=true and set at least one identity env var.
+  if (!isTruthyEnv(process.env.OWNER_REPLIT_AUTO_AUTH)) return false;
+
+  const configuredOwnerId = process.env.OWNER_REPLIT_USER_ID?.trim();
+  const configuredOwnerName = process.env.OWNER_REPLIT_USER_NAME?.trim().toLowerCase();
+  if (!configuredOwnerId && !configuredOwnerName) return false;
+
+  const requestOwnerId = readHeaderValue(req.headers["x-replit-user-id"] as string | string[] | undefined);
+  const requestOwnerName = readHeaderValue(req.headers["x-replit-user-name"] as string | string[] | undefined)?.toLowerCase();
+
+  if (configuredOwnerId && requestOwnerId !== configuredOwnerId) return false;
+  if (configuredOwnerName && requestOwnerName !== configuredOwnerName) return false;
+
+  if (configuredOwnerId && requestOwnerId === configuredOwnerId) return true;
+  if (configuredOwnerName && requestOwnerName === configuredOwnerName) return true;
+  return false;
+}
+
 export function setAdminSessionCookie(res: Response): void {
   res.cookie(ADMIN_SESSION_COOKIE, ADMIN_SESSION_VALUE, {
     signed: true,
@@ -54,12 +105,14 @@ export function clearAdminSessionCookie(res: Response): void {
  * be mistaken for "no auth needed here".
  */
 export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
-  if (!getAdminAccessKey()) {
+  const ownerAutoAuthenticated = isOwnerAutoAuthenticated(req);
+
+  if (!getAdminAccessKey() && !ownerAutoAuthenticated) {
     res.status(403).json({ error: "Admin access key is not configured on the server" });
     return;
   }
 
-  if (!isAdminSessionCookieValid(req.signedCookies)) {
+  if (!ownerAutoAuthenticated && !isAdminSessionCookieValid(req.signedCookies)) {
     res.status(401).json({ error: "Login required" });
     return;
   }

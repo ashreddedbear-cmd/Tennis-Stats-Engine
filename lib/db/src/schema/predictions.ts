@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, real, jsonb, timestamp, boolean, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, real, jsonb, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -66,16 +66,12 @@ export const predictionsTable = pgTable(
     decisionTrace: jsonb("decision_trace"),
 
     /**
-     * Cross-engine agreement: does the parlay builder VALIDATE the prediction engine's own
-     * predicted winner?
-     *   true  — builder decision is KEEP or BORDERLINE (doesn't disagree with the engine's pick)
-     *   false — builder decision is REMOVE (evidence favors opponent)
-     *   null  — builder returned DATA_UNAVAILABLE, or prediction was made before this field existed
-     *
-     * Never merged into the underlying probability or grade — stored as a separate signal only.
-     * Backfilled by scripts/backfillCrossEngineAgreement.ts for historical predictions.
+     * Clerk user ID of the authenticated user who created this prediction.
+     * Nullable for rows inserted before this column was added (admin / pre-launch corpus).
+     * All new predictions from Clerk-authenticated users populate this field so the history
+     * endpoint can scope results to the requesting user's own predictions only.
      */
-    crossEngineAgreement: boolean("cross_engine_agreement"),
+    clerkUserId: text("clerk_user_id"),
 
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
@@ -85,6 +81,8 @@ export const predictionsTable = pgTable(
     // `/predictions/stats` aggregation's full-table scan avoidance as row counts grow.
     index("predictions_created_at_idx").on(table.createdAt),
     index("predictions_recommendation_idx").on(table.recommendation),
+    // Backs per-user history scoping: WHERE clerk_user_id = $1 ORDER BY created_at DESC
+    index("predictions_clerk_user_id_idx").on(table.clerkUserId),
     // Enforces "same match, same resolved inputs -> at most one row" at the database level (see
     // the column doc above). A prediction submitted for the same match with different inputs gets
     // a different inputSnapshotHash and is free to insert a new row.

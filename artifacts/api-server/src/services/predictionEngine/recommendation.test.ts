@@ -2,184 +2,252 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { computeRecommendation } from "./recommendation";
 
-test("STRONG_RECOMMENDATION requires high margin + high data quality + low/moderate upset risk + strong-enough model agreement", () => {
-  const result = computeRecommendation(85, 70, "Strong", "LOW", "Strong");
-  assert.equal(result, "STRONG_RECOMMENDATION");
+// ── Shorthand helpers ────────────────────────────────────────────────────────
+// signature: (calibratedProbability, dataQuality, dataQualityLabel, modelAgreement, tieBreakerApplied?, coreSignalsAlign?)
+
+// ── INSUFFICIENT_EDGE ────────────────────────────────────────────────────────
+
+test("INSUFFICIENT_EDGE: DQ < 25 → regardless of any other input", () => {
+  assert.equal(computeRecommendation(85, 20, "Poor", "Strong"), "INSUFFICIENT_EDGE");
+  assert.equal(computeRecommendation(85, 24, "Limited", "Strong"), "INSUFFICIENT_EDGE");
 });
 
-test("STRONG_RECOMMENDATION is withheld when model agreement is HighDisagreement, even with high margin/data quality/low risk", () => {
-  // Regression test: previously STRONG_RECOMMENDATION only checked margin, data quality, and
-  // upset risk -- not model agreement -- so a match where the core models genuinely disagree
-  // could still be labeled a strong recommendation.
-  const result = computeRecommendation(85, 70, "Strong", "LOW", "HighDisagreement");
-  assert.notEqual(result, "STRONG_RECOMMENDATION", "HighDisagreement must block STRONG_RECOMMENDATION regardless of margin/data quality/risk");
+test("INSUFFICIENT_EDGE: DQ label 'Poor' takes priority even if numeric score is above 25", () => {
+  // Label and numeric can diverge in edge cases; label wins when 'Poor'
+  assert.equal(computeRecommendation(85, 30, "Poor", "Strong"), "INSUFFICIENT_EDGE");
 });
 
-test("STRONG_RECOMMENDATION is withheld when model agreement is Mixed, even with high margin/data quality/low risk", () => {
-  const result = computeRecommendation(85, 70, "Strong", "MODERATE", "Mixed");
-  assert.notEqual(result, "STRONG_RECOMMENDATION", "Mixed agreement must block STRONG_RECOMMENDATION regardless of margin/data quality/risk");
+test("INSUFFICIENT_EDGE: tieBreakerApplied=true → regardless of margin or agreement", () => {
+  assert.equal(computeRecommendation(57.9, 70, "Strong", "Strong", true), "INSUFFICIENT_EDGE");
+  assert.equal(computeRecommendation(61, 70, "Strong", "Strong", true), "INSUFFICIENT_EDGE");
+  assert.equal(computeRecommendation(85, 70, "Strong", "Strong", true), "INSUFFICIENT_EDGE");
 });
 
-test("STRONG_RECOMMENDATION is withheld unless model agreement is Strong", () => {
-  const result = computeRecommendation(85, 70, "Strong", "LOW", "Moderate");
-  assert.notEqual(result, "STRONG_RECOMMENDATION");
+test("INSUFFICIENT_EDGE: tieBreakerApplied=true with poor DQ → INSUFFICIENT_EDGE still (DQ check fires first, same result)", () => {
+  assert.equal(computeRecommendation(52, 20, "Poor", "Strong", true), "INSUFFICIENT_EDGE");
 });
 
-test("DO_NOT_RECOMMEND still takes priority over everything else on poor data quality", () => {
-  const result = computeRecommendation(85, 20, "Poor", "LOW", "Strong");
-  assert.equal(result, "DO_NOT_RECOMMEND");
+test("INSUFFICIENT_EDGE: margin < 8 AND Mixed agreement → no reliable edge", () => {
+  assert.equal(computeRecommendation(55, 70, "Strong", "Mixed"), "INSUFFICIENT_EDGE");
+  assert.equal(computeRecommendation(57.9, 70, "Strong", "Mixed"), "INSUFFICIENT_EDGE");
 });
 
-test("NO_STRONG_SIGNAL still fires for a near-coin-flip margin with Mixed/HighDisagreement agreement", () => {
-  const result = computeRecommendation(52, 70, "Strong", "LOW", "HighDisagreement");
-  assert.equal(result, "NO_STRONG_SIGNAL");
+test("INSUFFICIENT_EDGE: margin < 8 AND HighDisagreement → no reliable edge", () => {
+  assert.equal(computeRecommendation(55, 70, "Strong", "HighDisagreement"), "INSUFFICIENT_EDGE");
+  assert.equal(computeRecommendation(57.9, 70, "Strong", "HighDisagreement"), "INSUFFICIENT_EDGE");
 });
 
-test("HIGH_RISK still fires on EXTREME upset risk regardless of agreement", () => {
-  const result = computeRecommendation(85, 70, "Strong", "EXTREME", "Strong");
-  assert.equal(result, "HIGH_RISK");
+test("NOT INSUFFICIENT_EDGE: margin < 8 with Strong agreement → LOW_CONFIDENCE (not caught by small-lean gate)", () => {
+  // The INSUFFICIENT_EDGE gate only fires for Mixed/HighDisagreement; Strong agreement passes through
+  assert.notEqual(computeRecommendation(55, 70, "Strong", "Strong"), "INSUFFICIENT_EDGE");
+  assert.notEqual(computeRecommendation(55, 70, "Strong", "Moderate"), "INSUFFICIENT_EDGE");
 });
 
-test("a high-margin match with HighDisagreement does not get promoted to MODERATE_LEAN", () => {
-  // HighDisagreement now blocks both STRONG_RECOMMENDATION and MODERATE_LEAN, so this remains
-  // HIGH_RISK despite the large margin.
-  const result = computeRecommendation(80, 70, "Strong", "LOW", "HighDisagreement");
-  assert.equal(result, "HIGH_RISK");
+test("NOT INSUFFICIENT_EDGE: margin exactly 8 with Mixed → passes (gate is margin < 8, not <=)", () => {
+  assert.notEqual(computeRecommendation(58, 70, "Strong", "Mixed"), "INSUFFICIENT_EDGE");
 });
 
-test("margin below 9 with LOW upset risk and Moderate agreement is HIGH_RISK under the stricter moderate-lean floor", () => {
-  // margin = 8.7 now remains below the cautious moderate-lean floor.
-  const result = computeRecommendation(58.7, 70, "Strong", "LOW", "Moderate");
-  assert.equal(result, "HIGH_RISK");
+// ── HIGHEST_CONFIDENCE ───────────────────────────────────────────────────────
+
+test("HIGHEST_CONFIDENCE: margin ≥ 35, DQ ≥ 45, Strong, coreSignalsAlign=true", () => {
+  assert.equal(computeRecommendation(85, 70, "Strong", "Strong", false, true), "HIGHEST_CONFIDENCE");
+  assert.equal(computeRecommendation(90, 45, "Acceptable", "Strong", false, true), "HIGHEST_CONFIDENCE");
 });
 
-test("margin exactly 9 with MODERATE upset risk and Strong agreement is MODERATE_LEAN (lower boundary of the new band)", () => {
-  const result = computeRecommendation(59, 70, "Strong", "MODERATE", "Strong");
-  assert.equal(result, "MODERATE_LEAN");
+test("HIGHEST_CONFIDENCE: margin ≥ 26, DQ ≥ 50, Strong, coreSignalsAlign=true", () => {
+  assert.equal(computeRecommendation(76, 50, "Acceptable", "Strong", false, true), "HIGHEST_CONFIDENCE");
+  assert.equal(computeRecommendation(76, 70, "Strong", "Strong", false, true), "HIGHEST_CONFIDENCE");
 });
 
-test("margin exactly 8 with MODERATE upset risk and Strong agreement is HIGH_RISK", () => {
-  const result = computeRecommendation(58, 70, "Strong", "MODERATE", "Strong");
-  assert.equal(result, "HIGH_RISK");
+test("NOT HIGHEST_CONFIDENCE: coreSignalsAlign=false → can't reach HIGHEST_CONFIDENCE", () => {
+  const result = computeRecommendation(85, 70, "Strong", "Strong", false, false);
+  assert.notEqual(result, "HIGHEST_CONFIDENCE");
 });
 
-test("margin just under 8 with Strong agreement (so NOT caught by NO_STRONG_SIGNAL) still falls through to HIGH_RISK -- the new rule must not swallow sub-8 margins", () => {
-  // tieBreakerApplied defaults to false here -- rule only fires when raw ensemble was coin-flip
-  const result = computeRecommendation(57.9, 70, "Strong", "LOW", "Strong");
-  assert.equal(result, "HIGH_RISK");
+test("NOT HIGHEST_CONFIDENCE: Moderate agreement → withheld even with coreSignalsAlign=true and large margin", () => {
+  const result = computeRecommendation(85, 70, "Strong", "Moderate", false, true);
+  assert.notEqual(result, "HIGHEST_CONFIDENCE");
 });
 
-// ─── Task #7: tieBreakerApplied gate ────────────────────────────────────────
-
-test("tieBreakerApplied=true → NO_STRONG_SIGNAL, regardless of margin or model agreement", () => {
-  // Even a high-margin, strong-agreement match should be NO_STRONG_SIGNAL when the raw ensemble
-  // was within TIE_BAND — the cascade was validated to perform at or below coin-flip in that
-  // probability range; a confident-sounding recommendation on top of it is actively misleading.
-  const result = computeRecommendation(57.9, 70, "Strong", "LOW", "Strong", /* tieBreakerApplied */ true);
-  assert.equal(result, "NO_STRONG_SIGNAL");
+test("NOT HIGHEST_CONFIDENCE: DQ just below 45 threshold blocks the ≥35-margin gate", () => {
+  // margin=35, DQ=44 → blocked
+  const result = computeRecommendation(85, 44, "Acceptable", "Strong", false, true);
+  assert.notEqual(result, "HIGHEST_CONFIDENCE");
 });
 
-test("tieBreakerApplied=true → NO_STRONG_SIGNAL even when margin would otherwise qualify for MODERATE_LEAN", () => {
-  const result = computeRecommendation(61, 70, "Strong", "LOW", "Strong", true);
-  assert.equal(result, "NO_STRONG_SIGNAL");
+test("NOT HIGHEST_CONFIDENCE: DQ just below 50 threshold blocks the ≥26-margin gate", () => {
+  // margin=26, DQ=49 → blocked
+  const result = computeRecommendation(76, 49, "Acceptable", "Strong", false, true);
+  assert.notEqual(result, "HIGHEST_CONFIDENCE");
 });
 
-test("tieBreakerApplied=true with Poor DQ → DO_NOT_RECOMMEND still wins (DO_NOT_RECOMMEND takes absolute priority)", () => {
-  // DO_NOT_RECOMMEND means the data is too thin to trust at all; that takes priority even over
-  // a close-matchup disclosure.
-  const result = computeRecommendation(52, 20, "Poor", "LOW", "Strong", true);
-  assert.equal(result, "DO_NOT_RECOMMEND");
+// ── HIGH_CONFIDENCE ──────────────────────────────────────────────────────────
+
+test("HIGH_CONFIDENCE: margin ≥ 20 AND Strong agreement", () => {
+  assert.equal(computeRecommendation(70, 70, "Strong", "Strong"), "HIGH_CONFIDENCE");
 });
 
-test("tieBreakerApplied=false (default) → original logic unchanged: Strong agreement sub-8 margin is HIGH_RISK", () => {
-  // Regression guard: adding the tieBreakerApplied parameter must not affect existing behaviour
-  // when it is false (or omitted).
-  const result = computeRecommendation(53, 70, "Strong", "LOW", "Strong", false);
-  assert.equal(result, "HIGH_RISK");
+test("HIGH_CONFIDENCE: margin ≥ 12 AND Strong agreement", () => {
+  assert.equal(computeRecommendation(62, 70, "Strong", "Strong"), "HIGH_CONFIDENCE");
 });
 
-test("margin 8-10 with HighDisagreement agreement is NOT rescued by the new rule -- still HIGH_RISK (agreement gate must still apply)", () => {
-  const result = computeRecommendation(58.7, 70, "Strong", "LOW", "HighDisagreement");
-  assert.equal(result, "HIGH_RISK");
+test("HIGH_CONFIDENCE: margin ≥ 12 AND Moderate agreement", () => {
+  assert.equal(computeRecommendation(62, 70, "Strong", "Moderate"), "HIGH_CONFIDENCE");
 });
 
-test("margin 8-10 with EXTREME upset risk is still HIGH_RISK via the earlier EXTREME rule, not reclassified by the new band", () => {
-  const result = computeRecommendation(58.7, 70, "Strong", "EXTREME", "Strong");
-  assert.equal(result, "HIGH_RISK");
+test("HIGH_CONFIDENCE: margin ≥ 9 AND Strong agreement", () => {
+  assert.equal(computeRecommendation(59, 70, "Strong", "Strong"), "HIGH_CONFIDENCE");
 });
 
-test("high-confidence picks (>=90% winner confidence) with no explicit severe conflict are never HIGH_RISK", () => {
-  const strongAgreement = computeRecommendation(92, 70, "Strong", "HIGH", "Strong");
-  const moderateAgreement = computeRecommendation(92, 70, "Strong", "HIGH", "Moderate");
-  assert.equal(strongAgreement, "MODERATE_LEAN");
-  assert.equal(moderateAgreement, "MODERATE_LEAN");
+test("HIGH_CONFIDENCE guardrail: margin ≥ 40 AND Moderate agreement → HIGH_CONFIDENCE not MODERATE", () => {
+  assert.equal(computeRecommendation(90, 70, "Strong", "Moderate"), "HIGH_CONFIDENCE");
 });
 
-test("high-confidence picks can still be HIGH_RISK with explicit severe conflict evidence", () => {
-  const highDisagreement = computeRecommendation(92, 70, "Strong", "LOW", "HighDisagreement");
-  const mixed = computeRecommendation(92, 70, "Strong", "LOW", "Mixed");
-  const extremeRisk = computeRecommendation(92, 70, "Strong", "EXTREME", "Strong");
-  assert.equal(highDisagreement, "HIGH_RISK");
-  assert.equal(mixed, "HIGH_RISK");
-  assert.equal(extremeRisk, "HIGH_RISK");
+test("NOT HIGH_CONFIDENCE: margin ≥ 12 with HighDisagreement → MODERATE_CONFIDENCE (real lean but contested)", () => {
+  assert.notEqual(computeRecommendation(62, 70, "Strong", "HighDisagreement"), "HIGH_CONFIDENCE");
+  assert.equal(computeRecommendation(62, 70, "Strong", "HighDisagreement"), "MODERATE_CONFIDENCE");
 });
 
-// Regression guard for the margin 8-10 catch-all gap class of bug: sweep every margin from 0 to
-// 50 (in 0.1 steps) across every upsetRisk x modelAgreement combination, holding dataQuality/label
-// fixed at a value that can never trigger DO_NOT_RECOMMEND, and assert two structural properties
-// that must ALWAYS hold no matter how the branch order or thresholds inside computeRecommendation
-// change in the future:
-//  (a) every single margin value produces a real Recommendation -- there is no gap where some
-//      unanticipated combination of inputs falls through every rule unhandled (impossible in JS
-//      since the function always returns something, but this documents and locks the exhaustive
-//      combination space actually tested);
-//  (b) for a FIXED upsetRisk/modelAgreement combination, the "confidence" of the recommendation
-//      must never fall discontinuously as margin increases -- i.e. once a combination qualifies
-//      for a stronger-than-HIGH_RISK label at some margin, a larger margin under the same
-//      upsetRisk/modelAgreement must never regress to a weaker label. This is exactly the shape
-//      of bug that shipped: margin 10+ was MODERATE_LEAN, but margin 8-10 (a SMALLER, not larger,
-//      margin) fell through to HIGH_RISK -- so this specific gap would already have failed
-//      property (b) as originally written, before the fix. Kept post-fix as a standing invariant.
+test("NOT HIGH_CONFIDENCE: margin 9-11 with Moderate agreement → MODERATE_CONFIDENCE not HIGH", () => {
+  assert.equal(computeRecommendation(59, 70, "Strong", "Moderate"), "MODERATE_CONFIDENCE");
+});
+
+// ── MODERATE_CONFIDENCE ──────────────────────────────────────────────────────
+
+test("MODERATE_CONFIDENCE: margin ≥ 9 AND Moderate agreement", () => {
+  assert.equal(computeRecommendation(59, 70, "Strong", "Moderate"), "MODERATE_CONFIDENCE");
+  assert.equal(computeRecommendation(61, 70, "Strong", "Moderate"), "MODERATE_CONFIDENCE");
+});
+
+test("MODERATE_CONFIDENCE: margin ≥ 12 with Mixed agreement", () => {
+  assert.equal(computeRecommendation(62, 70, "Strong", "Mixed"), "MODERATE_CONFIDENCE");
+});
+
+test("MODERATE_CONFIDENCE: margin ≥ 12 with HighDisagreement", () => {
+  assert.equal(computeRecommendation(62, 70, "Strong", "HighDisagreement"), "MODERATE_CONFIDENCE");
+});
+
+// ── LOW_CONFIDENCE ───────────────────────────────────────────────────────────
+
+test("LOW_CONFIDENCE: fallthrough — margin < 9 with Strong agreement (thin but real lean)", () => {
+  assert.equal(computeRecommendation(57.9, 70, "Strong", "Strong"), "LOW_CONFIDENCE");
+  assert.equal(computeRecommendation(58, 70, "Strong", "Strong"), "LOW_CONFIDENCE");
+});
+
+test("LOW_CONFIDENCE: margin < 9 with Moderate agreement", () => {
+  assert.equal(computeRecommendation(57.9, 70, "Strong", "Moderate"), "LOW_CONFIDENCE");
+});
+
+test("LOW_CONFIDENCE: margin 8 with Mixed agreement (above INSUFFICIENT_EDGE threshold)", () => {
+  assert.equal(computeRecommendation(58, 70, "Strong", "Mixed"), "LOW_CONFIDENCE");
+});
+
+test("LOW_CONFIDENCE: margin 8-11.9 with HighDisagreement (above INSUFFICIENT_EDGE threshold, below MODERATE)", () => {
+  assert.equal(computeRecommendation(58, 70, "Strong", "HighDisagreement"), "LOW_CONFIDENCE");
+  assert.equal(computeRecommendation(61, 70, "Strong", "HighDisagreement"), "LOW_CONFIDENCE");
+});
+
+// ── Boundary / regression tests ───────────────────────────────────────────────
+
+test("margin exactly 9 with Strong agreement → HIGH_CONFIDENCE (lower boundary)", () => {
+  assert.equal(computeRecommendation(59, 70, "Strong", "Strong"), "HIGH_CONFIDENCE");
+});
+
+test("margin exactly 8 with Strong agreement → LOW_CONFIDENCE", () => {
+  assert.equal(computeRecommendation(58, 70, "Strong", "Strong"), "LOW_CONFIDENCE");
+});
+
+test("margin exactly 12 with Moderate agreement → HIGH_CONFIDENCE", () => {
+  assert.equal(computeRecommendation(62, 70, "Strong", "Moderate"), "HIGH_CONFIDENCE");
+});
+
+test("margin exactly 12 with Mixed agreement → MODERATE_CONFIDENCE", () => {
+  assert.equal(computeRecommendation(62, 70, "Strong", "Mixed"), "MODERATE_CONFIDENCE");
+});
+
+test("tieBreakerApplied=false (default) → original logic unchanged for sub-8 margin", () => {
+  // Regression guard: adding tieBreakerApplied must not change behaviour when false/omitted
+  assert.equal(computeRecommendation(53, 70, "Strong", "Strong", false), "LOW_CONFIDENCE");
+});
+
+test("high-confidence picks (≥ 90% equivalent) with HighDisagreement are at most MODERATE_CONFIDENCE", () => {
+  assert.equal(computeRecommendation(92, 70, "Strong", "HighDisagreement"), "MODERATE_CONFIDENCE");
+});
+
+test("high-confidence picks (≥ 90% equivalent) with Mixed are at most MODERATE_CONFIDENCE", () => {
+  assert.equal(computeRecommendation(92, 70, "Strong", "Mixed"), "MODERATE_CONFIDENCE");
+});
+
+// ── Structural invariants (exhaustive grid) ───────────────────────────────────
+
 const RECOMMENDATION_RANK: Record<string, number> = {
-  DO_NOT_RECOMMEND: 0,
-  NO_STRONG_SIGNAL: 0, // NO_STRONG_SIGNAL and DO_NOT_RECOMMEND are both "nothing usable" -- not ranked against each other, only against the three real leans below.
-  HIGH_RISK: 1,
-  MODERATE_LEAN: 2,
-  STRONG_RECOMMENDATION: 3,
+  INSUFFICIENT_EDGE: 0,
+  LOW_CONFIDENCE: 1,
+  MODERATE_CONFIDENCE: 2,
+  HIGH_CONFIDENCE: 3,
+  HIGHEST_CONFIDENCE: 4,
 };
-const UPSET_RISKS = ["LOW", "MODERATE", "HIGH", "EXTREME"] as const;
-const MODEL_AGREEMENTS = ["Strong", "Moderate", "Mixed", "HighDisagreement"] as const;
 
-test("no margin ever falls through to an unhandled/undefined recommendation, across the full upsetRisk x modelAgreement grid", () => {
-  for (const upsetRisk of UPSET_RISKS) {
+const MODEL_AGREEMENTS = ["Strong", "Moderate", "Mixed", "HighDisagreement"] as const;
+const DATA_QUALITIES = [
+  { score: 20, label: "Poor" as const },
+  { score: 40, label: "Acceptable" as const },
+  { score: 70, label: "Strong" as const },
+] as const;
+
+test("no margin / agreement / DQ combination ever produces an unrecognized recommendation", () => {
+  for (const { score: dq, label: dqLabel } of DATA_QUALITIES) {
     for (const modelAgreement of MODEL_AGREEMENTS) {
-      for (let margin = 0; margin <= 50; margin += 0.1) {
-        const calibratedProbability = 50 + margin;
-        const result = computeRecommendation(calibratedProbability, 70, "Strong", upsetRisk, modelAgreement);
-        assert.ok(result in RECOMMENDATION_RANK, `computeRecommendation(${calibratedProbability}, 70, "Strong", "${upsetRisk}", "${modelAgreement}") returned an unrecognized value: ${result}`);
+      for (const coreSignalsAlign of [false, true]) {
+        for (let margin = 0; margin <= 50; margin += 0.5) {
+          const calibratedProbability = 50 + margin;
+          const result = computeRecommendation(calibratedProbability, dq, dqLabel, modelAgreement, false, coreSignalsAlign);
+          assert.ok(
+            result in RECOMMENDATION_RANK,
+            `computeRecommendation(${calibratedProbability}, ${dq}, "${dqLabel}", "${modelAgreement}", false, ${coreSignalsAlign}) returned unrecognized: "${result}"`,
+          );
+        }
       }
     }
   }
 });
 
-test("recommendation strength never regresses to a weaker lean as margin increases, for any fixed upsetRisk/modelAgreement (guards catch-all gaps like the margin 8-10 bug)", () => {
-  for (const upsetRisk of UPSET_RISKS) {
+test("recommendation strength never regresses as margin increases (monotonicity invariant)", () => {
+  for (const { score: dq, label: dqLabel } of DATA_QUALITIES) {
     for (const modelAgreement of MODEL_AGREEMENTS) {
-      let previousRank = -1;
-      let previousMargin = -1;
-      for (let margin = 0; margin <= 50; margin += 0.1) {
-        const calibratedProbability = 50 + margin;
-        const result = computeRecommendation(calibratedProbability, 70, "Strong", upsetRisk, modelAgreement);
-        const rank = RECOMMENDATION_RANK[result];
-        if (previousRank !== -1) {
-          assert.ok(
-            rank >= previousRank,
-            `upsetRisk=${upsetRisk}, modelAgreement=${modelAgreement}: margin ${margin.toFixed(1)} produced "${result}" (rank ${rank}), which is WEAKER than margin ${previousMargin.toFixed(1)}'s rank ${previousRank} -- a larger margin must never look like a smaller signal.`,
-          );
+      for (const coreSignalsAlign of [false, true]) {
+        let previousRank = -1;
+        let previousMargin = -1;
+        for (let margin = 0; margin <= 50; margin += 0.5) {
+          const calibratedProbability = 50 + margin;
+          const result = computeRecommendation(calibratedProbability, dq, dqLabel, modelAgreement, false, coreSignalsAlign);
+          const rank = RECOMMENDATION_RANK[result];
+          if (previousRank !== -1) {
+            assert.ok(
+              rank >= previousRank,
+              `DQ=${dq}/"${dqLabel}", agreement="${modelAgreement}", coreSignalsAlign=${coreSignalsAlign}: ` +
+                `margin ${margin.toFixed(1)} produced "${result}" (rank ${rank}), which is WEAKER ` +
+                `than margin ${previousMargin.toFixed(1)}'s rank ${previousRank} — a larger margin must never produce a weaker recommendation.`,
+            );
+          }
+          previousRank = rank;
+          previousMargin = margin;
         }
-        previousRank = rank;
-        previousMargin = margin;
       }
     }
+  }
+});
+
+test("catch-all-gap guard: margin 9–12 with Strong agreement must be at least HIGH_CONFIDENCE", () => {
+  // Regression guard for the class of bug where this window mislabels a real lean as the fallthrough bucket.
+  // Deliberately hardcodes the assertion independently of computeRecommendation's current implementation.
+  for (let margin = 9; margin < 12; margin += 0.1) {
+    const calibratedProbability = 50 + margin;
+    const result = computeRecommendation(calibratedProbability, 70, "Strong", "Strong");
+    assert.equal(
+      result,
+      "HIGH_CONFIDENCE",
+      `margin ${margin.toFixed(1)} with Strong agreement must be HIGH_CONFIDENCE, not "${result}"`,
+    );
   }
 });

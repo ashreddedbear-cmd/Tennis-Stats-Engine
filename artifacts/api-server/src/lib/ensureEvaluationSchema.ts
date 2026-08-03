@@ -463,6 +463,107 @@ const STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS predictions_created_at_idx ON predictions (created_at)`,
   `CREATE INDEX IF NOT EXISTS predictions_recommendation_idx ON predictions (recommendation)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS predictions_identity_input_snapshot_idx ON predictions (match_identity_key, input_snapshot_hash)`,
+  // v2 Evidence Confidence Score columns — shadow-replay audit (Task #102).
+  // recommendation_v2: recomputed value under the new 5-tier logic; null until shadow replay runs.
+  // recommendation_version: integer version of the recommendation logic used (2 = current).
+  // recommendation_changed: true when v2 differs from the original stored recommendation.
+  // recommendation_changed_at: timestamp of the last shadow-replay run for this row.
+  `ALTER TABLE predictions ADD COLUMN IF NOT EXISTS recommendation_v2 TEXT`,
+  `ALTER TABLE predictions ADD COLUMN IF NOT EXISTS recommendation_version INTEGER`,
+  `ALTER TABLE predictions ADD COLUMN IF NOT EXISTS recommendation_changed BOOLEAN`,
+  `ALTER TABLE predictions ADD COLUMN IF NOT EXISTS recommendation_changed_at TIMESTAMPTZ`,
+  // data_quality integer column for the predictions table (was missing — only label existed)
+  `ALTER TABLE predictions ADD COLUMN IF NOT EXISTS data_quality INTEGER NOT NULL DEFAULT 0`,
+  `UPDATE predictions SET data_quality = 0 WHERE data_quality IS NULL`,
+  // Parlay Builder independent tables (separate from all Prediction Engine tables)
+  `
+  CREATE TABLE IF NOT EXISTS parlay_builder_settings (
+    id SERIAL PRIMARY KEY,
+    version INTEGER NOT NULL DEFAULT 1,
+    weights JSONB NOT NULL DEFAULT '{}'::jsonb,
+    thresholds JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by TEXT
+  )
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS parlay_builder_sessions (
+    id SERIAL PRIMARY KEY,
+    session_id TEXT NOT NULL UNIQUE DEFAULT gen_random_uuid()::text,
+    builder_version TEXT NOT NULL DEFAULT '1.0.0',
+    settings_version INTEGER,
+    legs JSONB NOT NULL DEFAULT '[]'::jsonb,
+    summary JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    created_by TEXT
+  )
+  `,
+  `CREATE INDEX IF NOT EXISTS parlay_builder_sessions_created_idx ON parlay_builder_sessions (created_at DESC)`,
+  // Parlay Builder outcome tracking — primary calibration data source.
+  // One row per leg per /validate call. actual_winner_id stays NULL until
+  // the resolution job (scripts/resolveParlayLegOutcomes.ts) fills it in.
+  `
+  CREATE TABLE IF NOT EXISTS parlay_leg_outcomes (
+    id                   SERIAL PRIMARY KEY,
+    session_id           INTEGER REFERENCES parlay_builder_sessions(id),
+    selected_player_id   TEXT NOT NULL,
+    opponent_id          TEXT NOT NULL,
+    selected_player_name TEXT NOT NULL,
+    opponent_name        TEXT NOT NULL,
+    tournament_name      TEXT,
+    surface              TEXT,
+    validation_score     INTEGER NOT NULL,
+    risk_score           INTEGER NOT NULL,
+    reliability_grade    TEXT NOT NULL,
+    parlay_grade         TEXT NOT NULL,
+    decision             TEXT NOT NULL,
+    data_coverage        INTEGER NOT NULL,
+    source_agreement     INTEGER NOT NULL,
+    factor_scores        JSONB NOT NULL,
+    market_odds          NUMERIC,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    actual_winner_id     TEXT,
+    resolved_at          TIMESTAMPTZ,
+    -- 'live' = submitted via /validate; 'backfill' = scored from historical graded match
+    source               TEXT NOT NULL DEFAULT 'live',
+    -- evaluation_predictions.id that this backfill row was scored from (null for live legs)
+    backfill_match_id    INTEGER
+  )
+  `,
+  // Forward-compat: columns added after initial table creation
+  `ALTER TABLE parlay_leg_outcomes ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'live'`,
+  `ALTER TABLE parlay_leg_outcomes ADD COLUMN IF NOT EXISTS backfill_match_id INTEGER`,
+  `ALTER TABLE parlay_leg_outcomes ADD COLUMN IF NOT EXISTS matchup_closeness INTEGER`,
+  // Backfill dedup: one row per graded match (prevents re-running from doubling data)
+  `CREATE UNIQUE INDEX IF NOT EXISTS parlay_leg_outcomes_backfill_match_idx ON parlay_leg_outcomes (backfill_match_id) WHERE backfill_match_id IS NOT NULL`,
+  // Resolution job: scan for unresolved rows ordered by age
+  `CREATE INDEX IF NOT EXISTS parlay_leg_outcomes_unresolved_idx ON parlay_leg_outcomes (created_at) WHERE actual_winner_id IS NULL`,
+  // Calibration query: join on session
+  `CREATE INDEX IF NOT EXISTS parlay_leg_outcomes_session_idx ON parlay_leg_outcomes (session_id)`,
+  // Resolution job: match player pairs quickly
+  `CREATE INDEX IF NOT EXISTS parlay_leg_outcomes_players_idx ON parlay_leg_outcomes (selected_player_id, opponent_id)`,
+
+  // ── Parlay Builder: user-saved legs ──────────────────────────────────────────
+  // Persists individual BuilderLegResult snapshots for the "Saved Parlays" folder.
+  // Completely separate from parlay_leg_outcomes (which is calibration data).
+  `
+  CREATE TABLE IF NOT EXISTS parlay_saved_legs (
+    id          SERIAL PRIMARY KEY,
+    saved_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    leg_payload JSONB NOT NULL
+  )
+  `,
+
+  // ── Parlay Builder: active session ────────────────────────────────────────────
+  // Single-row store (id=1 singleton) for the current in-progress parlay session.
+  // Upserted on every change so the session survives browser close / device switch.
+  `
+  CREATE TABLE IF NOT EXISTS parlay_active_session (
+    id              INTEGER PRIMARY KEY DEFAULT 1,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    session_payload JSONB NOT NULL DEFAULT '{}'::jsonb
+  )
+  `,
 ];
 
 let ensured = false;

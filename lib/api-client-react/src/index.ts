@@ -9,3 +9,4 @@ export * from "./optimizerSummary";
 export * from "./candidateConfigs";
 export * from "./payments";
 export * from "./evaluationPredictionStats";
+export * from "./evaluationAnalysis";

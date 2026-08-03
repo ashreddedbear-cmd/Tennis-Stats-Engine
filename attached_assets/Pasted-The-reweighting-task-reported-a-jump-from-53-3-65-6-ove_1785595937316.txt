@@ -1,0 +1,24 @@
+The reweighting task reported a jump from 53.3% → 65.6% overall win rate and 63.3% → 71.0% KEEP-tier win rate after deriving new DEFAULT_WEIGHTS from a leave-one-out ablation at n=3,031. Two things need to be confirmed before trusting those numbers, and a third before trusting the weights are final:
+
+	1.	Possible holdout leakage. The “held-out” validation set (last 607 rows chronologically) needs to be confirmed as genuinely excluded from the leave-one-out edge computation that produced the new weights — not just split out afterward for reporting. If the 607 rows were part of the 3,031 used to derive the weights, the 71.0%/65.6% validation numbers are inflated by testing on data the weights were partly fit on.
+	2.	Confounded comparison. The report itself attributes most of the win-rate jump to richer underlying data (new providers), not to the reweighting — but no test isolates the two. The clean comparison is: old DEFAULT_WEIGHTS scored against the new n=3,031 data, vs. new DEFAULT_WEIGHTS scored against the same n=3,031 data. Only that isolates what the reweighting itself actually contributed.
+	3.	Weights are provisional. They were derived and applied to builderScoringService.ts at n=3,031, while the 10,000-row backfill was still running in the background. Edges shifted meaningfully between n=1,500 and n=3,031 (Recent Form and Surface Record flipped from negative to strongly positive) — a similar shift is plausible between 3,031 and 10,000. The current weights are live in production code, not staged behind a flag.
+
+Done looks like
+
+	•	Explicit confirmation (quote the actual code or query used) that the 607-row holdout set was excluded from the LOO edge computation before weights were derived, not split out after the fact. If it wasn’t properly excluded, redo the split correctly and re-validate.
+	•	A side-by-side run: old weights vs. new weights, both scored against the identical n=3,031 (or whatever the current row count is) dataset — reporting win rate and KEEP-tier win rate for each, so the reweighting’s isolated contribution is visible separately from the data-quality improvement.
+	•	Once the full 10,000-row backfill completes, re-run auditParlayFactorWeights.ts against the complete dataset and compare the resulting edges/weights to the n=3,031 version — confirm whether historicalVolatility, headToHead, and recentForm’s calls hold up or shift again.
+	•	If weights change meaningfully at n=10,000, update DEFAULT_WEIGHTS again and re-run the isolated-effect comparison from the point above against the final dataset.
+	•	Findings doc (.agents/memory/parlay-calibration-findings.md) updated with the isolated-effect numbers and the final n=10,000 confirmation, not just the n=3,031 provisional results currently there.
+
+Out of scope
+
+	•	Any further changes to the Prediction Engine or market-odds tasks (#83/#84) — unrelated track.
+	•	Re-deriving weights using a different methodology than the existing leave-one-out approach — this task validates the existing derivation, not replaces it.
+
+Relevant files
+
+	•	artifacts/api-server/src/scripts/auditParlayFactorWeights.ts
+	•	artifacts/api-server/src/services/parlayBuilder/builderScoringService.ts
+	•	.agents/memory/parlay-calibration-findings.md

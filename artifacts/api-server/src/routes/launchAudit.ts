@@ -1,5 +1,7 @@
 import { Router, type IRouter } from 'express';
 import { requireAdmin } from '../lib/adminAuth';
+import { auditAdminWrite } from '../middlewares/auditLog';
+import { adminLimiter } from '../middlewares/rateLimiter';
 import { getLaunchAuditSummary, getLiveStatus, runLaunchAudit, testProviderByName } from '../services/launchAudit';
 
 const router: IRouter = Router();
@@ -23,7 +25,7 @@ router.get('/launch-audit/summary', requireAdmin, async (_req, res): Promise<voi
  * Runs the full 15-category audit, writes docs/launch-audit/latest-launch-audit.md,
  * and persists a history entry. Takes a few seconds but is synchronous (short enough to not need async job).
  */
-router.post('/launch-audit/run', requireAdmin, async (_req, res): Promise<void> => {
+router.post('/launch-audit/run', requireAdmin, adminLimiter, auditAdminWrite(), async (_req, res): Promise<void> => {
   try {
     const summary = await runLaunchAudit();
     res.json(summary);
@@ -50,7 +52,7 @@ router.get('/launch-audit/live', requireAdmin, async (_req, res): Promise<void> 
  * POST /launch-audit/providers/test
  * Returns status cards for all configured providers (read-only, no quota-consuming calls).
  */
-router.post('/launch-audit/providers/test', requireAdmin, async (_req, res): Promise<void> => {
+router.post('/launch-audit/providers/test', requireAdmin, adminLimiter, auditAdminWrite(), async (_req, res): Promise<void> => {
   try {
     const live = await getLiveStatus();
     res.json({ providers: live.providers, testedAt: live.generatedAt });
@@ -64,11 +66,11 @@ router.post('/launch-audit/providers/test', requireAdmin, async (_req, res): Pro
  * Returns status for a single named provider.
  * :name is matched case-insensitively against provider names.
  */
-router.post('/launch-audit/providers/:name/test', requireAdmin, (req, res): void => {
+router.post('/launch-audit/providers/:name/test', requireAdmin, adminLimiter, auditAdminWrite(), (req, res): void => {
   try {
-    const card = testProviderByName(req.params.name);
+    const card = testProviderByName(String(req.params.name));
     if (!card) {
-      res.status(404).json({ error: `Provider "${req.params.name}" not found` });
+      res.status(404).json({ error: `Provider "${String(req.params.name)}" not found` });
       return;
     }
     res.json({ provider: card, testedAt: new Date().toISOString() });

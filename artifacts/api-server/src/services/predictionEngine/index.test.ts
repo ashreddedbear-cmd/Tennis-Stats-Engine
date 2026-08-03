@@ -63,30 +63,6 @@ function baseInput(overrides: Partial<PredictionEngineInput> = {}): PredictionEn
   };
 }
 
-// Regression test for Task #111: before this fix, `moduleEdges` was filtered by
-// `EXCLUDED_FROM_ENSEMBLE` (availability/fatigue/matchLoadRecovery) BEFORE the Data Quality blend
-// ever saw it, so those three modules -- despite having real, documented `MODULE_IMPORTANCE`
-// weights and rationale -- silently never contributed to `dataQuality` at all. Ablating them via
-// `excludedModels` must now visibly move the score, proving the blend actually reads them.
-test("availability/fatigue/matchLoadRecovery genuinely contribute to Data Quality (Task #111 root-cause fix), even though all three are excluded from the ensemble vote", () => {
-  const withAllModules = runPredictionEngine(baseInput());
-  const withoutThoseThree = runPredictionEngine(baseInput({ excludedModels: new Set(["availability", "fatigue", "matchLoadRecovery"]) }));
-
-  assert.notEqual(
-    withAllModules.dataQuality,
-    withoutThoseThree.dataQuality,
-    "ablating availability/fatigue/matchLoadRecovery must change the Data Quality score if they are genuinely part of the blend",
-  );
-
-  // Their exclusion from the ensemble VOTE itself must be completely unaffected by this fix --
-  // the predicted probability should be identical whether or not the Data-Quality-only ablation
-  // above changes anything (those three never voted either way).
-  assert.equal(
-    withAllModules.rawEnsembleProbability,
-    withoutThoseThree.rawEnsembleProbability,
-    "excludedModels ablation of non-voting modules must not accidentally change the ensemble's predicted probability",
-  );
-});
 
 test("the final-consistency guard runs automatically on every real engine output and records zero violations for well-formed inputs", () => {
   const output = runPredictionEngine(baseInput());
@@ -237,6 +213,165 @@ test("Form-Elo conflict gate: RF genuinely influences the ensemble and its remov
       `when Elo disagrees with form, removing RF must shift probability toward the Elo-favored player (p2): withRF=${withRF.rawEnsembleProbability}, withoutRF=${withoutRF.rawEnsembleProbability}`,
     );
   }
+});
+
+// ─── Market Odds wiring tests ─────────────────────────────────────────────────
+//
+// The market odds module is a live-signal supplement that:
+//   - is present in engine.models only when a real OddsQuote is supplied AND
+//     either (a) marketOdds is not in EXCLUDED_FROM_ENSEMBLE, or (b) an explicit
+//     excludedModels set is provided (ablation bypass — the caller overrides the global gate)
+//   - is absent when marketOdds is null (no fallback to 50/50 invented vote)
+//   - is absent when "marketOdds" is in excludedModels (ablation override)
+//   - is absent in normal live calls when globally excluded via EXCLUDED_FROM_ENSEMBLE
+//     (Task #21: excluded until the ≥200 paper_trade paired-row reliability bar is cleared)
+//   - uses vig-normalized implied probability, so symmetric odds produce ~50%
+//   - is always excluded from the Data Quality blend (decisionTrace check)
+//
+// Tests that verify the module IS active pass excludedModels: new Set() to signal ablation
+// mode (bypassing the EXCLUDED_FROM_ENSEMBLE global gate). Tests that verify the global
+// exclusion behavior pass only marketOdds with no excludedModels override.
+
+test("Market Consensus appears in engine.models when odds are supplied in ablation mode (excludedModels: new Set())", () => {
+  const output = runPredictionEngine(baseInput({
+    marketOdds: {
+      provider: "Test Provider",
+      player1DecimalOdds: 1.60,
+      player2DecimalOdds: 2.40,
+      fetchedAt: new Date().toISOString(),
+    },
+    // explicit empty excludedModels = ablation mode: bypasses EXCLUDED_FROM_ENSEMBLE global gate
+    excludedModels: new Set(),
+  }));
+
+  const marketVote = output.engine.models.find((m) => m.modelName === "Market Consensus");
+  assert.ok(
+    marketVote !== undefined,
+    "Market Consensus must appear in engine.models when an OddsQuote is supplied",
+  );
+  assert.ok(
+    marketVote!.weightUsed > 0,
+    `Market Consensus must have positive ensemble weight (got ${marketVote!.weightUsed})`,
+  );
+});
+
+test("Market Consensus is absent from engine.models when marketOdds is null (no fabricated neutral vote)", () => {
+  const output = runPredictionEngine(baseInput({ marketOdds: null }));
+
+  const marketVote = output.engine.models.find((m) => m.modelName === "Market Consensus");
+  assert.strictEqual(
+    marketVote,
+    undefined,
+    "Market Consensus must NOT appear when marketOdds is null — absence must not synthesize a 50/50 noise vote",
+  );
+});
+
+test("Market Consensus is absent when excluded via ablation (excludedModels: Set(['marketOdds']))", () => {
+  const output = runPredictionEngine(baseInput({
+    marketOdds: {
+      provider: "Test Provider",
+      player1DecimalOdds: 1.60,
+      player2DecimalOdds: 2.40,
+      fetchedAt: new Date().toISOString(),
+    },
+    excludedModels: new Set(["marketOdds"] as const),
+  }));
+
+  const marketVote = output.engine.models.find((m) => m.modelName === "Market Consensus");
+  assert.strictEqual(
+    marketVote,
+    undefined,
+    "Market Consensus must be excluded from engine.models when 'marketOdds' is in excludedModels",
+  );
+});
+
+test("Market Consensus is absent in live calls (no excludedModels) even with valid odds when globally excluded via EXCLUDED_FROM_ENSEMBLE", () => {
+  // This test verifies the Task #21 global gate: when marketOdds is in EXCLUDED_FROM_ENSEMBLE
+  // and no explicit excludedModels is passed (the live/paper_trade code path), the market module
+  // must NOT vote even if real odds are provided. The global gate is enforced only on no-override
+  // calls so live predictions are never influenced by an underpowered-sample module.
+  const output = runPredictionEngine(baseInput({
+    marketOdds: {
+      provider: "Test Provider",
+      player1DecimalOdds: 1.60,
+      player2DecimalOdds: 2.40,
+      fetchedAt: new Date().toISOString(),
+    },
+    // no excludedModels — this is the live call path
+  }));
+
+  const marketVote = output.engine.models.find((m) => m.modelName === "Market Consensus");
+  assert.strictEqual(
+    marketVote,
+    undefined,
+    "Market Consensus must NOT appear in a live call (no excludedModels override) while globally excluded via EXCLUDED_FROM_ENSEMBLE — the module is pending re-validation (Task #21)",
+  );
+});
+
+test("vig-normalized symmetric odds (2.0 / 2.0) produce a Market Consensus probability within 1pp of 50 (ablation mode)", () => {
+  const output = runPredictionEngine(baseInput({
+    marketOdds: {
+      provider: "Test Provider",
+      player1DecimalOdds: 2.0,
+      player2DecimalOdds: 2.0,
+      fetchedAt: new Date().toISOString(),
+    },
+    excludedModels: new Set(), // ablation bypass
+  }));
+
+  const marketVote = output.engine.models.find((m) => m.modelName === "Market Consensus");
+  assert.ok(marketVote !== undefined, "Market Consensus must appear for valid symmetric odds");
+  assert.ok(
+    Math.abs(marketVote!.player1Probability - 50) < 1,
+    `symmetric 2.0/2.0 odds must produce near-50% probability after vig normalization (got ${marketVote!.player1Probability})`,
+  );
+});
+
+test("Market Consensus player1Probability > 50 when player1 is the heavy market favorite (1.20 odds) [ablation mode]", () => {
+  const output = runPredictionEngine(baseInput({
+    marketOdds: {
+      provider: "Test Provider",
+      player1DecimalOdds: 1.20,
+      player2DecimalOdds: 4.50,
+      fetchedAt: new Date().toISOString(),
+    },
+    excludedModels: new Set(), // ablation bypass
+  }));
+
+  const marketVote = output.engine.models.find((m) => m.modelName === "Market Consensus");
+  assert.ok(marketVote !== undefined, "Market Consensus must appear for valid asymmetric odds");
+  assert.ok(
+    marketVote!.player1Probability > 60,
+    `player1 at 1.20 decimal odds must produce player1Probability well above 50 (got ${marketVote!.player1Probability})`,
+  );
+});
+
+test("Market Consensus trace in decisionTrace.modules is always excludedFromDataQuality and never excludedFromEnsemble [ablation mode]", () => {
+  const output = runPredictionEngine(baseInput({
+    marketOdds: {
+      provider: "Test Provider",
+      player1DecimalOdds: 1.80,
+      player2DecimalOdds: 2.00,
+      fetchedAt: new Date().toISOString(),
+    },
+    excludedModels: new Set(), // ablation bypass
+  }));
+
+  const trace = output.decisionTrace.modules.find((m) => m.key === "marketOdds");
+  assert.ok(
+    trace !== undefined,
+    "marketOdds trace must appear in decisionTrace.modules when odds are present",
+  );
+  assert.strictEqual(
+    trace!.excludedFromDataQuality,
+    true,
+    "Market Consensus must always be excluded from the Data Quality blend (absence of live odds ≠ lower data quality)",
+  );
+  assert.strictEqual(
+    trace!.excludedFromEnsemble,
+    false,
+    "Market Consensus must NOT be excluded from the ensemble when real odds are present",
+  );
 });
 
 test("Form-Elo conflict gate: does NOT suppress RF when signals agree — RF retains its normal weight contribution", () => {

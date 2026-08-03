@@ -85,6 +85,29 @@ async function resolvePlayerByName(name: string): Promise<{ player: PlayerSummar
     if (name.trim().length < 2) return { player: null, error: `"${name}" is too short to search` }
 
     // Run the full resolution pipeline with a given query string.
+    /**
+     * When multiple candidates all share the same normalized name they are the same player
+     * recorded under different MatchStat season IDs. Rather than reporting "ambiguous",
+     * collapse to the single best candidate: prefer live > ranked > lower rank number.
+     * When candidates have genuinely different names it remains "ambiguous".
+     */
+    function resolveMultiple(hits: PlayerSummary[]): PlayerSummary | "ambiguous" {
+      if (hits.length === 0) return "ambiguous"
+      const firstName = normName(hits[0]!.name)
+      if (!hits.every((c) => normName(c.name) === firstName)) return "ambiguous"
+      // All same name — same player, different historical IDs. Pick best.
+      return hits.slice().sort((a, b) => {
+        const aLive = (a.source ?? "live") !== "historical-match" ? 0 : 1
+        const bLive = (b.source ?? "live") !== "historical-match" ? 0 : 1
+        if (aLive !== bLive) return aLive - bLive
+        const aR = a.currentRank != null ? 0 : 1
+        const bR = b.currentRank != null ? 0 : 1
+        if (aR !== bR) return aR - bR
+        if (a.currentRank != null && b.currentRank != null) return a.currentRank - b.currentRank
+        return 0
+      })[0]!
+    }
+
     async function attempt(searchName: string): Promise<PlayerSummary | null | "ambiguous"> {
       const candidates = await searchPlayers({ query: searchName })
 
@@ -93,7 +116,7 @@ async function resolvePlayerByName(name: string): Promise<{ player: PlayerSummar
       // 1. Exact normalized match
       const exact = candidates.filter((c) => normName(c.name) === qNorm)
       if (exact.length === 1) return exact[0]
-      if (exact.length > 1) return "ambiguous"
+      if (exact.length > 1) return resolveMultiple(exact)
 
       // 2. Word-subset match (all query words must appear in candidate)
       const words = qNorm.split(" ").filter(Boolean)
@@ -102,10 +125,11 @@ async function resolvePlayerByName(name: string): Promise<{ player: PlayerSummar
         return words.length > 0 && words.every((w) => cWords.has(w))
       })
       if (confident.length === 1) return confident[0]
-      if (confident.length > 1) return "ambiguous"
+      if (confident.length > 1) return resolveMultiple(confident)
 
       // 3. Initial-aware match: split off leading "X." tokens, match on remaining words,
       //    then verify any initials match the candidate's first name letter.
+      //    Handles query="A. Smith" / candidate="Alexander Smith".
       const initialPattern = /^[a-z]\.?$/
       const initials = words.filter((w) => initialPattern.test(w)).map((w) => w.replace(".", ""))
       const substantive = words.filter((w) => !initialPattern.test(w))
@@ -114,13 +138,31 @@ async function resolvePlayerByName(name: string): Promise<{ player: PlayerSummar
           const cWords = normName(c.name).split(" ").filter(Boolean)
           const cWordSet = new Set(cWords)
           if (!substantive.every((w) => cWordSet.has(w))) return false
-          // Check each initial against the first character of a non-substantive candidate word
           if (initials.length === 0) return true
           const firstLetter = cWords[0]?.[0] ?? ""
           return initials.every((ini) => ini === firstLetter)
         })
         if (bySubstantive.length === 1) return bySubstantive[0]
-        if (bySubstantive.length > 1) return "ambiguous"
+        if (bySubstantive.length > 1) return resolveMultiple(bySubstantive)
+      }
+
+      // 4. Reverse-initial match: the candidate's first name is an initial ("T. Kokkinakis")
+      //    but the query provides the full name ("Thanasi Kokkinakis"). Match when:
+      //    - Candidate first token is a single letter (with optional period)
+      //    - Query first word starts with that same letter
+      //    - All remaining candidate words appear as query words
+      if (words.length >= 2) {
+        const byReverseInitial = candidates.filter((c) => {
+          const cWords = normName(c.name).split(" ").filter(Boolean)
+          if (cWords.length < 2) return false
+          const cFirst = cWords[0]!.replace(".", "")
+          if (cFirst.length !== 1) return false
+          if (!words[0] || words[0][0] !== cFirst) return false
+          const qWordSet = new Set(words)
+          return cWords.slice(1).every((w) => qWordSet.has(w))
+        })
+        if (byReverseInitial.length === 1) return byReverseInitial[0]
+        if (byReverseInitial.length > 1) return resolveMultiple(byReverseInitial)
       }
 
       return null
@@ -205,20 +247,39 @@ export function PasteMatchupPredictor() {
       return
     }
 
-    const initialLines: PasteLine[] = parsed.map((p, i) => ({
-      key: `line-${i}-${crypto.randomUUID()}`,
-      raw: p.raw,
-      parsed: p,
-      status: p.parseError ? ("parse-error" as LineStatus) : ("resolving" as LineStatus),
-      player1: null,
-      player2: null,
-      errorMessage: p.parseError,
-      predictionId: null,
-      resolvedTournament: p.tournamentName,
-      detectedSurface: null,
-      detectedLevel: null,
-      parsedDate: p.matchDate ?? null,
-    }))
+    // Propagate tournament context from section headers (e.g. "ATP Estoril") to the matchup
+    // lines that follow them. Headers are silently skipped — never shown as parse errors.
+    let currentHeaderTournament: string | null = null
+    const initialLines: PasteLine[] = []
+    parsed.forEach((p, i) => {
+      if (p.isTournamentHeader) {
+        // Update running context, don't add a row for the header itself.
+        currentHeaderTournament = p.tournamentName
+        return
+      }
+      // Matchup line: use its own tournament name if present, otherwise fall back to the
+      // most recent section header.
+      const resolvedTournament = p.tournamentName ?? currentHeaderTournament
+      initialLines.push({
+        key: `line-${i}-${crypto.randomUUID()}`,
+        raw: p.raw,
+        parsed: { ...p, tournamentName: resolvedTournament },
+        status: p.parseError ? ("parse-error" as LineStatus) : ("resolving" as LineStatus),
+        player1: null,
+        player2: null,
+        errorMessage: p.parseError,
+        predictionId: null,
+        resolvedTournament,
+        detectedSurface: null,
+        detectedLevel: null,
+        parsedDate: p.matchDate ?? null,
+      })
+    })
+
+    if (initialLines.length === 0) {
+      setBatchError('No matchup lines found. Paste one or more lines like "Player A vs Player B".')
+      return
+    }
 
     setLines(initialLines)
     setIsResolving(true)

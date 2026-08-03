@@ -1,0 +1,26 @@
+Here's a prompt to hand to Replit, covering all three reds:
+
+---
+
+**Fix these three unresolved items — do not mark any as done without the evidence requested:**
+
+**1. Walk-forward test insert collision (`walkForward.test.ts`, error 23505)**
+
+Root cause: the test seeds matches with a fixed `externalId` pattern (`wf-0` … `wf-39`, `provider: "walk-forward-test"`). If a prior run of this test failed *before* reaching `t.after()` cleanup — or `t.after()` itself didn't fully complete — those rows are still in `historicalMatchesTable`. The next run tries to insert the same `(provider, externalId)` pair again and hits the unique constraint.
+
+Fix:
+- At the very start of the test, before inserting anything, delete any pre-existing rows where `provider = "walk-forward-test"` from `historicalMatchesTable` (and cascade-clean any `matchFeatureSnapshotsTable`/`evaluationPredictionsTable` rows referencing them). This makes the test self-healing regardless of how a previous run ended.
+- Additionally, make `externalId` unique per run (e.g. append a timestamp or random suffix to `wf-${i}`) so two runs can never collide even without cleanup.
+- Confirm `t.after()` uses try/finally semantics so cleanup runs even when an assertion in the test body throws — if it currently doesn't, wrap the test body so cleanup is guaranteed.
+
+After this fix: actually run the walk-forward job against a real seeded dataset, confirm `evaluation_runs` gets rows, and report the before/after backtest numbers that were previously blocked at 0 rows.
+
+**2. Scheduled Deployment never provisioned (Phase 3 paper-trading)**
+
+The current in-process timer only runs while the dev workflow is alive. Replace it with a real Replit **Scheduled Deployment** (not a background loop in the dev workflow) configured to run the paper-trading job on the same ~15-minute cadence. Confirm it survives a repl restart/sleep — this is an infra config step in Replit's deploy settings, not a code change.
+
+**3. Quiet-pipeline alert never live-tested**
+
+Unit tests on `isPipelineQuiet()` with mocked timestamps don't satisfy the pass criteria. After the Scheduled Deployment above is live: deliberately pause the job for longer than the quiet window, confirm the alert actually fires in production, then resume it and confirm it clears. Report the real timestamps of the induced gap and the alert firing.
+
+**Report back with:** the actual diff/config for all three, plus the real evidence (query results, deployment screenshot, alert-fired timestamp) — not a status claim.

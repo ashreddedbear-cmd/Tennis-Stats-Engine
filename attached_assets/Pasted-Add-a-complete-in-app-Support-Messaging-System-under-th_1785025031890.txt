@@ -1,0 +1,446 @@
+Add a complete in-app Support Messaging System under the Account section for both regular users and Admin/Owner accounts.
+
+1. User Support Page
+
+Add a new menu item under Account called:
+
+Support
+
+When the user opens the Support page, include:
+
+Back Button
+
+Add a visible back arrow/button at the top-left.
+
+The Back button must return the user to the exact page they were viewing before opening Support.
+
+Do not always send the user back to the Account page or Home page. Preserve the previous route and return them there.
+
+Page Header
+
+Display:
+
+Contact Support
+
+Under the heading, display:
+
+“Report a problem, request a feature, or ask a question. Our support team will respond directly inside the app.”
+
+Support Category
+
+Add a required dropdown with these options:
+
+* Technical Problem
+* Prediction Issue
+* Subscription or Billing
+* Account Problem
+* Feature Request
+* Recommendation
+* Data Problem
+* Other
+
+Subject
+
+Add a required subject field with a maximum of 120 characters.
+
+Placeholder:
+
+“Briefly describe your issue”
+
+Large Message Box
+
+Add one large required text box that takes up most of the page.
+
+Placeholder:
+
+“Describe the problem, recommendation, or question in detail…”
+
+Requirements:
+
+* Minimum 10 characters
+* Maximum 5,000 characters
+* Show a live character counter
+* Preserve the text if the user accidentally leaves the page and returns before submitting
+* Do not allow an empty support request
+
+Screenshot Importer
+
+Allow users to upload up to five screenshots per support request.
+
+Requirements:
+
+* Accept PNG, JPG, JPEG, HEIC, and WebP
+* Maximum five images
+* Maximum 10 MB per image
+* Show image previews before submission
+* Allow users to remove individual screenshots before submitting
+* Compress oversized images when possible
+* Clearly display “Maximum 5 screenshots”
+* Reject unsupported files with a readable error message
+* Store screenshots securely and associate them with the correct support ticket
+
+Automatic User Information
+
+Do not make the user manually enter information already stored in their account.
+
+Automatically attach:
+
+* User ID
+* Full name
+* Email address
+* Current subscription plan
+* Trial status
+* Account role
+* Date and time submitted
+* App version
+* Device/browser information
+* Current page or route where Support was opened
+* Ticket category
+* Ticket subject
+* Ticket message
+* Uploaded screenshots
+
+The subscription plan should show the user’s actual current plan, such as:
+
+* Free
+* Pro Monthly
+* Pro Annual
+* Elite Monthly
+* Elite Annual
+* Team
+* Admin
+* Owner
+
+Submit Button
+
+Add a full-width button:
+
+Send Support Request
+
+When submitted:
+
+1. Validate all required fields.
+2. Upload and save the screenshots.
+3. Create the support ticket in the database.
+4. Display a success confirmation.
+5. Generate a readable ticket number.
+6. Clear the form only after the request is successfully saved.
+7. Add the new ticket to the user’s support conversation history.
+
+Success message:
+
+“Your support request has been sent. You can return to this page to view replies.”
+
+Prevent duplicate submissions if the user taps the button multiple times.
+
+2. User Support Inbox
+
+The same Support page must also contain a section called:
+
+Your Support Requests
+
+Display the user’s previous tickets with:
+
+* Ticket number
+* Subject
+* Category
+* Status
+* Date submitted
+* Date of latest reply
+* Unread reply indicator
+* Latest message preview
+
+Ticket statuses:
+
+* Open
+* Waiting for Support
+* Waiting for User
+* Resolved
+* Closed
+
+Users must only be able to view their own support tickets.
+
+Selecting a ticket should open the complete conversation.
+
+3. Support Conversation Page
+
+Each support ticket must work like an in-app messaging thread.
+
+Display:
+
+* Ticket number
+* Subject
+* Category
+* Current status
+* Original message
+* Original screenshots
+* Complete message history
+* Date and time for every message
+* Whether each message came from the user or support
+
+The user must be able to:
+
+* Send additional messages
+* Add up to five screenshots per new message
+* View screenshots in full-screen mode
+* See when Admin/Owner responds
+* Mark the ticket resolved
+* Reopen a resolved ticket if another problem occurs
+
+Add a Back button that returns the user to the Support inbox.
+
+Do not expose internal Admin notes to the user.
+
+4. Admin/Owner Support Center
+
+Under the Admin/Owner Account section, add:
+
+Support Center
+
+This is where all user support requests must appear inside the Tennis Matrix AI application.
+
+Do not build this as a separate external application.
+
+The Support Center must receive tickets immediately after users submit them.
+
+Support Dashboard
+
+Show summary cards for:
+
+* Total Open
+* Waiting for Support
+* Waiting for User
+* Resolved Today
+* Unread Tickets
+* High Priority Tickets
+
+Ticket List
+
+Display every support ticket in a searchable and filterable list.
+
+Each ticket row must show:
+
+* Ticket number
+* User’s full name
+* User’s email
+* Subscription plan
+* Ticket subject
+* Category
+* Status
+* Priority
+* Date submitted
+* Latest activity
+* Number of screenshots
+* Unread message indicator
+
+Add filters for:
+
+* Status
+* Category
+* Subscription plan
+* Priority
+* Date range
+* Assigned admin
+* Unread only
+
+Add search by:
+
+* User name
+* Email
+* Ticket number
+* Subject
+* Message text
+
+Allow sorting by:
+
+* Newest
+* Oldest
+* Most recently updated
+* Priority
+* Subscription plan
+
+Admin Ticket View
+
+When an Admin or Owner opens a ticket, display:
+
+User Information
+
+* Full name
+* Email address
+* User ID
+* Subscription plan
+* Trial status
+* Role
+* Account creation date
+* Device/browser
+* App version
+* Original page route
+
+Ticket Information
+
+* Ticket number
+* Category
+* Subject
+* Status
+* Priority
+* Submitted date
+* Last updated
+* Assigned admin
+
+Conversation
+
+Display the complete support conversation with:
+
+* User messages
+* Admin responses
+* Screenshots
+* Timestamps
+* Unread/read state
+
+Admin/Owner must be able to:
+
+* Reply directly to the user
+* Upload up to five screenshots per response
+* Change ticket status
+* Change ticket priority
+* Assign the ticket to an admin
+* Add private internal notes
+* Mark the ticket resolved
+* Close the ticket
+* Reopen the ticket
+* Delete spam tickets
+* View the user’s previous support requests
+
+Private internal notes must never be shown to the user.
+
+5. In-App Replies and Notifications
+
+When Admin/Owner responds:
+
+* Save the response to the support conversation.
+* Make the response immediately visible in the user’s Support inbox.
+* Mark the ticket as having an unread response.
+* Show a notification badge beside the Account or Support navigation item.
+* Display the number of unread support replies.
+* Clear the unread indicator after the user opens the response.
+
+A push notification or email notification is not required for the first version.
+
+However, structure the system so email and push notifications can be added later.
+
+6. Database Structure
+
+Create proper persistent database tables for the system.
+
+Suggested tables:
+
+support_tickets
+
+Include:
+
+* id
+* ticket_number
+* user_id
+* category
+* subject
+* status
+* priority
+* assigned_admin_id
+* source_route
+* app_version
+* device_information
+* created_at
+* updated_at
+* resolved_at
+* closed_at
+
+support_messages
+
+Include:
+
+* id
+* ticket_id
+* sender_user_id
+* sender_role
+* message
+* is_internal_note
+* is_read_by_user
+* is_read_by_admin
+* created_at
+* updated_at
+
+support_attachments
+
+Include:
+
+* id
+* ticket_id
+* message_id
+* uploaded_by_user_id
+* file_name
+* file_type
+* file_size
+* secure_storage_url
+* thumbnail_url
+* created_at
+
+Use the existing authentication user ID as the relationship key.
+
+Do not store image files directly inside database text fields or as base64 strings. Use secure file or object storage and save only the storage references in the database.
+
+7. Security and Permissions
+
+Enforce all permissions on the backend, not only in the interface.
+
+Requirements:
+
+* Users can only create and view their own tickets.
+* Users cannot access another user’s ticket by changing a URL or request ID.
+* Admins can view and respond to all user tickets.
+* Owners can view, respond to, manage, and delete tickets.
+* Internal notes are Admin/Owner only.
+* Validate all uploaded files on the server.
+* Sanitize all support messages.
+* Block executable or unsupported file types.
+* Use secure, nonpublic image storage.
+* Use signed or authenticated URLs for screenshot access.
+* Add rate limiting to prevent support-form spam.
+* Keep an audit record of ticket status changes and administrative actions.
+
+8. Mobile Design
+
+Build the entire Support system mobile-first.
+
+Requirements:
+
+* Large tap targets
+* No horizontal scrolling
+* Sticky Send button when useful
+* Screenshot previews that fit the screen
+* Full-screen screenshot viewer
+* Readable conversation bubbles
+* Clear distinction between user and support responses
+* The message box must remain usable when the mobile keyboard is open
+* Back buttons must work correctly on mobile browsers and inside the installed app
+
+9. Required Behavior
+
+The complete workflow must work as follows:
+
+1. A logged-in user opens Account.
+2. The user selects Support.
+3. The user chooses a category.
+4. The user enters a subject and detailed message.
+5. The user optionally uploads up to five screenshots.
+6. The user sends the request.
+7. The ticket is saved permanently.
+8. The ticket immediately appears in the Admin/Owner Support Center.
+9. Admin/Owner opens the ticket and sees the user’s name, email, subscription, issue, and screenshots.
+10. Admin/Owner replies inside the application.
+11. The response appears in the user’s Support inbox.
+12. The user opens the conversation and replies if necessary.
+13. Either side can continue the conversation until the issue is resolved.
+
+Implement the complete frontend, backend, database schema, file upload handling, authorization, unread-message system, validation, and error handling.
+
+Do not create placeholder buttons or nonfunctional interface elements. Every Support feature must be connected to real persistent data and tested for both regular users and Admin/Owner accounts.

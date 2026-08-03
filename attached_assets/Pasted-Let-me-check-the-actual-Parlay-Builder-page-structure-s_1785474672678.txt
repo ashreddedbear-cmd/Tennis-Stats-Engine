@@ -1,0 +1,29 @@
+Let me check the actual Parlay Builder page structure so the prompt names the right tab/component instead of guessing.
+
+Confirmed the actual structure — there's a `mode` state (`"live" | "backtest" | "calibration"`) with a tab switcher, so "History" has a real, exact insertion point rather than a guess.
+
+**Prompt for Replit:**
+
+---
+
+> Implement the Parlay Builder Save/Folder/History feature, fully — this has been requested before and not delivered, so go end-to-end, not partial:
+>
+> **1. Save button — per leg card**
+> Add a save (bookmark/star) icon button directly on each individual parlay leg card, in the action row near the "Show 5 reasons" / "Show factor breakdown" expandable links (this is the location circled in red on the screenshot — bottom-left area of each leg card, at the same indent level as those toggle links). Clicking it saves that specific leg (player matchup + its validation/risk/closeness snapshot at time of saving) to a persistent "Saved Parlays" store. Give it a clear saved/unsaved visual state (filled vs outline icon) so it's obvious which legs are already saved.
+>
+> **2. Saved Parlays folder — top summary panel**
+> Add a "Saved Parlays" button/icon in the top summary panel, in the same row as the existing "Reset" button and filter chips (all / keep / borderline / remove) — this is the location circled in blue on the screenshot. Clicking it opens the Saved Parlays folder: a list/panel of every saved leg, with:
+> - Open/select individual saved legs
+> - "Add Selected" — bulk-add checked saved legs back into the active parlay builder session
+> - "Clear All" — wipe the saved folder (confirm before destructive action)
+>
+> **3. History tab — between Live and Backtest**
+> In `AdminParlayBuilder.tsx`, the mode switcher (`const [mode, setMode] = useState<"live" | "backtest" | "calibration">("live")` around line 1231, buttons rendered ~1553–1565) currently goes Live → Backtest → Calibration. Add a `"history"` mode and insert its tab button **between Live and Backtest** in that button row, so the order becomes Live → History → Backtest → Calibration. The History view should show continuously auto-graded past parlay legs, using the existing `resolveParlayLegOutcomes.ts` / `backfillParlayLegOutcomes.ts` infrastructure — but that infra currently only prints reports and doesn't persist, so add the actual persistence layer (new table or reuse an existing one if appropriate) so History has real data to read, and keep this storage separate from the Prediction Engine's own history/tables per the existing import-boundary rule (`checkParlayBoundary.ts`) — don't let this new table become another cross-import violation.
+>
+> **4. Session persistence — don't lose progress**
+> Currently, closing the app loses whatever's in the active Parlay Builder session (loaded matches, current leg list, filter state). Persist this so it survives app close/reopen — store the active session server-side tied to the admin/owner session (not localStorage, since this needs to survive across devices/reinstalls too, consistent with the single-owner admin model already in place). Restore it automatically on next load rather than requiring a manual "resume" action.
+>
+> **5. Auto-sort by better score**
+> When legs are loaded/displayed, automatically order each matchup so the player with the better score appears first (currently no sort logic exists for this — confirm which score field is authoritative for "better" — validation score, risk score, or a combined metric — and state your assumption before implementing, don't just guess silently).
+>
+> **Before declaring this done**: go through all five items top to bottom, confirm each one is actually wired into the UI (not just backend logic with no visible control), and show me a screenshot of the Parlay Builder with the save button, saved-folder button, and History tab all visible in their specified locations — the same way I asked for evidence on the last few fixes tonight.

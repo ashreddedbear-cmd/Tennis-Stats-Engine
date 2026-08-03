@@ -1,0 +1,106 @@
+Here’s the exact patch — a precise diff against your real builderScoringService.ts, following the same style/comment conventions already used in that file (so it doesn’t stick out as foreign code).
+File: src/services/parlayBuilder/builderScoringService.ts
+Find this block:
+  // ── 5. Risk Score (independent calculation) ───────────────────────────────
+
+  let risk = 35; // baseline
+
+  // Raise risk for negative signals
+  if (sel.recentWinRate < 0.4) risk += 12;
+  if (surface && sel.surfaceWinRate < 0.4 && sel.surfaceTotal >= 5) risk += 10;
+  if (marketOdds != null && 1 / marketOdds < 0.42) risk += 18;
+  if (selDaysRest != null && selDaysRest <= 1) risk += 10;
+  if (sel.retirementRate > 0.12) risk += 8;
+  if (opp.recentWinRate > 0.7) risk += 8;
+  if (sel.total < 10) risk += 12;  // insufficient data = more risk
+  if (dataCoverage < 60) risk += 10;
+
+  // Lower risk for positive signals
+  if (sel.winRate > 0.65 && sel.total >= 15) risk -= 10;
+  if (surface && sel.surfaceWinRate > 0.65 && sel.surfaceTotal >= 8) risk -= 10;
+  if (agreementRate > 0.75) risk -= 8;
+  if (marketOdds != null && 1 / marketOdds > 0.60) risk -= 12;
+  if (selRank != null && oppRank != null && selRank < oppRank * 0.5) risk -= 8;
+
+  const riskScore = clamp(Math.round(risk), 0, 100);
+Replace it with:
+  // ── 5. Risk Score (independent calculation) ───────────────────────────────
+
+  let risk = 35; // baseline
+
+  // Raise risk for negative signals
+  if (sel.recentWinRate < 0.4) risk += 12;
+  if (surface && sel.surfaceWinRate < 0.4 && sel.surfaceTotal >= 5) risk += 10;
+  if (marketOdds != null && 1 / marketOdds < 0.42) risk += 18;
+  if (selDaysRest != null && selDaysRest <= 1) risk += 10;
+  if (sel.retirementRate > 0.12) risk += 8;
+  if (opp.recentWinRate > 0.7) risk += 8;
+  if (sel.total < 10) risk += 12;  // insufficient data = more risk
+  if (dataCoverage < 60) risk += 10;
+
+  // Lower risk for positive signals
+  if (sel.winRate > 0.65 && sel.total >= 15) risk -= 10;
+  if (surface && sel.surfaceWinRate > 0.65 && sel.surfaceTotal >= 8) risk -= 10;
+  if (agreementRate > 0.75) risk -= 8;
+  if (marketOdds != null && 1 / marketOdds > 0.60) risk -= 12;
+  if (selRank != null && oppRank != null && selRank < oppRank * 0.5) risk -= 8;
+
+  const preClosenessRisk = clamp(Math.round(risk), 0, 100);
+
+  // ── 5b. Matchup Closeness Floor ─────────────────────────────────────────
+  //
+  // Bug found 2026-07 (K. Day vs. M. Hontama, WTA 125 Vancouver): the risk formula above only
+  // rewards "conventional favorite" stats (win rate, market odds, source agreement) and never
+  // asks how far apart the two players actually are. A player can clear several of the
+  // risk-reducing bonuses above and still be in a genuine coin-flip matchup, producing an
+  // unearned near-zero risk score. This section computes an independent closeness signal from
+  // data this service already has (win rate gap, surface win rate gap, market-implied
+  // probability, ranking gap) and uses it as a FLOOR — not an offsettable addition — so a
+  // genuinely close matchup can never be scored as low-risk no matter how favorable the other
+  // signals look.
+  //
+  // Threshold constants below (0.65/0.80 closeness bands, 40/55 floors) are a first-pass,
+  // reasoned estimate, NOT walk-forward validated against real outcomes. Per this file's own
+  // convention (see predictionEngine/upsetRisk.ts, calibration.ts), these should be re-tuned
+  // against real graded parlay-leg outcomes once enough data exists, not left as permanent
+  // hand-picked constants.
+
+  const closenessSignals: number[] = [];
+
+  // Win rate gap: 0 gap = maximally close (100), 0.4+ gap = clearly separated (0)
+  const winRateGap = Math.abs(sel.winRate - opp.winRate);
+  closenessSignals.push(clamp(Math.round((1 - winRateGap / 0.4) * 100), 0, 100));
+
+  // Surface win rate gap, only when both players have a real surface sample
+  if (surface && sel.surfaceTotal >= 5 && opp.surfaceTotal >= 5) {
+    const surfaceGap = Math.abs(sel.surfaceWinRate - opp.surfaceWinRate);
+    closenessSignals.push(clamp(Math.round((1 - surfaceGap / 0.4) * 100), 0, 100));
+  }
+
+  // Market-implied probability distance from a coin flip: 50% implied = maximally close (100)
+  if (marketOdds != null) {
+    const impliedProb = 1 / marketOdds;
+    closenessSignals.push(clamp(Math.round((1 - Math.abs(impliedProb - 0.5) * 2) * 100), 0, 100));
+  }
+
+  // Ranking gap, relative to the lower (better) rank so the scale is comparable across tiers
+  if (selRank != null && oppRank != null) {
+    const relGap = Math.abs(selRank - oppRank) / Math.max(selRank, oppRank);
+    closenessSignals.push(clamp(Math.round((1 - relGap) * 100), 0, 100));
+  }
+
+  const closenessScore = closenessSignals.length > 0
+    ? Math.round(closenessSignals.reduce((s, v) => s + v, 0) / closenessSignals.length)
+    : 50; // no independent signals available -- neutral, no floor applied beyond the default below
+
+  let riskFloor = 0;
+  if (closenessScore >= 80) riskFloor = 55;
+  else if (closenessScore >= 65) riskFloor = 40;
+
+  const riskScore = clamp(Math.max(preClosenessRisk, riskFloor), 0, 100);
+Then update the diagnostics return object to expose the new signal (find riskScore, near line ~1214 in the return block and add the line after it):
+    riskScore,
+    matchupCloseness: closenessScore, // new -- surface this on the card so it's not a silent internal-only number
+Instruction to give Replit exactly as-is:
+Apply this exact diff to src/services/parlayBuilder/builderScoringService.ts — do not modify the logic, only integrate it. Then run the existing test suite and the existing walk-forward evaluation job, and report before/after risk-score distributions and any test failures. Do not touch any other file, including anything under predictionEngine/.
+One honest note for when you’re ready: matchupCloseness isn’t wired into the BuilderResult return type or the UI card yet — I limited this patch to the risk math itself, per “no new system.” If you want it displayed on the card (like Validation/Risk/Coverage are now), that’s a small, separate type + UI change I can also write on request.

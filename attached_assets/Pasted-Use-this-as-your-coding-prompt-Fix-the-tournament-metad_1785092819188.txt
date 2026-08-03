@@ -1,0 +1,75 @@
+Use this as your coding prompt:
+
+Fix the tournament metadata detection pipeline in my tennis parlay builder.
+
+The current bug is that the UI visibly shows tournament headers such as “ATP Challenger Bonn,” “WTA 125K Targu Mures,” or “ATP Los Cabos,” but the parser still reports:
+
+* surface not detected
+* no tournament name
+* level not detected
+
+Do not solve this by assigning a default surface or defaulting every unknown event to ATP 250. Instead, make tournament headers propagate to every match listed beneath them until the next tournament header appears.
+
+Implement the following:
+
+1. Parse the OCR output in visual top-to-bottom order.
+2. Detect tournament headers separately from match rows.
+3. Maintain a currentTournament context.
+4. When a tournament header is detected, normalize it and store it as currentTournament.
+5. Assign that tournament to every following match row until another tournament header is found.
+6. Resolve tournament metadata from a centralized tournament registry containing:
+    * canonical tournament name
+    * aliases
+    * tour
+    * level
+    * city
+    * country
+    * surface
+    * indoor/outdoor
+    * optional latitude and longitude
+7. Use normalized and fuzzy matching so OCR variations still resolve correctly. Normalize case, punctuation, repeated spaces, accents, “125K” versus “125,” and abbreviations such as:
+    * ATP Challenger
+    * Challenger
+    * WTA 125K
+    * WTA 125
+8. Do not infer a match’s tournament from player names.
+9. Do not overwrite a detected tournament with a fallback value.
+10. Only use fallback metadata after all of these fail:
+    * exact alias match
+    * normalized match
+    * fuzzy tournament match
+    * event-feed metadata
+11. When metadata cannot be resolved, mark the field as unknown and show a correction control. Do not silently default the surface to Hard or the level to ATP 250.
+
+Add logging for each match showing:
+
+rawHeader
+normalizedHeader
+matchedTournament
+matchMethod
+confidence
+assignedSurface
+assignedLevel
+
+Add tests for a mixed screenshot containing multiple sections:
+
+ATP Challenger Bonn
+Damas vs Sakellaridis
+Galan vs De Krom
+ATP Challenger Samsun
+Heck vs Anavatan
+WTA 125K Targu Mures
+Feistel vs Szabo
+Chiesa vs Prisacariu
+
+Expected result:
+
+* Damas and Galan inherit ATP Challenger Bonn.
+* Heck inherits ATP Challenger Samsun.
+* Feistel and Chiesa inherit WTA 125 Targu Mures.
+* Each match receives the correct surface and level from the registry.
+* No match receives Hard or ATP 250 merely because metadata was not found.
+
+Also review the OCR parser for this likely failure mode: tournament headers are being recognized as text, but they are not being classified as section headers or carried forward to subsequent rows.
+
+Refactor the code so tournament extraction, normalization, section propagation, registry lookup, and fallback handling are separate testable functions. Preserve the current UI, but replace misleading defaults with explicit unknown states and actionable warnings.

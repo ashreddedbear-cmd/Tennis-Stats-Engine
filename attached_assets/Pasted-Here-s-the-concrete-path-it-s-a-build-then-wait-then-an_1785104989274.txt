@@ -1,0 +1,57 @@
+Here's the concrete path — it's a build-then-wait-then-analyze sequence, not a single patch, because you genuinely don't have the data yet to know which weights are wrong.
+
+## Step 1: Build outcome logging (ship this now)
+
+Right now `parlay_builder_sessions` stores `legs`/`summary` as JSON blobs and is "non-fatal" — write-and-forget. You need a table designed to be *joined against results later*, not just an audit log.
+
+**New table:**
+```sql
+CREATE TABLE parlay_leg_outcomes (
+  id SERIAL PRIMARY KEY,
+  session_id INTEGER REFERENCES parlay_builder_sessions(id),
+  selected_player_id TEXT NOT NULL,
+  opponent_id TEXT NOT NULL,
+  selected_player_name TEXT NOT NULL,
+  opponent_name TEXT NOT NULL,
+  tournament_name TEXT,
+  surface TEXT,
+  validation_score INTEGER NOT NULL,
+  risk_score INTEGER NOT NULL,
+  reliability_grade TEXT NOT NULL,
+  parlay_grade TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  data_coverage INTEGER NOT NULL,
+  source_agreement INTEGER NOT NULL,
+  factor_scores JSONB NOT NULL,   -- full array: key, score, weight, status, supportsSelected
+  market_odds NUMERIC,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  actual_winner_id TEXT,          -- NULL until resolved
+  resolved_at TIMESTAMPTZ
+);
+```
+
+**Modify `/validate`** to insert one row per leg here, unconditionally (not the existing best-effort session insert — this one needs to actually succeed, since it's the thing you'll query later).
+
+**Add a resolution job** — a script/cron that runs daily, finds outcome rows where `actual_winner_id IS NULL` and the match has since appeared in `historical_matches` (by `selected_player_id`/`opponent_id` pair), and fills in `actual_winner_id` and `resolved_at`. Tennis Challenger/ATP results should land in `historical_matches` within a day or two of the match via the existing provider-fetch/cache-write path, so this is mostly just a matching query, not new data infrastructure.
+
+## Step 2: Wait for volume
+
+You need real sample size before any reweighting is trustworthy — with ~19 weighted factors, aim for **at least 150–300 resolved legs** before drawing conclusions. Fewer than that and you're fitting noise, which is the same mistake as the original hardcoded weights, just laundered through a spreadsheet.
+
+## Step 3: Run the actual calibration check
+
+Once you have volume, two separate analyses — don't skip to reweighting without both:
+
+**a) Is the overall score calibrated at all?**
+Bucket `validation_score` into deciles (0–10, 10–20, ... 90–100), compute actual win rate in each bucket, plot against the diagonal. If it's flat or non-monotonic, the composite score currently carries no signal — that's a different, more serious finding than "weights need tuning."
+
+**b) Which individual factors actually correlate with outcome?**
+For each factor `key`, pull `(score, actual_win)` pairs from `factor_scores` across all resolved legs and compute a simple correlation (point-biserial, or just win-rate-when-supportsSelected-true vs win-rate-when-false). This tells you which of the 19 factors are pulling their weight and which are dead weight — exactly the `dataQuality`-style problem we just found, but for factors like `sourceAgreement`, `historicalConsistency`, etc. that I haven't been able to audit for logic bugs yet either.
+
+## Step 4: Refit, don't guess
+
+Only after (a) and (b): either run a logistic regression of `actual_win ~ factor_1_score + factor_2_score + ...` and use the fitted coefficients as new weights, or at minimum zero out any factor whose correlation is statistically indistinguishable from noise. Re-run the backtest against a held-out slice of the same data before deploying new weights.
+
+---
+
+I can draft the actual SQL migration + the `/validate` insert change + the resolution-job script right now if you want — that part's safe to paste today since it's pure logging, no behavior change to scores. The calibration script itself I'd write once you've got a few weeks of resolved legs. Want the logging pieces drafted?

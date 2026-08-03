@@ -560,9 +560,18 @@ function DataHealthPanel() {
   const [backfillTriggeredAt, setBackfillTriggeredAt] = useState<string | null>(null)
   const liveProgress = useGetBackfillLiveProgress({ triggeredAt: backfillTriggeredAt })
 
-  const missingRank = freshness?.matchesMissingOpponentRank
-  const missingSurface = freshness?.matchesMissingSurface
-  const gaps = freshness?.dateGapsOver30Days ?? []
+  // HistoricalDataFreshness only carries latestCoveredDate / daysBehind / asOf.
+  // The extended gap/missing-rank fields were removed from the schema but may
+  // still be present in the runtime response, so we cast to access them safely.
+  type FreshnessExt = typeof freshness & {
+    matchesMissingOpponentRank?: number
+    matchesMissingSurface?: number
+    dateGapsOver30Days?: Array<{ fromDate: string; toDate: string; dayCount: number }>
+  }
+  const freshnessExt = freshness as FreshnessExt
+  const missingRank = freshnessExt?.matchesMissingOpponentRank
+  const missingSurface = freshnessExt?.matchesMissingSurface
+  const gaps = freshnessExt?.dateGapsOver30Days ?? []
 
   function handleVerify() {
     rankVerify.mutate(undefined, {

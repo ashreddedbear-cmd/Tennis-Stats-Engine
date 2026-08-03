@@ -204,6 +204,12 @@ export function computeAvailabilityModule(
   player2Matches: MatchRecord[],
   tournamentName: string | null | undefined,
   now: Date = new Date(),
+  /**
+   * Task #107 (Phase 5): Optional real-time web-research injury signal from Gemini, pre-fetched
+   * by the caller. When present, a high riskLevel (≥60) for a player depresses their availability
+   * score and surfaces a user-facing warning so it's never silently applied.
+   */
+  webResearch?: import("../shared/webResearchProvider.js").MatchupResearch | null,
 ): AvailabilityResult {
   const currentVenue = inferVenue(tournamentName);
   const warnings: string[] = [];
@@ -235,11 +241,32 @@ export function computeAvailabilityModule(
     warnings.push(`Player 2 was withdrawn (walkover) at ${player2.recentWalkoverTournament ?? "a recent tournament"} within the last 3 weeks -- a real, confirmed pre-match withdrawal, weighted more heavily than a mid-match retirement.`);
   }
 
+  // Task #107 Phase 5: web-research injury signal. Only surfaces a warning and applies a
+  // small score discount when riskLevel is elevated (≥60/100), so ordinary matches are
+  // unaffected. The signal is always disclosed explicitly -- never silently baked in.
+  const WEB_RESEARCH_RISK_THRESHOLD = 60;
+  let p1Score = computeAvailabilityScore(player1);
+  let p2Score = computeAvailabilityScore(player2);
+  if (webResearch?.selected && typeof webResearch.selected.riskLevel === "number" && webResearch.selected.riskLevel >= WEB_RESEARCH_RISK_THRESHOLD) {
+    const riskExcess = webResearch.selected.riskLevel - WEB_RESEARCH_RISK_THRESHOLD;
+    const discount = Math.round(riskExcess / 2); // 0–20 pt discount
+    p1Score = Math.max(0, p1Score - discount);
+    const detail = webResearch.selected.injuryDetail ?? webResearch.selected.injuryStatus ?? "injury/fitness concern";
+    warnings.push(`Real-time injury research (Player 1): risk score ${webResearch.selected.riskLevel}/100 — ${detail}. Applied ${discount}-point availability discount.`);
+  }
+  if (webResearch?.opponent && typeof webResearch.opponent.riskLevel === "number" && webResearch.opponent.riskLevel >= WEB_RESEARCH_RISK_THRESHOLD) {
+    const riskExcess = webResearch.opponent.riskLevel - WEB_RESEARCH_RISK_THRESHOLD;
+    const discount = Math.round(riskExcess / 2);
+    p2Score = Math.max(0, p2Score - discount);
+    const detail = webResearch.opponent.injuryDetail ?? webResearch.opponent.injuryStatus ?? "injury/fitness concern";
+    warnings.push(`Real-time injury research (Player 2): risk score ${webResearch.opponent.riskLevel}/100 — ${detail}. Applied ${discount}-point availability discount.`);
+  }
+
   return {
     player1,
     player2,
-    player1AvailabilityScore: computeAvailabilityScore(player1),
-    player2AvailabilityScore: computeAvailabilityScore(player2),
+    player1AvailabilityScore: p1Score,
+    player2AvailabilityScore: p2Score,
     reliability,
     note:
       `Rest days (bucketed as ShortRest <=${SHORT_REST_THRESHOLD_DAYS}d / Normal / LongLayoff >=${LONG_LAYOFF_THRESHOLD_DAYS}d) and confirmed-withdrawal flags (mid-match retirement OR pre-match walkover) are real, derived from each player's actual match record. Travel distance is a real great-circle calculation between verified venue coordinates, bucketed into None/Local (<=${TRAVEL_LOCAL_MAX_KM}km)/Regional (<=${TRAVEL_REGIONAL_MAX_KM}km)/Intercontinental, but only available when both the last and current tournaments are in the known-venue list. No verified pre-match news-only withdrawal/injury feed is connected -- see the prediction's availability disclosure.`,

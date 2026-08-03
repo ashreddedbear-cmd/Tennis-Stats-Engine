@@ -1,0 +1,23 @@
+**Task — Confirm Holdout Split Integrity, Report Isolated Old-vs-New Weight Comparison, and Resize Holdout for the Larger Dataset**
+
+**What & Why**
+
+The reweighting validation is mid-flight: leakage audit and Step 5b (isolated old-vs-new weights comparison, re-scoring every row with both weight sets since some of the 8,747 rows were scored before the weight update and some after) are both running. Before trusting the results, one more thing needs checking: the holdout split was originally sized at 607 rows against a 3,031-row dataset (~20%). The backfill has since completed at 8,747 rows — nearly 3x the original size. A 607-row holdout is still statistically valid, but it's now a much smaller *fraction* (~7%) of the available data than originally intended, and worth an explicit decision rather than leaving it as a leftover from the smaller dataset.
+
+**Done looks like**
+
+- Confirmation (with the actual line/logic quoted) that the holdout split happens before the leave-one-out edge computation, not after — settling the leakage question definitively rather than inferring it from a partial read.
+- Step 5b results reported clearly: old `DEFAULT_WEIGHTS` vs new `DEFAULT_WEIGHTS`, both scored against the identical current dataset (8,747 rows) — win rate and KEEP-tier win rate for each, so the reweighting's isolated contribution is visible on its own, separate from the data-quality improvement already baked into the row count.
+- A decision on holdout sizing: either (a) confirm 607 rows remains an adequate holdout at this new scale and explain why, or (b) resize the holdout to a consistent percentage (e.g., ~15-20% of 8,747 ≈ 1,300-1,750 rows) and re-run Step 5b with the resized split if the original 607-row holdout no longer represents the dataset well.
+- Findings written to `.agents/memory/parlay-calibration-findings.md`: the leakage-audit confirmation, the isolated old-vs-new comparison numbers, and the final holdout-sizing decision — replacing the provisional n=3,031 findings currently on file.
+
+**Out of scope**
+
+- Any further changes to `DEFAULT_WEIGHTS` themselves unless Step 5b's isolated comparison shows the current weights underperforming the old ones at this scale.
+- Market-odds / Task #83/#84 track — fully independent, no action needed here.
+
+**Relevant files**
+
+- `artifacts/api-server/src/scripts/auditParlayFactorWeights.ts`
+- `artifacts/api-server/src/services/parlayBuilder/builderScoringService.ts`
+- `.agents/memory/parlay-calibration-findings.md`

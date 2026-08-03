@@ -3,7 +3,7 @@ import { useLocation } from "wouter"
 import {
   recognizeMatchupScreenshot,
   type ScreenshotMatchupResult,
-  type ScreenshotMatchupEntry,
+  type ScreenshotMatchupInput,
   type Surface,
   type TournamentLevel,
   type MatchFormat,
@@ -19,17 +19,48 @@ import {
 } from "lucide-react"
 import { isGrandSlam } from "@/lib/grandSlam"
 import { buildClientMatchId, createPredictionWithIntegrity } from "@/lib/predictionRequestIntegrity"
+import { useGetAdminAuthStatus } from "@/hooks/useGetAdminAuthStatus"
+import { useAuth } from "@clerk/react"
 
-const MAX_FILES = 20
+const MAX_FILES = 150
 
 const STORAGE_KEY = "bulkMatchupPredictor.batch.v1"
 
 // ---------------------------------------------------------------------------
-// Extended result type — the backend returns these alongside the standard fields
+// Parlay draft handoff — written here, read by AdminParlayBuilder on mount.
+// Contains only neutral match identity: player names/IDs, tournament, surface.
+// No prediction engine fields (calibratedProbability, grade, etc.) are included.
 // ---------------------------------------------------------------------------
+const PARLAY_DRAFT_KEY = "parlayDraft.pending.v1"
+
+interface ParlayDraftLeg {
+  player1Name: string
+  player1Id: string | null
+  player2Name: string
+  player2Id: string | null
+  tournamentName: string | null
+  surface: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Extended result type — the backend returns these alongside the standard fields.
+// from-text-names returns a bulk { matchups: [...] } wrapper; from-screenshot
+// returns a single ScreenshotMatchupResult (no matchups array).
+// ScreenshotMatchupEntry was renamed to ScreenshotMatchupInput in the generated
+// schema; we keep a local alias here to represent one entry in a bulk response.
+// ---------------------------------------------------------------------------
+type ScreenshotMatchupEntry = ScreenshotMatchupInput & {
+  player1: ScreenshotMatchupResult["player1"]
+  player2: ScreenshotMatchupResult["player2"]
+  event: ScreenshotMatchupResult["event"]
+  warnings: ScreenshotMatchupResult["warnings"]
+  resolved?: boolean
+}
 type ScreenshotResultExtended = ScreenshotMatchupResult & {
   debugLog?: string[]
   rawText?: string
+  /** Present when the endpoint returns multiple matchups (e.g. from-text-names). */
+  matchups?: ScreenshotMatchupEntry[]
 }
 
 // ---------------------------------------------------------------------------
@@ -144,7 +175,7 @@ function needsPredicting(item: BatchItem): boolean {
   return isReady(item) && item.predictStatus !== "success"
 }
 
-function entryToResult(m: ScreenshotMatchupEntry): ScreenshotMatchupResult {
+function entryToResult(m: Pick<ScreenshotMatchupResult, "player1" | "player2" | "event" | "warnings">): ScreenshotMatchupResult {
   return { player1: m.player1, player2: m.player2, event: m.event, warnings: m.warnings }
 }
 
@@ -292,15 +323,38 @@ export const BulkMatchupPredictor = forwardRef<BulkMatchupPredictorHandle>(funct
   const [selectionWarning, setSelectionWarning] = useState<string | null>(null)
   const [isPredicting, setIsPredicting] = useState(false)
   const [batchError, setBatchError] = useState<string | null>(null)
+  const [predictSummary, setPredictSummary] = useState<{ successIds: number[]; failedCount: number } | null>(null)
   const [resumableBatch, setResumableBatch] = useState<BatchItem[] | null>(null)
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
 
-  useEffect(() => { setResumableBatch(readStoredBatch()) }, [])
+  const { data: adminAuth } = useGetAdminAuthStatus()
+  const isAdmin = adminAuth?.authenticated === true
+  const { isSignedIn } = useAuth()
+  const BASE = import.meta.env.BASE_URL.replace(/\/$/, "")
+
+  useEffect(() => {
+    const batch = readStoredBatch()
+    if (!batch) return
+    const sanitized = sanitizeResumedItems(batch)
+    // If every resolved item has already been predicted, restore silently — no resume
+    // banner needed when the user is just returning to view a completed batch.
+    const allDone = sanitized.every(
+      (it) => it.status !== "resolved" || it.predictStatus === "success",
+    )
+    if (allDone) {
+      setItems(sanitized)
+    } else {
+      setResumableBatch(sanitized)
+    }
+  }, [])
   useEffect(() => { if (items.length > 0) writeStoredBatch(items) }, [items])
 
   const resolvedCount = items.filter(isReady).length
   const pendingPredictCount = items.filter(needsPredicting).length
   const alreadyPredictedCount = resolvedCount - pendingPredictCount
+  const donePredictionIds = items
+    .filter((i) => i.predictStatus === "success" && i.predictionId != null)
+    .map((i) => i.predictionId as number)
   const hasItems = items.length > 0
   const anyResolving = items.some((i) => i.status === "resolving")
   const selectedItemCount = items.filter((i) => i.selected).length
@@ -381,8 +435,9 @@ export const BulkMatchupPredictor = forwardRef<BulkMatchupPredictorHandle>(funct
         console.log(`[SCREENSHOT] [5/13] Sending OCR request — base64 length=${imageBase64.length}`)
 
         const rawResult = await recognizeMatchupScreenshot({ imageBase64 }) as ScreenshotResultExtended
-        const result = rawResult as ScreenshotMatchupResult
         const { debugLog, rawText } = rawResult
+        // Use rawResult (which carries the extended matchups field) rather than re-casting.
+        const result = rawResult
 
         console.log(`[SCREENSHOT] [8/13] OCR response received — matchups=${result.matchups?.length ?? 0} warnings=${result.warnings.length}`)
         if (debugLog) console.log(`[SCREENSHOT] Pipeline log:\n${debugLog.join("\n")}`)
@@ -560,27 +615,40 @@ export const BulkMatchupPredictor = forwardRef<BulkMatchupPredictorHandle>(funct
   // ---------------------------------------------------------------------------
   // Predict
   // ---------------------------------------------------------------------------
-  const handlePredict = async (): Promise<number[]> => {
-    setBatchError(null); setIsPredicting(true)
-    const readyKeys = items.filter(needsPredicting).map((i) => i.key)
-    setItems((prev) => prev.map((it) => (readyKeys.includes(it.key) ? { ...it, predictStatus: "pending" } : it)))
-    const createdIdsThisRun: number[] = []
 
-    for (const item of items) {
+  /**
+   * Runs predictions for all ready, not-yet-predicted items.
+   * Accepts an optional `snapshot` so callers (e.g. retry) can pass a pre-reset
+   * items list without waiting for a React state flush.
+   * Returns the IDs of successfully created predictions and the keys of failed ones.
+   */
+  const handlePredict = async (
+    snapshot?: BatchItem[],
+  ): Promise<{ successIds: number[]; failedKeys: string[] }> => {
+    setBatchError(null)
+    setIsPredicting(true)
+    const workItems = snapshot ?? items
+    const readyKeys = workItems.filter(needsPredicting).map((i) => i.key)
+    setItems((prev) => prev.map((it) => (readyKeys.includes(it.key) ? { ...it, predictStatus: "pending" } : it)))
+
+    const successIds: number[] = []
+    const failedKeys: string[] = []
+
+    for (const item of workItems) {
       if (!needsPredicting(item) || !item.result?.player1.player || !item.result?.player2.player) continue
-      try {
+      const makePredictionRequest = () => {
         const requestMatchId = buildClientMatchId({
           source: "bulk",
-          player1Id: item.result.player1.player.id,
-          player2Id: item.result.player2.player.id,
+          player1Id: item.result!.player1.player!.id,
+          player2Id: item.result!.player2.player!.id,
           tournamentName: item.tournamentName,
           surface: item.surface,
           matchFormat: item.matchFormat,
         })
-        const prediction = await createPredictionWithIntegrity(
+        return createPredictionWithIntegrity(
           {
-            player1Id: item.result.player1.player.id,
-            player2Id: item.result.player2.player.id,
+            player1Id: item.result!.player1.player!.id,
+            player2Id: item.result!.player2.player!.id,
             surface: item.surface,
             matchFormat: item.matchFormat,
             tournamentLevel: item.level,
@@ -588,38 +656,163 @@ export const BulkMatchupPredictor = forwardRef<BulkMatchupPredictorHandle>(funct
           },
           {
             requestMatchId,
-            submittedPlayer1Name: item.result.player1.player.name,
-            submittedPlayer2Name: item.result.player2.player.name,
+            submittedPlayer1Name: item.result!.player1.player!.name,
+            submittedPlayer2Name: item.result!.player2.player!.name,
           },
         )
-        createdIdsThisRun.push(prediction.id)
+      }
+
+      const isRateLimitError = (err: unknown) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        return msg === "Too many requests" || msg.includes("429") || msg.toLowerCase().includes("rate limit")
+      }
+
+      try {
+        let prediction
+        try {
+          prediction = await makePredictionRequest()
+        } catch (firstErr) {
+          // Auto-retry once on rate limit: wait 15 s then try again so the user
+          // never sees a rate-limit failure for a transient burst.
+          if (isRateLimitError(firstErr)) {
+            setItems((prev) =>
+              prev.map((it) =>
+                it.key === item.key ? { ...it, predictError: "Rate limit — retrying in 15 s…" } : it,
+              ),
+            )
+            await new Promise((r) => setTimeout(r, 15_000))
+            prediction = await makePredictionRequest()
+          } else {
+            throw firstErr
+          }
+        }
+        successIds.push(prediction.id)
         setItems((prev) =>
-          prev.map((it) => (it.key === item.key ? { ...it, predictStatus: "success", predictionId: prediction.id } : it)),
+          prev.map((it) => (it.key === item.key ? { ...it, predictStatus: "success", predictionId: prediction!.id } : it)),
         )
-      } catch {
+      } catch (err) {
+        // The server returns { error: 'Too many requests', detail: '...' } on 429;
+        // createPredictionWithIntegrity throws using the `error` field as the message.
+        failedKeys.push(item.key)
         setItems((prev) =>
           prev.map((it) =>
-            it.key === item.key ? { ...it, predictStatus: "error", predictError: "Prediction engine failed for this matchup." } : it,
+            it.key === item.key
+              ? {
+                  ...it,
+                  predictStatus: "error",
+                  predictError: isRateLimitError(err)
+                    ? "Rate limit reached — this matchup could not be retried. Try again in a few minutes."
+                    : err instanceof Error && err.message && !err.message.startsWith("Integrity check")
+                    ? err.message
+                    : "Prediction engine error — this matchup could not be predicted.",
+                }
+              : it,
           ),
         )
       }
+      // 500 ms pause between requests: spreads a 40-screenshot batch over ~3 min
+      // which keeps bursts well within the 100-req/5-min rate limit.
+      await new Promise((r) => setTimeout(r, 500))
     }
+
+    // Also collect the IDs of matchups that were already predicted before this run
+    // started — they are skipped by the loop above but must be included in the
+    // auto-save so the Saved Prediction Cards folder always reflects the full batch,
+    // not just the newly-run slice.
+    const alreadySuccessIds = workItems
+      .filter((i) => !needsPredicting(i) && i.predictionId != null)
+      .map((i) => i.predictionId as number)
+
     setIsPredicting(false)
-    return createdIdsThisRun
+    return { successIds: [...alreadySuccessIds, ...successIds], failedKeys }
   }
 
-  const navigateToResults = (createdIds: number[]) => {
-    if (createdIds.length > 0) {
-      clearStoredBatch()
-      setLocation(`/predictions/${createdIds[0]}?batch=${createdIds.join(",")}`)
-      return
+  // ── Auto-save helper ────────────────────────────────────────────────────────
+  // Replaces the user's entire saved-cards list with the current batch IDs so
+  // the saved folder always reflects the latest run. Fire-and-forget — called
+  // before navigation AND on partial success so cards are never silently skipped.
+  const autoSaveBatch = (allIds: number[]) => {
+    if (!isSignedIn || allIds.length === 0) return
+    void (async () => {
+      try {
+        // 1. Clear previous saved batch
+        await fetch(`${BASE}/api/saved-cards`, { method: "DELETE", credentials: "include" })
+        // 2. Save every prediction from this run (already-predicted + newly run)
+        await Promise.all(
+          allIds.map((id) =>
+            fetch(`${BASE}/api/saved-cards`, {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ predictionId: id }),
+            }),
+          ),
+        )
+      } catch {
+        // best-effort — navigation and results are unaffected
+      }
+    })()
+  }
+
+  /** Navigate to the batch results page. */
+  const navigateToResults = (successIds: number[]) => {
+    if (successIds.length === 0) return
+
+    autoSaveBatch(successIds)
+
+    try {
+      localStorage.setItem(
+        "savedBulkPredictionBatch.v1",
+        JSON.stringify({ ids: successIds, savedAt: Date.now() }),
+      )
+    } catch {
+      // localStorage unavailable (private-browse quota) — continue silently
     }
-    setBatchError("None of the matchups in this batch could be predicted. Check the errors below and try again.")
+    // Do NOT call clearStoredBatch() here — we want the completed batch to persist in
+    // sessionStorage so that returning to Run Model shows the predictions with their
+    // PREDICTED badges rather than an empty state. The batch is only cleared when the
+    // user starts a new one (handleFiles calls clearStoredBatch on upload).
+    setLocation(`/predictions/${successIds[0]}?batch=${successIds.join(",")}`)
+  }
+
+  /**
+   * Shared post-predict handler: decides whether to navigate (all success),
+   * show a partial-success summary, or show an all-failed error.
+   */
+  const handlePredictOutcome = (successIds: number[], failedKeys: string[]) => {
+    if (failedKeys.length === 0) {
+      // All succeeded — auto-navigate (autoSaveBatch is called inside navigateToResults)
+      navigateToResults(successIds)
+    } else if (successIds.length === 0) {
+      // All failed — stay on page with a clear error
+      setBatchError("None of the matchups in this batch could be predicted. Check the error badges below and try again.")
+    } else {
+      // Partial success — auto-save the succeeded cards even though we stay on the
+      // page (previously these were silently dropped because navigateToResults
+      // was never called in this path).
+      autoSaveBatch(successIds)
+      setPredictSummary({ successIds, failedCount: failedKeys.length })
+    }
   }
 
   const handlePredictClick = async () => {
-    const createdIds = await handlePredict()
-    navigateToResults(createdIds)
+    setPredictSummary(null)
+    const { successIds, failedKeys } = await handlePredict()
+    handlePredictOutcome(successIds, failedKeys)
+  }
+
+  /** Resets failed items to idle and re-runs predictions for them. */
+  const handleRetryFailed = async () => {
+    setPredictSummary(null)
+    setBatchError(null)
+    // Reset failed items to idle; pass the reset snapshot directly so handlePredict
+    // doesn't read stale state before the React flush.
+    const resetItems = items.map((it) =>
+      it.predictStatus === "error" ? { ...it, predictStatus: "idle" as PredictStatus, predictError: null } : it,
+    )
+    setItems(resetItems)
+    const { successIds, failedKeys } = await handlePredict(resetItems)
+    handlePredictOutcome(successIds, failedKeys)
   }
 
   // ---------------------------------------------------------------------------
@@ -947,21 +1140,101 @@ export const BulkMatchupPredictor = forwardRef<BulkMatchupPredictorHandle>(funct
         </div>
       )}
 
-      {/* Primary action button */}
+      {/* Partial-success summary — shown when some predictions succeeded and some failed */}
+      {predictSummary && (
+        <div className="p-3 border border-warning/30 bg-warning/10 rounded-md font-mono space-y-2.5">
+          <div className="flex items-start gap-2 text-sm">
+            <AlertTriangle className="w-4 h-4 text-warning mt-0.5 shrink-0" />
+            <span>
+              <span className="font-bold text-foreground">{predictSummary.successIds.length}</span> of{" "}
+              <span className="font-bold text-foreground">
+                {predictSummary.successIds.length + predictSummary.failedCount}
+              </span>{" "}
+              predictions succeeded.{" "}
+              <span className="text-destructive font-bold">{predictSummary.failedCount} failed</span> — see error
+              badges below for details.
+            </span>
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            <Button
+              size="sm"
+              variant="accent"
+              className="font-mono"
+              onClick={() => navigateToResults(predictSummary.successIds)}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" />
+              VIEW {predictSummary.successIds.length} RESULT{predictSummary.successIds.length === 1 ? "" : "S"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="font-mono"
+              disabled={isPredicting}
+              onClick={handleRetryFailed}
+            >
+              <RotateCcw className="w-3.5 h-3.5 mr-1.5" />
+              RETRY {predictSummary.failedCount} FAILED
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Primary action button(s) */}
       {hasItems && (
-        <Button
-          size="lg" className="w-full font-bold font-mono h-12" variant="accent"
-          disabled={anyResolving || isPredicting || resolvedCount === 0}
-          onClick={handlePredictClick}
-        >
-          {isPredicting ? (
-            <><RefreshCw className="w-5 h-5 mr-2 animate-spin" /> RUNNING {pendingPredictCount} PREDICTION{pendingPredictCount === 1 ? "" : "S"}...</>
-          ) : pendingPredictCount === 0 ? (
-            <><CheckCircle2 className="w-5 h-5 mr-2" /> VIEW {alreadyPredictedCount} PREDICTED RESULT{alreadyPredictedCount === 1 ? "" : "S"}</>
-          ) : (
-            <><Activity className="w-5 h-5 mr-2" /> PREDICT {pendingPredictCount} MATCHUP{pendingPredictCount === 1 ? "" : "S"}</>
+        <div className={isAdmin && resolvedCount > 0 ? "grid grid-cols-2 gap-2" : ""}>
+          <Button
+            size="lg" className="w-full font-bold font-mono h-12" variant="accent"
+            disabled={anyResolving || isPredicting || resolvedCount === 0}
+            onClick={
+              !isPredicting && pendingPredictCount === 0
+                ? () => navigateToResults(donePredictionIds)
+                : handlePredictClick
+            }
+          >
+            {isPredicting ? (
+              <><RefreshCw className="w-5 h-5 mr-2 animate-spin" /> RUNNING {pendingPredictCount} PREDICTION{pendingPredictCount === 1 ? "" : "S"}...</>
+            ) : pendingPredictCount === 0 ? (
+              <><CheckCircle2 className="w-5 h-5 mr-2" /> VIEW {alreadyPredictedCount} RESULT{alreadyPredictedCount === 1 ? "" : "S"}</>
+            ) : (
+              <><Activity className="w-5 h-5 mr-2" /> PREDICT {pendingPredictCount} MATCHUP{pendingPredictCount === 1 ? "" : "S"}</>
+            )}
+          </Button>
+
+          {/* Admin-only: Build Parlay shortcut — shown as soon as screenshots resolve */}
+          {isAdmin && resolvedCount > 0 && (
+            <Button
+              size="lg"
+              className="w-full font-bold font-mono h-12 border-amber-500/50 text-amber-400 hover:bg-amber-500/10 hover:border-amber-400"
+              variant="outline"
+              disabled={isPredicting}
+              onClick={() => {
+                // Write neutral match data only — no prediction engine fields.
+                // AdminParlayBuilder reads this on mount and populates legs as an idle draft.
+                const draftLegs: ParlayDraftLeg[] = items
+                  .filter(i => i.status === "resolved" && i.result !== null)
+                  .map(i => {
+                    const r = i.result!
+                    return {
+                      player1Name: r.player1.recognizedName ?? "",
+                      player1Id: r.player1.player?.id ?? null,
+                      player2Name: r.player2.recognizedName ?? "",
+                      player2Id: r.player2.player?.id ?? null,
+                      tournamentName: i.tournamentName,
+                      surface: i.surface,
+                    }
+                  })
+                  .filter(d => d.player1Name || d.player2Name) // skip fully-blank legs
+                try {
+                  sessionStorage.setItem(PARLAY_DRAFT_KEY, JSON.stringify(draftLegs))
+                } catch { /* sessionStorage unavailable — page will open empty */ }
+                setLocation("/admin/parlay-builder?draft=1")
+              }}
+            >
+              <Layers className="w-5 h-5 mr-2" />
+              BUILD PARLAY
+            </Button>
           )}
-        </Button>
+        </div>
       )}
       {hasItems && alreadyPredictedCount > 0 && pendingPredictCount > 0 && !anyResolving && (
         <p className="text-xs text-muted-foreground font-mono text-center">

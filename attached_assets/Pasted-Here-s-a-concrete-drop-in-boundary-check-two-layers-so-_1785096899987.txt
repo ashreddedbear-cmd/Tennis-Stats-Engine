@@ -1,0 +1,103 @@
+Here's a concrete, drop-in boundary check — two layers so it catches violations whether people run it locally or in CI.
+
+**Layer 1: Standalone script (works anywhere, zero config)**
+
+```javascript
+// scripts/check-boundary.js
+const { execSync } = require('child_process');
+
+const FORBIDDEN_IMPORT_PATTERNS = [
+  /prediction-engine/,
+  /prediction_results/,
+  /prediction_batches/,
+  /prediction_history/,
+  /prediction_calibration/,
+  /prediction_cards/,
+];
+
+const PARLAY_DIR = 'parlay-builder';
+
+function checkBoundary() {
+  const files = execSync(
+    `grep -rlE "(import|require|from)" ${PARLAY_DIR} --include="*.ts" --include="*.tsx" --include="*.js"`
+  ).toString().split('\n').filter(Boolean);
+
+  let violations = [];
+
+  for (const file of files) {
+    const content = execSync(`cat "${file}"`).toString();
+    const importLines = content.split('\n').filter(line =>
+      /^\s*(import|.*require\()/.test(line)
+    );
+
+    for (const line of importLines) {
+      for (const pattern of FORBIDDEN_IMPORT_PATTERNS) {
+        if (pattern.test(line)) {
+          violations.push({ file, line: line.trim(), pattern: pattern.toString() });
+        }
+      }
+    }
+  }
+
+  if (violations.length > 0) {
+    console.error('\n❌ BOUNDARY VIOLATION: Parlay Builder must not import Prediction Engine code.\n');
+    violations.forEach(v => {
+      console.error(`  ${v.file}`);
+      console.error(`    → ${v.line}`);
+    });
+    console.error(`\n${violations.length} violation(s) found. See separation rule in ARCHITECTURE.md.\n`);
+    process.exit(1);
+  }
+
+  console.log('✅ Boundary check passed — no cross-imports found.');
+}
+
+checkBoundary();
+```
+
+**Layer 2: Wire it into `package.json`**
+
+```json
+{
+  "scripts": {
+    "check:boundary": "node scripts/check-boundary.js",
+    "prebuild": "npm run check:boundary",
+    "pretest": "npm run check:boundary"
+  }
+}
+```
+
+`prebuild` and `pretest` mean it runs automatically before every build/test — no one has to remember to invoke it, including you asking Replit's AI to "just ship this."
+
+**Layer 3 (optional but worth it): ESLint rule for real-time feedback while coding**
+
+```json
+// .eslintrc.json
+{
+  "rules": {
+    "no-restricted-imports": [
+      "error",
+      {
+        "patterns": [
+          {
+            "group": ["**/prediction-engine/**", "**/prediction_results/**"],
+            "message": "Parlay Builder cannot import Prediction Engine modules. See ARCHITECTURE.md separation rule."
+          }
+        ]
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["parlay-builder/**/*.ts", "parlay-builder/**/*.tsx"],
+      "rules": {
+        "no-restricted-imports": ["error", { "patterns": ["**/prediction-engine/**"] }]
+      }
+    }
+  ]
+}
+```
+
+This gives you a red squiggle in the editor the moment someone (human or AI) types the forbidden import — before it even gets to a build.
+
+Tell Replit: "Add scripts/check-boundary.js exactly as specified, wire it to prebuild and pretest in package.json, and add the ESLint override scoped to the parlay-builder directory. Do not proceed with any Parlay Builder feature work until this check passes with zero violations."

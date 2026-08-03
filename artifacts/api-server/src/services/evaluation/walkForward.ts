@@ -1,5 +1,5 @@
 import { db, evaluationPredictionsTable, evaluationRunsTable, calibrationModelsTable, historicalMatchesTable } from "@workspace/db";
-import { asc, eq, inArray } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull } from "drizzle-orm";
 import { logger } from "../../lib/logger";
 import { fitBestCalibration, applyCalibration, isKnownBadCascadeRow, type CalibrationPoint } from "./calibration";
 import { scoreHistoricalMatch, type HistoricalScoringContext } from "./historicalScoring";
@@ -29,6 +29,13 @@ export interface WalkForwardOptions {
    * Defaults to false for backward compatibility, but the dashboard wires it as true.
    */
   evaluationOnly?: boolean;
+  /**
+   * When provided, restricts the walk-forward to only these historical match IDs. The scoring
+   * context (Elo index, match history) is built only from these rows too, which makes the
+   * run fast. Intended for integration tests that seed a small synthetic corpus — never use
+   * this in production (omit the field entirely, or pass undefined).
+   */
+  matchIds?: number[];
 }
 
 export interface WalkForwardSummary {
@@ -51,6 +58,56 @@ function classifyResult(match: { winnerId: string | null; retired: boolean; walk
 }
 
 /**
+ * Minimum eligible historical matches required before a training-mode walk-forward may
+ * replace an already-deployed active calibration model. Exported so callers (tests and the
+ * calibration-refit job) can reference the same constant.
+ */
+export const MIN_ELIGIBLE_FOR_TRAINING = 500;
+
+/** Return type for `checkTrainingModeGuard`. */
+export type TrainingModeGuardResult =
+  | { skip: false; reason: "evaluationOnly" | "scoped" | "aboveFloor" | "bootstrap" }
+  | { skip: true;  reason: "activeModelExists" };
+
+/**
+ * Returns whether a training-mode walk-forward should be skipped for this particular call
+ * without executing the full fold pipeline. Extracted so the guard can be tested directly
+ * (behavioral test) and so the job pre-flight can use the same logic without duplicating it.
+ *
+ * Skip fires only when ALL of the following hold:
+ *   1. evaluationOnly is false (training mode — calibration write is intended)
+ *   2. scopedMatchIds is null (unscoped / real production run, not a test/dev invocation)
+ *   3. eligibleCount < MIN_ELIGIBLE_FOR_TRAINING (too sparse to produce a meaningful fit)
+ *   4. An active calibration model exists in the DB (bootstrap exception: no active model →
+ *      always proceed so a fresh environment can produce its first real model)
+ *
+ * When skip is true, the caller must return `{ foldsRun: 0, skippedNoEligibleMatches: true }`
+ * without writing to calibration_models.
+ */
+export async function checkTrainingModeGuard({
+  evaluationOnly,
+  scopedMatchIds,
+  eligibleCount,
+}: {
+  evaluationOnly: boolean;
+  scopedMatchIds: readonly number[] | null;
+  eligibleCount: number;
+}): Promise<TrainingModeGuardResult> {
+  if (evaluationOnly)             return { skip: false, reason: "evaluationOnly" };
+  if (scopedMatchIds !== null)    return { skip: false, reason: "scoped" };
+  if (eligibleCount >= MIN_ELIGIBLE_FOR_TRAINING) return { skip: false, reason: "aboveFloor" };
+
+  const [activeModel] = await db
+    .select({ id: calibrationModelsTable.id })
+    .from(calibrationModelsTable)
+    .where(eq(calibrationModelsTable.active, true))
+    .limit(1);
+
+  if (activeModel) return { skip: true, reason: "activeModelExists" };
+  return { skip: false, reason: "bootstrap" };
+}
+
+/**
  * Runs a fresh sequence of expanding-window walk-forward folds over the entire leak-proof
  * historical store and persists per-fold results. Each run supersedes prior evaluation_runs /
  * evaluation_predictions rows of runKind='historical_test' (deleted up front) so re-running
@@ -66,6 +123,7 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
   const warmupFraction = options.warmupFraction ?? 0.4;
   const evaluationOnly = options.evaluationOnly ?? false;
   const optimizerRunId = options.optimizerRunId ?? null;
+  const scopedMatchIds = options.matchIds && options.matchIds.length > 0 ? options.matchIds : null;
   if (foldCount < 1) throw new Error("foldCount must be >= 1");
   if (warmupFraction <= 0 || warmupFraction >= 1) throw new Error("warmupFraction must be between 0 and 1 (exclusive)");
 
@@ -83,17 +141,69 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
   const allMatches = await db
     .select()
     .from(historicalMatchesTable)
+    .where(scopedMatchIds ? inArray(historicalMatchesTable.id, scopedMatchIds) : undefined)
     .orderBy(asc(historicalMatchesTable.scheduledStartAt), asc(historicalMatchesTable.id));
 
-  const eligible = allMatches.filter((m) => !m.cancelled); // cancelled matches never even reach scoring; walkovers/retirements are scored but voided/flagged downstream
+  // Task #109: append-only fold preservation — never wipe prior walk-forward results.
+  // Build the set of historical match IDs already scored in a prior run so this run skips
+  // them (idempotent). Prior evaluation_runs / evaluation_predictions rows are NEVER deleted;
+  // each run only adds new folds for matches not yet covered.
+  const alreadyScoredIds = new Set<number>(
+    (await db
+      .select({ historicalMatchId: evaluationPredictionsTable.historicalMatchId })
+      .from(evaluationPredictionsTable)
+      .where(and(
+        eq(evaluationPredictionsTable.runKind, "historical_test"),
+        isNotNull(evaluationPredictionsTable.historicalMatchId),
+      ))
+    ).map(r => r.historicalMatchId as number)
+  );
+
+  const eligible = allMatches.filter(
+    // cancelled matches never reach scoring; already-scored matches are preserved across runs
+    (m) => !m.cancelled && !alreadyScoredIds.has(m.id),
+  );
   if (eligible.length < 20) {
-    logger.warn({ count: eligible.length }, "Not enough historical matches to run a meaningful walk-forward evaluation");
+    logger.warn({ count: eligible.length, alreadyScored: alreadyScoredIds.size }, "Not enough new historical matches to run a meaningful walk-forward evaluation");
     return { foldsRun: 0, foldIds: [], skippedNoEligibleMatches: true, fallbackRate: 0, warnings: [], evaluationOnly };
   }
 
-  // Wipe prior historical_test evaluation state so a re-run never mixes fold generations.
-  await db.delete(evaluationPredictionsTable).where(eq(evaluationPredictionsTable.runKind, "historical_test"));
-  await db.delete(evaluationRunsTable);
+  // Training-mode guard: when a real active calibration model already exists, require
+  // ≥500 new eligible historical matches before replacing it. The holdoutSampleSize
+  // quality gate below catches a degenerate fit after the fact, but the run still fires,
+  // scores all folds, and writes a noise row to calibration_models (stored inactive).
+  // This guard prevents that wasted work.
+  //
+  // Two intentional exceptions — both skip the guard:
+  //
+  // 1. Bootstrap (no active calibration model yet): always run so a fresh environment
+  //    can produce its first real model. The holdoutSampleSize quality gate is the
+  //    safety net for sparse bootstrap data.
+  //
+  // 2. Scoped runs (scopedMatchIds !== null): these are test/development invocations
+  //    that explicitly bound the corpus to a small seed set. They are never real
+  //    production calibration replacements and must not be blocked by a production floor.
+  //
+  // Why 500: with foldCount=4 and warmupFraction=0.4, eligible=500 yields ≈120 pooled
+  // validation points before accuracy filtering — comfortably above the 101-point
+  // minimum splitForCalibrationHoldout needs to produce a non-empty holdout slice.
+  //
+  // Evaluation-only runs use the frozen calibration without writing anything; they can
+  // still run with as few as 20 eligible matches (the base floor above).
+  const trainingGuard = await checkTrainingModeGuard({ evaluationOnly, scopedMatchIds, eligibleCount: eligible.length });
+  if (trainingGuard.skip) {
+    logger.warn(
+      { eligible: eligible.length, min: MIN_ELIGIBLE_FOR_TRAINING, alreadyScored: alreadyScoredIds.size },
+      "Training-mode walk-forward skipped: not enough new eligible historical matches to replace the active calibration model; existing model kept unchanged",
+    );
+    return { foldsRun: 0, foldIds: [], skippedNoEligibleMatches: true, fallbackRate: 0, warnings: [], evaluationOnly };
+  }
+  if (trainingGuard.reason === "bootstrap") {
+    logger.info(
+      { eligible: eligible.length, min: MIN_ELIGIBLE_FOR_TRAINING },
+      "Training-mode walk-forward: no active calibration model yet — running bootstrap fit (holdoutSampleSize quality gate is the safety net for sparse data)",
+    );
+  }
 
   // Task #77: run-scoped fallback tracker, reset here so this run's rate never mixes with a
   // prior run's (e.g. a live prediction request scored moments before).
@@ -231,34 +341,55 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
       "Fitting pooled calibration model (cascade-bad rows already excluded per fold)",
     );
     const liveFit = fitBestCalibration(allValidationPoints);
-    // Hard safety guard: never let a degenerate calibration (known collapsed case from prior
-    // audits: holdoutSampleSize === 0, often a constant y=1 isotonic mapping) replace a working
-    // active model. Failing closed here keeps the previous active model in place.
-    if (liveFit.holdoutSampleSize === 0) {
-      throw new Error(
-        "Refusing to activate degenerate calibration model: holdoutSampleSize is 0 (collapsed fit guard)",
-      );
-    }
     const liveMapping = liveFit.knots;
     const dates = allMatches.map((m) => m.scheduledStartAt.getTime());
+    // Use reduce instead of spread (Math.min(...dates)) to avoid "Maximum call stack size
+    // exceeded" when allMatches is large (50k+ rows -- spread pushes every element onto the
+    // call stack as a function argument, which blows the stack limit at scale).
+    const minDate = dates.length ? dates.reduce((a, b) => (b < a ? b : a), dates[0]!) : null;
+    const maxDate = dates.length ? dates.reduce((a, b) => (b > a ? b : a), dates[0]!) : null;
 
-    // Only now (after passing the guard) swap active calibration rows.
-    await db.update(calibrationModelsTable).set({ active: false }).where(eq(calibrationModelsTable.active, true));
+    // ── Minimum-quality guard ────────────────────────────────────────────────
+    // A degenerate isotonic fit (holdoutSampleSize === 0) means the entire
+    // validation set was too small to hold out a meaningful comparison slice
+    // (fitBestCalibration requires ≥100 holdout points before the Platt/isotonic
+    // competition can run). Isotonic regression on a handful of rows reliably
+    // collapses to a constant-1 mapping that sends every prediction to ~100%.
+    //
+    // Guard: only replace the active model when the new fit has a real holdout
+    // (holdoutSampleSize > 0 means ≥100 held-out points were actually scored).
+    // When the guard fires, the new model is still written to the DB for
+    // diagnostics but active: false -- the previous model keeps serving.
+    const fitsPassesQualityGate = liveFit.holdoutSampleSize > 0;
+    if (fitsPassesQualityGate) {
+      await db.update(calibrationModelsTable).set({ active: false }).where(eq(calibrationModelsTable.active, true));
+    } else {
+      logger.warn(
+        { fitSampleSize: liveFit.fitSampleSize, holdoutSampleSize: liveFit.holdoutSampleSize, pooledValidationPoints: allValidationPoints.length },
+        "Calibration refit: holdoutSampleSize === 0 — fit is degenerate (too few validation points); new model stored inactive, previous active model kept",
+      );
+    }
     await db.insert(calibrationModelsTable).values({
       method: liveFit.method,
       mapping: liveMapping,
       validationSampleSize: allValidationPoints.length,
-      validationDateRangeStart: dates.length ? new Date(Math.min(...dates)) : null,
-      validationDateRangeEnd: dates.length ? new Date(Math.max(...dates)) : null,
-      active: true,
+      validationDateRangeStart: minDate !== null ? new Date(minDate) : null,
+      validationDateRangeEnd: maxDate !== null ? new Date(maxDate) : null,
+      active: fitsPassesQualityGate,
       isotonicHoldoutLogLoss: liveFit.isotonicHoldoutLogLoss,
       plattHoldoutLogLoss: liveFit.plattHoldoutLogLoss,
       holdoutSampleSize: liveFit.holdoutSampleSize,
     });
 
     // Phase 6: recompute every tour/surface specialist segment from the fold's freshly-written
-    // validation-segment data, comparing each against this SAME newly-fit general/pooled mapping.
-    await computeAndStoreSpecialistSegments(liveMapping);
+    // validation-reference data, comparing each against this SAME newly-fit general/pooled mapping.
+    // Only run when the fit passes the quality gate — specialist models calibrated against a
+    // degenerate mapping would produce equally broken per-segment overrides.
+    if (fitsPassesQualityGate) {
+      await computeAndStoreSpecialistSegments(liveMapping);
+    } else {
+      logger.warn({ fitSampleSize: liveFit.fitSampleSize }, "Calibration refit: skipping specialist segment recompute because quality gate failed");
+    }
   }
 
   // Task #12: run pattern analysis automatically after every walk-forward (both modes).

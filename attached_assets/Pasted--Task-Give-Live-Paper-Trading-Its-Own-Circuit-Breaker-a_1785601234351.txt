@@ -1,0 +1,35 @@
+**Task — Give Live Paper-Trading Its Own Circuit Breaker and Priority Over Backfill Jobs**
+
+**What & Why**
+
+The API-Tennis provider currently uses a single shared circuit breaker across all callers. Today's outage showed the failure mode directly: the walk-forward job's `getPlayerMatches` calls hit repeated timeouts, tripped the breaker open, and that took down `getUpcomingFixtures` for live paper-trading too — even though paper-trading itself was healthy. The entire live prediction loop went dark (zero new fixtures locked, zero new predictions) purely as collateral damage from a bulk backfill job. This will recur every time a heavy backfill or walk-forward run overlaps with live trading unless fixed structurally.
+
+**Done looks like**
+
+**Part 1 — Separate circuit breakers per call purpose**
+- The API-Tennis provider's circuit breaker is split so live paper-trading's fixture/odds calls (`getUpcomingFixtures`, `fetchMarketOdds`, etc.) and bulk/backfill calls (`getPlayerMatches` used by walk-forward, historical scoring, etc.) each trip independently.
+- A timeout storm in the bulk-call breaker no longer opens the live-call breaker, and vice versa.
+- Both breakers still report to the same monitoring/logging surface so outages are still visible — this is about isolating failure blast radius, not hiding failures.
+
+**Part 2 — Priority so live trading never waits behind bulk jobs**
+- Live paper-trading's fixture/odds calls get priority access to the shared API-Tennis rate-limit budget over walk-forward/backfill calls — either via a request queue with priority levels, or a guard that throttles/pauses bulk-job API calls whenever live trading has pending work.
+- Bulk jobs (walk-forward, historical backfills) degrade gracefully under this — they should slow down or queue behind live calls, not fail outright.
+- Document the interaction clearly in code comments so a future job type doesn't reintroduce the same shared-resource conflict.
+
+**Verification**
+- Simulate or trigger the same failure condition (bulk calls timing out) and confirm live paper-trading's fixture fetching keeps working throughout, not just recovers afterward.
+- Confirm bulk jobs still complete (possibly slower), rather than being starved indefinitely by live-trading priority.
+- Re-check today's actual circuit breaker state and confirm `getUpcomingFixtures` is working now, independent of whether the walk-forward has finished.
+
+**Out of scope**
+
+- Rearchitecting the walk-forward job itself or reducing its API call volume — this task isolates the failure, not optimizes the caller.
+- Any change to how market odds are computed or scored — unrelated to this fix.
+- The historical tennis-data.co.uk market-odds acceleration task — separate, already sent, unaffected by this either way.
+
+**Relevant files**
+
+- Circuit breaker implementation for the API-Tennis provider (locate directly — wherever the breaker instance/config lives)
+- `artifacts/api-server/src/services/evaluation/paperTrading.ts`
+- Walk-forward job implementation (`getPlayerMatches` caller)
+- Rate-limit/request-queue infrastructure for the API-Tennis provider, if one already exists

@@ -52,8 +52,8 @@ router.get("/fixtures/live-scores", async (req, res): Promise<void> => {
 
   const ids = parsed.data.ids
     .split(",")
-    .map((id) => id.trim())
-    .filter((id) => id.length > 0);
+    .map((id: string) => id.trim())
+    .filter((id: string) => id.length > 0);
   if (ids.length === 0) {
     res.status(400).json({ error: "ids must contain at least one non-empty fixture id" });
     return;

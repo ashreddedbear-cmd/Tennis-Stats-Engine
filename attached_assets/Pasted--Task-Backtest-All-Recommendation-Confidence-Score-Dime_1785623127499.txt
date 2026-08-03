@@ -1,0 +1,35 @@
+**Task — Backtest All Recommendation/Confidence/Score Dimensions and Find the Highest-Performing Trade Combinations (With Overfitting Guardrails)**
+
+**What & Why**
+
+Need a full backtest breakdown across every scoring dimension currently shown on a card — recommendation tier (KEEP/BORDERLINE/REMOVE), confidence/shield tier (Elite/Strong/Moderate/Weak), validation score, closeness, removal %, upset risk, and win probability — to find which combinations of these actually correlate with real win rate, not just which look good individually. But a naive "search every combination, report the best one" approach will very likely surface a small-sample fluke and present it as a real edge — the same failure mode already found twice this session (n=23 H2H claim, and the reweighting's confounded win-rate jump). This must be built with the same discipline used in the earlier `auditParlayFactorWeights.ts` work: proper holdout, minimum sample size, no reporting a "best combo" that wasn't verified on data it wasn't mined from.
+
+Two additional risks specific to this run:
+
+1. **Hindsight-biased market odds.** The tennis-data.co.uk historical corpus labels `player1 = actual winner` retroactively — already flagged earlier this session as inflating market accuracy in that dataset. If this backtest draws on that corpus (or any other source where the "market odds" were captured or reconstructed after the outcome was known), any combination involving market consensus or closeness-from-odds will look artificially strong. Only genuinely pre-match-captured odds (locked before `commenceTime`, same standard as live paper-trade rows) can be used — no retroactively-labeled or after-the-fact odds anywhere in this backtest.
+
+2. **Stale model state.** Several real changes landed this morning: the coverage-ceiling fix, the same-day-fatigue risk fix, the Agreement edge-weighting fix, and the reweighted `DEFAULT_WEIGHTS`. This backtest must run against rows scored **after** all of today's changes — not a mix of pre-fix and post-fix rows, and not the stale calibration curve. If there isn't yet enough post-fix data to hit the sample floor, that's a real finding to report (not a reason to quietly blend in older rows).
+
+**Done looks like**
+
+- Confirm and state up front: (a) which rows are excluded for using hindsight-labeled or non-pre-match odds, and (b) which rows are excluded for predating today's scoring/weight changes. Report both exclusion counts before any results.
+- Single-dimension backtest first: real observed win rate for each individual tier/bucket — recommendation tier, confidence tier, validation-score deciles, closeness bands, removal-% bands, upset-risk levels, win-probability deciles — each with its own sample size (n).
+- **Minimum sample size floor: 150 per bucket**, single-dimension or combined. Any bucket below 150 is reported as "insufficient sample," not given a win-rate number.
+- Combination search only after single-dimension results are in: cross-tabulate 2-3 dimensions at a time (not all 7 at once), each combination still subject to the same n≥150 floor.
+- **Mandatory train/holdout split**: any combination that looks like a standout performer gets re-checked against a holdout slice of data it was *not* found on — report both the "found on" number and the "confirmed on holdout" number side by side. A combination that only looks good on the data that found it doesn't count as a real finding.
+- Final output: a ranked list of combinations that (a) clear the 150-sample floor, (b) hold up on holdout, (c) use only clean pre-match odds, (d) reflect post-fix scoring, and (e) show a real win-rate edge over baseline.
+- Explicitly flag any combination that looked promising but failed the holdout check, used tainted odds, or came from stale-model rows, so it's clear what got ruled out and why.
+
+**Out of scope**
+
+- Automatically changing any scoring thresholds or weights based on this — this is a research/reporting task, any resulting threshold change gets proposed as its own follow-up task.
+- Running this against both the Prediction Engine and Parlay Builder backtest tables in the same pass unless the schemas cleanly support it — if they don't, run and report them separately.
+- Backfilling more post-fix data to hit the sample floor faster — report what's available now; accelerating data volume is a separate task if needed.
+
+**Relevant files**
+
+- `artifacts/api-server/src/services/evaluation/eliteTierBacktest.ts` (existing tier-backtest pattern)
+- `artifacts/api-server/src/scripts/auditParlayFactorWeights.ts` (existing holdout-split discipline to reuse)
+- `artifacts/api-server/src/scripts/analyzeParlayCalibration.ts`
+- `artifacts/api-server/src/services/historicalData/tennisDataCoUkBackfill.ts` (source of the hindsight-labeling risk — exclude accordingly)
+- Wherever `evaluation_predictions` / `parlay_leg_outcomes` store validation score, closeness, removal %, upset risk, win probability, and odds-capture-timing per row

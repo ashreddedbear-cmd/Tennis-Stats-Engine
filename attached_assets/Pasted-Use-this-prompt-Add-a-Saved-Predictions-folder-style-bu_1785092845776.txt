@@ -1,0 +1,153 @@
+Use this prompt:
+
+Add a “Saved Predictions” folder-style button beside the existing “Select Screenshots” button in the Bulk Upload section.
+
+The button is visually represented as a folder, but functionally it is a shortcut that restores the prediction results from the user’s most recently completed bulk prediction run.
+
+Required behavior
+
+After the user uploads one or more screenshots and taps “Predict X Matchups”:
+
+1. Run the predictions normally.
+2. Save the complete generated prediction-card data for that batch.
+3. Replace any previously saved batch with this newly completed batch.
+4. Continue to the prediction-card viewer as usual.
+
+The saved batch must contain everything needed to display the cards again without rerunning the model, including:
+
+* Player 1 and Player 2
+* Predicted winner
+* Confidence or validation score
+* Risk score
+* Grade
+* Keep, remove, or borderline status
+* Tournament name
+* Surface
+* Level
+* Reasons and factor breakdowns
+* Source agreement and coverage
+* Original display order
+* Current card or swipe position, when appropriate
+* Any user changes made after prediction, such as edited conditions
+
+Folder-button behavior
+
+When the user taps Saved Predictions:
+
+* Open the saved prediction-card viewer immediately.
+* Do not rerun the prediction model.
+* Do not recalculate scores.
+* Do not restore the original screenshots into the upload queue.
+* Do not add the matches to Match History again.
+* Do not create duplicate analytics, usage counts, or history records.
+* Treat this action strictly as reopening cached prediction results.
+
+The saved cards should remain available after:
+
+* Navigating to the home page
+* Leaving and returning to Build Match
+* Refreshing the page
+* Closing and reopening the app or browser
+
+Use persistent local storage or the app’s existing persistence layer rather than temporary component state.
+
+Latest-batch-only rule
+
+Save only one batch: the most recently completed prediction run.
+
+Example:
+
+* User uploads 40 matches and predicts them.
+* Those 40 cards become the saved batch.
+* User later uploads 20 new matches and predicts them.
+* The prior 40-card batch is deleted or overwritten.
+* The folder now contains only the latest 20 prediction cards.
+
+Do not combine the batches.
+
+Do not replace the saved batch merely because the user selected new screenshots. Replace it only after the new prediction run finishes successfully.
+
+If a new prediction run fails or is canceled, preserve the previously saved successful batch.
+
+UI requirements
+
+Place the new button beside Select Screenshots.
+
+Suggested label:
+
+SAVED PREDICTIONS
+
+Suggested icon:
+
+Folder
+
+Display an optional count:
+
+SAVED PREDICTIONS (40)
+
+Button states:
+
+* No saved batch: disabled or show NO SAVED PREDICTIONS
+* Saved batch available: enabled and show the number of cards
+* Loading saved batch: show a brief loading state
+* Corrupted or incompatible data: show an error and offer to clear the saved batch
+
+Do not call it “History,” because it is not an archive. It is a temporary latest-session restore feature.
+
+Data-model suggestion
+
+Create a structure similar to:
+
+type SavedPredictionBatch = {
+  version: number;
+  batchId: string;
+  createdAt: string;
+  sourceImageCount: number;
+  matchCount: number;
+  currentCardIndex: number;
+  predictions: PredictionCardData[];
+};
+
+Store this under one fixed key, for example:
+
+const LAST_PREDICTION_BATCH_KEY = "last_prediction_batch";
+
+Saving a new completed batch should overwrite that key.
+
+Prevent duplicate history entries
+
+Separate these two actions:
+
+runNewPredictionBatch()
+openSavedPredictionBatch()
+
+runNewPredictionBatch() may create history entries once, according to the app’s current behavior.
+
+openSavedPredictionBatch() must only hydrate the saved cards and navigate to the viewer. It must never call:
+
+* the prediction endpoint
+* the history-writing function
+* analytics that count a new prediction run
+* any function that submits or recreates match records
+
+Add an explicit restore mode:
+
+navigationState = {
+  mode: "restore",
+  batchId: savedBatch.batchId
+};
+
+Any history-writing effect should check that the mode is not restore.
+
+Acceptance tests
+
+1. Predict 40 matches, return home, reopen Build Match, tap Saved Predictions, and confirm the same 40 cards appear without any network prediction request.
+2. Confirm reopening those cards does not add another 40 entries to Match History.
+3. Predict a new batch of 20 and confirm the saved folder now contains only those 20.
+4. Start another upload but do not predict it; confirm the previous successful saved batch remains intact.
+5. Simulate a failed prediction run; confirm it does not erase the previous saved batch.
+6. Refresh or reopen the browser and confirm the latest saved batch is still available.
+7. Resume the card viewer at the saved swipe position, unless the product intentionally chooses to reopen at card one.
+8. Confirm opening the saved batch performs no prediction API call and no duplicate history write.
+
+Preserve the existing design language. The new control should match the green outlined Select Screenshots button and fit cleanly beside it on mobile without overflowing.

@@ -22,6 +22,8 @@ tags:
     description: Out-of-sample testing, calibration, and paper trading (Phase 4)
   - name: auth
     description: Owner-only login gate protecting data-changing and job-triggering endpoints
+  - name: payments
+    description: Stripe-backed workspace billing, checkout, and webhook flows
 paths:
   /auth/status:
     get:
@@ -73,6 +75,95 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AdminAuthStatus"
+
+  /payments/status:
+    get:
+      operationId: getPaymentsStatus
+      tags: [payments]
+      summary: Current workspace billing status, entitlements, and recent Stripe webhook activity
+      responses:
+        "200":
+          description: Payments status snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetPaymentsStatusResponse"
+
+  /payments/checkout-session:
+    post:
+      operationId: createPaymentsCheckoutSession
+      tags: [payments]
+      summary: Create a Stripe Checkout session for the current workspace subscription
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePaymentsCheckoutSessionBody"
+      responses:
+        "200":
+          description: Stripe Checkout session created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatePaymentsCheckoutSessionResponse"
+        "400":
+          description: Checkout session could not be created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderError"
+
+  /payments/billing-portal-session:
+    post:
+      operationId: createBillingPortalSession
+      tags: [payments]
+      summary: Create a Stripe Billing Portal session for the current workspace subscription
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBillingPortalSessionBody"
+      responses:
+        "200":
+          description: Stripe Billing Portal session created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateBillingPortalSessionResponse"
+        "400":
+          description: Billing portal session could not be created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderError"
+
+  /payments/webhook:
+    post:
+      operationId: paymentsWebhook
+      tags: [payments]
+      summary: Receive Stripe webhook events and update workspace billing state
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Webhook processed or recognized as duplicate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentsWebhookResponse"
+        "400":
+          description: Webhook signature or payload was invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProviderError"
 
   /healthz:
     get:
@@ -1014,6 +1105,257 @@ components:
         accessKey:
           type: string
           minLength: 1
+
+    PaymentEntitlements:
+      type: object
+      required:
+        - predictionHistory
+        - walkForward
+        - shadowReplay
+        - optimizer
+        - competitiveBalance
+        - evidenceReliability
+        - developerAnalytics
+        - eliteRecommendations
+        - alerts
+        - teamWorkspace
+      properties:
+        predictionHistory:
+          type: boolean
+        walkForward:
+          type: boolean
+        shadowReplay:
+          type: boolean
+        optimizer:
+          type: boolean
+        competitiveBalance:
+          type: boolean
+        evidenceReliability:
+          type: boolean
+        developerAnalytics:
+          type: boolean
+        eliteRecommendations:
+          type: boolean
+        alerts:
+          type: boolean
+        teamWorkspace:
+          type: boolean
+
+    PaymentWebhookEventSummary:
+      type: object
+      required:
+        - id
+        - stripeEventId
+        - eventType
+        - livemode
+        - processingStatus
+        - stripeCustomerId
+        - stripeSubscriptionId
+        - errorMessage
+        - receivedAt
+        - processedAt
+        - createdAt
+      properties:
+        id:
+          type: integer
+        stripeEventId:
+          type: string
+        eventType:
+          type: string
+        livemode:
+          type: boolean
+        processingStatus:
+          type: string
+        stripeCustomerId:
+          type: ["string", "null"]
+        stripeSubscriptionId:
+          type: ["string", "null"]
+        errorMessage:
+          type: ["string", "null"]
+        receivedAt:
+          type: string
+          format: date-time
+        processedAt:
+          type: ["string", "null"]
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+
+    PaymentsStatusAccount:
+      type: object
+      required:
+        - id
+        - accountKey
+        - displayName
+        - stripeCustomerId
+        - stripeSubscriptionId
+        - stripePriceId
+        - planKey
+        - planName
+        - subscriptionStatus
+        - accessGrantedAt
+        - currentPeriodStartAt
+        - currentPeriodEndAt
+        - trialEndAt
+        - canceledAt
+        - cancelAtPeriodEnd
+        - entitlementSnapshot
+        - metadata
+        - lastWebhookEventId
+        - lastCheckoutSessionId
+        - createdAt
+        - updatedAt
+      properties:
+        id:
+          type: integer
+        accountKey:
+          type: string
+        displayName:
+          type: string
+        stripeCustomerId:
+          type: ["string", "null"]
+        stripeSubscriptionId:
+          type: ["string", "null"]
+        stripePriceId:
+          type: ["string", "null"]
+        planKey:
+          type: ["string", "null"]
+        planName:
+          type: ["string", "null"]
+        subscriptionStatus:
+          type: ["string", "null"]
+        accessGrantedAt:
+          type: ["string", "null"]
+          format: date-time
+        currentPeriodStartAt:
+          type: ["string", "null"]
+          format: date-time
+        currentPeriodEndAt:
+          type: ["string", "null"]
+          format: date-time
+        trialEndAt:
+          type: ["string", "null"]
+          format: date-time
+        canceledAt:
+          type: ["string", "null"]
+          format: date-time
+        cancelAtPeriodEnd:
+          type: boolean
+        entitlementSnapshot:
+          type: object
+          additionalProperties:
+            type: boolean
+        metadata:
+          type: object
+          additionalProperties: true
+        lastWebhookEventId:
+          type: ["string", "null"]
+        lastCheckoutSessionId:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+
+    PaymentsStripeStatus:
+      type: object
+      required:
+        - priceId
+        - webhookSecretConfigured
+        - secretKeyConfigured
+        - planKey
+        - planName
+      properties:
+        priceId:
+          type: ["string", "null"]
+        webhookSecretConfigured:
+          type: boolean
+        secretKeyConfigured:
+          type: boolean
+        planKey:
+          type: string
+        planName:
+          type: string
+
+    GetPaymentsStatusResponse:
+      type: object
+      required:
+        - featureFlagEnabled
+        - configured
+        - active
+        - account
+        - entitlements
+        - stripe
+        - recentWebhookEvents
+      properties:
+        featureFlagEnabled:
+          type: boolean
+        configured:
+          type: boolean
+        active:
+          type: boolean
+        account:
+          oneOf:
+            - $ref: "#/components/schemas/PaymentsStatusAccount"
+            - type: "null"
+        entitlements:
+          $ref: "#/components/schemas/PaymentEntitlements"
+        stripe:
+          $ref: "#/components/schemas/PaymentsStripeStatus"
+        recentWebhookEvents:
+          type: array
+          items:
+            $ref: "#/components/schemas/PaymentWebhookEventSummary"
+
+    CreatePaymentsCheckoutSessionBody:
+      type: object
+      properties:
+        returnPath:
+          type: string
+        customerEmail:
+          type: string
+          format: email
+
+    CreatePaymentsCheckoutSessionResponse:
+      type: object
+      required:
+        - sessionId
+        - url
+      properties:
+        sessionId:
+          type: string
+        url:
+          type: ["string", "null"]
+
+    CreateBillingPortalSessionBody:
+      type: object
+      properties:
+        returnPath:
+          type: string
+
+    CreateBillingPortalSessionResponse:
+      type: object
+      required:
+        - url
+      properties:
+        url:
+          type: string
+
+    PaymentsWebhookResponse:
+      type: object
+      required:
+        - received
+        - processed
+      properties:
+        received:
+          type: boolean
+        processed:
+          type: boolean
+        duplicate:
+          type: boolean
 
     ProviderError:
       type: object

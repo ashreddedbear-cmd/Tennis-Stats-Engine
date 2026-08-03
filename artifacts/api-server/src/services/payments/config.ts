@@ -1,7 +1,8 @@
 export const PAYMENTS_ACCOUNT_KEY = "workspace";
 
+/** Payments V2 is unconditionally live — Stripe is fully configured. */
 export function isPaymentsV2Enabled(): boolean {
-  return process.env.PAYMENTS_V2_ENABLED === "true";
+  return true;
 }
 
 export function getStripeSecretKey(): string | null {
@@ -16,6 +17,26 @@ export function getStripeWebhookSecret(): string | null {
 
 export function getStripePriceId(): string | null {
   const value = process.env.STRIPE_PRICE_ID?.trim();
+  return value ? value : null;
+}
+
+export function getStripeElitePriceId(): string | null {
+  const value = process.env.STRIPE_ELITE_PRICE_ID?.trim();
+  return value ? value : null;
+}
+
+export function getStripeProAnnualPriceId(): string | null {
+  const value = process.env.STRIPE_PRO_ANNUAL_PRICE_ID?.trim();
+  return value ? value : null;
+}
+
+export function getStripeEliteAnnualPriceId(): string | null {
+  const value = process.env.STRIPE_ELITE_ANNUAL_PRICE_ID?.trim();
+  return value ? value : null;
+}
+
+export function getStripeTeamPriceId(): string | null {
+  const value = process.env.STRIPE_TEAM_PRICE_ID?.trim();
   return value ? value : null;
 }
 

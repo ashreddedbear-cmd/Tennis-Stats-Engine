@@ -1,0 +1,27 @@
+**Task #84 — Confirm Market Odds Module Reaches n≥200 and Make the Final KEEP Call**
+
+**What & Why**
+
+The market odds module is currently excluded from the live prediction ensemble (`EXCLUDED_FROM_ENSEMBLE` in `dataQuality.ts`). The spec requires ≥200 paired graded paper-trade rows before a verdict can be declared — we were at n=180, 20 rows short. As more real matches get locked and graded through the paper-trading loop, we'll cross 200.
+
+**This task depends on the calibration-refit task already queued.** Section B's original log-loss regression (+0.0243 worse with market odds) may be an artifact of measuring it through the stale global calibration curve — one that was fit almost entirely on predictions where market odds never voted. If that's the case, judging the module on Δlog-loss from the *old* curve at n≥200 would just produce a more confident wrong answer, not a correct one. The calibration-refit task must complete first so this task's decision uses a curve that was actually fit on market-odds-inclusive predictions.
+
+**Done looks like**
+
+- Confirm the calibration-refit task has already run and produced a market-odds-aware curve. If it hasn't, run it first against the current data before proceeding — do not evaluate Δlog-loss using the stale global curve.
+- Query: `SELECT count(*) FROM evaluation_predictions WHERE run_kind='paper_trade' AND status='graded' AND odds_player1_decimal IS NOT NULL AND included_in_accuracy=true` hits ≥200.
+- Re-run the ablation: `pnpm --filter @workspace/api-server exec tsx src/scripts/auditMarketConsensusAblation.ts`, using the refit market-odds-aware curve for the log-loss comparison, not the original global one.
+- Decision rule: if Δacc ≥ +0.5pp **AND** Δlog-loss (measured against the refit curve) ≤ 0 → remove `'marketOdds'` from `EXCLUDED_FROM_ENSEMBLE`, ship it.
+- If still NEUTRAL or EXCLUDE even under the corrected curve → document why directly in a comment in `dataQuality.ts`, including both the old-curve and refit-curve log-loss numbers so the reasoning is auditable later.
+
+**Out of scope**
+
+- Re-deriving the calibration curve itself — that's the prior task's job; this task only consumes its output.
+- Any change to how market odds' implied probability is computed (already correctly devigged).
+- Section C (historical tennis-data.co.uk odds) — separate track, already queued as its own follow-up.
+
+**Relevant files**
+
+- `artifacts/api-server/src/scripts/auditMarketConsensusAblation.ts`
+- `artifacts/api-server/src/services/predictionEngine/dataQuality.ts` (`EXCLUDED_FROM_ENSEMBLE` const)
+- `artifacts/api-server/src/services/evaluation/calibration.ts` (refit curve source)

@@ -1,0 +1,411 @@
+# TASK 105 – Independent Parlay Builder System (Part 2)
+
+## Independent Validation Sources
+
+The Independent Parlay Builder must validate every prediction using multiple independent evidence sources.
+
+No single source may determine whether a leg is kept or removed.
+
+Each source contributes its own weighted score.
+
+Each source must be implemented as an independent adapter/service so it can be enabled, disabled, upgraded, or replaced without changing the Prediction Engine.
+
+Failure of one source must never stop Builder scoring.
+
+---
+
+# Source 1 – Tennis Abstract
+
+This is the primary statistical validation source.
+
+Collect whenever available:
+
+• Overall Elo
+
+• Surface Elo
+
+• Elo Difference
+
+• Recent Elo Trend
+
+• Last 10 Matches
+
+• Surface Match History
+
+• Hold %
+
+• Break %
+
+• Ace %
+
+• Double Fault %
+
+• First Serve %
+
+• Second Serve %
+
+• Return Points Won
+
+• Tiebreak Record
+
+• Opponent Quality
+
+• Historical Consistency
+
+• Surface Consistency
+
+• Historical Volatility
+
+• Historical Retirement Rate
+
+• Head-to-Head
+
+Missing Tennis Abstract data must NEVER automatically remove a leg.
+
+Instead:
+
+• Reduce data coverage
+
+• Lower confidence
+
+• Display "Limited Tennis Abstract Coverage"
+
+---
+
+# Source 2 – UTR Sports
+
+Use UTR to validate players outside ATP/WTA main tours.
+
+Collect:
+
+• UTR Rating
+
+• Rating Difference
+
+• Recent Rating Trend
+
+• Match Projection
+
+• Recent Results
+
+• Opponent Strength
+
+• Challenger Coverage
+
+• ITF Coverage
+
+• College Tennis Coverage (when applicable)
+
+UTR becomes increasingly important when Tennis Abstract has limited coverage.
+
+---
+
+# Source 3 – ATP Official
+
+Use official ATP information.
+
+Collect:
+
+• Current Ranking
+
+• Ranking Movement
+
+• Ranking Points
+
+• Tournament Draw
+
+• Seed
+
+• Recent Results
+
+• Surface Record
+
+• Match Statistics
+
+• Withdrawals
+
+• Official Status
+
+• Tournament Round
+
+• Event Category
+
+---
+
+# Source 4 – WTA Official
+
+Use official WTA information.
+
+Collect:
+
+• Ranking
+
+• Ranking Trend
+
+• Ranking Points
+
+• Draw
+
+• Seed
+
+• Match History
+
+• Surface Results
+
+• Withdrawals
+
+• Official Status
+
+• Tournament Round
+
+---
+
+# Source 5 – ITF
+
+For lower-level events.
+
+Collect:
+
+• Ranking
+
+• Match History
+
+• Draw
+
+• Surface Record
+
+• Tournament Category
+
+• Recent Results
+
+• Walkovers
+
+• Retirements
+
+• Withdrawals
+
+ITF data should help validate lower-ranked players where ATP/WTA coverage is limited.
+
+---
+
+# Source 6 – Market Consensus
+
+Use authorized odds providers when available.
+
+Examples include:
+
+• Pinnacle
+
+• Betfair Exchange
+
+• Other approved sharp-market providers
+
+Collect:
+
+• Opening Odds
+
+• Current Odds
+
+• Closing Odds (when available)
+
+• Implied Probability
+
+• Market Movement
+
+• Consensus Probability
+
+• Reverse Line Movement
+
+• Late Steam
+
+Builder should compare market consensus with statistical evidence.
+
+Market disagreement should reduce Validation Score.
+
+Market agreement should increase confidence.
+
+Markets must NEVER become the final decision maker.
+
+---
+
+# Source 7 – Recent Form
+
+Evaluate:
+
+Last 5 Matches
+
+Last 10 Matches
+
+Last 20 Matches
+
+Surface Wins
+
+Straight Set Wins
+
+Three Set Matches
+
+Opponent Quality
+
+Average Ranking Faced
+
+Winning Streak
+
+Losing Streak
+
+Average Match Length
+
+Sets Played This Week
+
+Days Rest
+
+Fatigue Index
+
+---
+
+# Source 8 – Surface Analysis
+
+Maintain separate statistics for:
+
+Hard
+
+Clay
+
+Grass
+
+Indoor Hard
+
+Outdoor Hard
+
+Indoor Clay (when available)
+
+Evaluate:
+
+Surface Win %
+
+Surface Elo
+
+Hold %
+
+Break %
+
+Serve Efficiency
+
+Return Efficiency
+
+Altitude Performance
+
+Indoor Performance
+
+Outdoor Performance
+
+Fast Court Performance
+
+Slow Court Performance
+
+---
+
+# Source 9 – Head-to-Head
+
+Evaluate carefully.
+
+Collect:
+
+Overall H2H
+
+Surface H2H
+
+Recent Meetings
+
+Set Differential
+
+Game Differential
+
+Tiebreak Results
+
+Recency
+
+Player Development Since Last Meeting
+
+Never overweight H2H because of small sample sizes.
+
+---
+
+# Source 10 – Injuries & Availability
+
+Use only verified information.
+
+Evaluate:
+
+Confirmed Injuries
+
+Medical Timeouts
+
+Recent Retirements
+
+Withdrawals
+
+Schedule Congestion
+
+Travel Burden
+
+Days Rest
+
+Long Layoff
+
+Protected Ranking Return
+
+Every injury flag must include:
+
+Source
+
+Timestamp
+
+Confidence Level
+
+Confirmed / Unconfirmed
+
+Never use rumors as evidence.
+
+---
+
+# Source Agreement Engine
+
+After all adapters complete:
+
+Calculate:
+
+Number of sources supporting selected player
+
+Number of sources supporting opponent
+
+Number of missing sources
+
+Number of conflicting sources
+
+Number of stale sources
+
+Calculate a Source Agreement Score.
+
+Example:
+
+Tennis Abstract ✓
+
+UTR ✓
+
+ATP ✓
+
+Recent Form ✓
+
+Market ✓
+
+Head-to-Head ✗
+
+Agreement:
+
+5 of 6 sources
+
+Agreement should increase Validation Score.
+
+Major disagreement should increase Risk Score.
+
+Missing data should reduce Data Coverage but should not automatically remove the leg.

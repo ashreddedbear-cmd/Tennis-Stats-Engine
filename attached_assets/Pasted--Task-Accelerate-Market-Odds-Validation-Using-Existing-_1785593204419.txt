@@ -1,0 +1,35 @@
+**Task — Accelerate Market-Odds Validation Using Existing Historical Odds Data (Skip the Real-Time Wait)**
+
+**What & Why**
+
+`auditMarketConsensusAblation.ts` (Task #21) currently only reads real market odds from live `paper_trade` rows in `evaluation_predictions`, which accumulate one match at a time in real time — reaching 200 could take weeks. But real historical odds already exist in the database: `tennisDataCoUkBackfill.ts` pulls tennis-data.co.uk XLSX files with embedded bookmaker odds (B365, Pinnacle, average, max) stored under `raw_source->'_marketOdds'` in `historical_matches` for rows where `provider = 'tennis-data-co-uk'`. That data is real, already-graded, and sitting unused for this specific purpose — the ablation only ignores it because the script was written to trust live paper-trade rows exclusively, not because the historical odds are invalid.
+
+The main risk to guard against: hindsight bias / leakage. If a historical row's outcome was used anywhere else to fit calibration curves or Elo ratings, testing the market-odds ablation on it isn't a clean held-out comparison. This task must only use rows outside whatever date range/split was used to fit `calibrationModelsTable` / `specialistModelsTable`, the same way any other held-out backtest in this codebase already avoids that overlap.
+
+**Done looks like**
+
+- A script (or an extension to `auditMarketConsensusAblation.ts`) that pulls `historical_matches` rows where `provider = 'tennis-data-co-uk'` AND `raw_source->'_marketOdds'->>'avgWinner'` IS NOT NULL, excluding any rows inside the calibration/specialist fitting window.
+- For each qualifying row, replays the engine twice via `runPredictionEngine` — once with `input.marketOdds` populated from the stored `_marketOdds` values, once with `excludedModels: {"marketOdds"}` — exactly the same with/without comparison the existing paper-trade version does.
+- Reaches (and ideally well exceeds) the n=200 threshold from data that already exists, no real-time waiting required.
+- Outputs the same accuracy/log-loss/direction-alignment comparison the existing script produces, so it's a like-for-like result that Task #21's decision gate can actually use.
+- Clearly logs how many rows were excluded for being inside the calibration-fitting window, so the held-out claim is auditable, not just asserted.
+
+**Out of scope**
+
+- Changing `EXCLUDED_FROM_ENSEMBLE` itself or flipping market odds on — this task only produces the evidence; the actual decision still runs through the existing gate logic once the number comes back.
+- Backfilling new years/tournaments of tennis-data.co.uk data — use whatever's already in `historical_matches` from prior backfill runs.
+- Changing the live paper-trading job — that keeps running in parallel as an ongoing, real-time confirmation source alongside this one-time historical check.
+
+**Steps**
+
+1. Confirm the actual row count and date range currently available: `SELECT provider, MIN(match_date), MAX(match_date), COUNT(*) FROM historical_matches WHERE provider = 'tennis-data-co-uk' AND raw_source->'_marketOdds'->>'avgWinner' IS NOT NULL GROUP BY provider`. Report this number back before writing anything else — the whole plan depends on how much data is actually there.
+2. Determine the calibration/specialist fitting window (check `calibrationModelsTable`/`specialistModelsTable` for whatever `fittedThroughDate` or equivalent boundary they record) and exclude any historical row inside it from this analysis.
+3. Extend `auditMarketConsensusAblation.ts` (or add a sibling script) with a second data-source path that reads from `historical_matches` + `_marketOdds` instead of `evaluation_predictions` paper_trade rows, reusing the existing replay-with-and-without-marketOdds logic already built for the paper-trade path.
+4. Run it, report the resulting sample size, accuracy delta, and log-loss delta — the same shape of output the paper-trade version already produces.
+5. Leave the live paper-trading job untouched and running — once it also crosses a reasonable threshold, compare its real-time result against this historical one as a sanity check that they agree before anyone flips the ensemble gate.
+
+**Relevant files**
+
+- `artifacts/api-server/src/scripts/auditMarketConsensusAblation.ts`
+- `artifacts/api-server/src/services/historicalData/tennisDataCoUkBackfill.ts`
+- `artifacts/api-server/src/services/predictionEngine/index.ts` (marketOdds vote logic, ~line 460-495)

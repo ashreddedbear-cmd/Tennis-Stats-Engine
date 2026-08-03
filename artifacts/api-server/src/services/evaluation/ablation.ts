@@ -17,6 +17,17 @@ import type { CalibrationKnot } from "./types";
  * either returned over HTTP or written to a standalone report file.
  */
 
+// NOTE: "marketOdds" is intentionally absent from MODEL_DEFS even though it is a valid
+// AblationModelKey. This runner works exclusively on the historical corpus and never passes
+// `input.marketOdds` to scoreMatch() — the Market Consensus module only fires when
+// `input.marketOdds != null`, so an "ablate_marketOdds" leave-one-out variant would be
+// identically equal to baseline (the module was never active in either case). Running it here
+// would produce a meaningless delta of exactly 0.0pp.
+//
+// The correct ablation for market odds requires paper_trade graded rows that had real odds
+// locked at cutoff time. See:
+//   - scripts/auditMarketConsensusAblation.ts — the dedicated ablation runner
+//   - docs/audit-market-consensus-ablation.md — the 2026-07-31 results (n=180, EXCLUDE pending ≥200)
 export const MODEL_DEFS: ReadonlyArray<{ key: AblationModelKey; label: string }> = [
   { key: "surfaceElo", label: "Surface Elo" },
   { key: "serveReturn", label: "Serve & Return" },

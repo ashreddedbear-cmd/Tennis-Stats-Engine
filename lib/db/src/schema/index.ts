@@ -24,3 +24,6 @@ export * from "./backtesting";
 export * from "./masterPlayers";
 export * from "./playerStats";
 export * from "./payments";
+export * from "./support";
+export * from "./adminUsers";
+export * from "./savedCards";

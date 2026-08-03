@@ -1,10 +1,10 @@
 import type { PredictionSummary } from "@workspace/api-client-react"
 
 /**
- * Hands paste-search results off across a page navigation (Build Matchup -> Ledger). This is a
+ * Hands paste-search results off across a page navigation (Run Model -> Prediction History). This is a
  * one-shot, same-session transfer -- NOT the durable "survive a mid-review refresh" persistence
  * tracked separately (see the Ledger paste-search refresh task); it exists purely so the resolved
- * matches picked in the "PASTE SEARCH" tab (now on Build Matchup) can be handed to the Ledger
+ * matches picked in the "PASTE SEARCH" tab (now on Run Model) can be handed to the Prediction History
  * page, which is the only place that renders the focus/navigation UI for them.
  */
 const STORAGE_KEY = "ledger-paste-search-handoff"

@@ -1,0 +1,637 @@
+========================================
+PART 1 — TRANSCRIPTION (START)
+========================================
+
+MATCH 1
+----------------------------------------
+Recommendation: KEEP
+Strength: STRONG
+Grade: C
+Score: 59/100
+
+Tournament:
+(Not shown)
+
+Match:
+Van Assche vs Gaston
+
+Predicted Winner:
+Van Assche
+
+Validation:
+59%
+
+Risk:
+27%
+
+Removal:
+35%
+
+Coverage:
+70%
+
+Agreement:
+86% (6/7)
+
+Surface:
+(Not shown)
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 2
+----------------------------------------
+Recommendation:
+BORDERLINE
+
+Strength:
+WEAK
+
+Grade:
+D
+
+Score:
+49/100
+
+Tournament:
+ATP Washington
+
+Match:
+Giron vs Shah
+
+Predicted Winner:
+Giron
+
+Validation:
+49%
+
+Risk:
+45%
+
+Removal:
+48%
+
+Coverage:
+70%
+
+Agreement:
+50% (4/8)
+
+Surface:
+Hard
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 3
+----------------------------------------
+Recommendation:
+KEEP
+
+Strength:
+ELITE
+
+Grade:
+B
+
+Score:
+65/100
+
+Tournament:
+ATP Washington
+
+Match:
+Svajda vs Ymer
+
+Predicted Winner:
+Svajda
+
+Validation:
+65%
+
+Risk:
+17%
+
+Removal:
+27%
+
+Coverage:
+70%
+
+Agreement:
+86% (6/7)
+
+Surface:
+Hard
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 4
+----------------------------------------
+Recommendation:
+BORDERLINE
+
+Strength:
+WEAK
+
+Grade:
+D
+
+Score:
+43/100
+
+Tournament:
+WTA 125K Vancouver
+
+Match:
+Schoppe vs Grubor
+
+Predicted Winner:
+Schoppe
+
+Validation:
+43%
+
+Risk:
+35%
+
+Removal:
+47%
+
+Coverage:
+70%
+
+Agreement:
+14% (1/7)
+
+Surface:
+Hard
+
+Warning:
+Very Limited Match History
+
+Details:
+Very limited match history for Grubor
+1 match found
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 5
+----------------------------------------
+Recommendation:
+BORDERLINE
+
+Strength:
+STRONG
+
+Grade:
+B
+
+Score:
+64/100
+
+Tournament:
+WTA 125K Vancouver
+
+Match:
+Okalova vs Alexander
+
+Predicted Winner:
+Okalova
+
+Validation:
+64%
+
+Risk:
+49%
+
+Removal:
+42%
+
+Coverage:
+70%
+
+Agreement:
+100% (4/4)
+
+Surface:
+Hard
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 6
+----------------------------------------
+Recommendation:
+BORDERLINE
+
+Strength:
+STRONG
+
+Grade:
+C
+
+Score:
+56/100
+
+Tournament:
+WTA 125K Vancouver
+
+Match:
+Savinykh vs Kupres
+
+Predicted Winner:
+Savinykh
+
+Validation:
+56%
+
+Risk:
+35%
+
+Removal:
+40%
+
+Coverage:
+70%
+
+Agreement:
+75% (3/4)
+
+Surface:
+Hard
+
+Warning:
+Very Limited Match History
+
+Details:
+Very limited match history for Kupres
+
+3 matches found
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 7
+----------------------------------------
+Recommendation:
+BORDERLINE
+
+Strength:
+WEAK
+
+Grade:
+D
+
+Score:
+44/100
+
+Tournament:
+WTA Memphis
+
+Match:
+Ovcharenko vs Raina
+
+Predicted Winner:
+Ovcharenko
+
+Validation:
+44%
+
+Risk:
+57%
+
+Removal:
+56%
+
+Coverage:
+70%
+
+Agreement:
+17% (1/6)
+
+Surface:
+Hard
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 8
+----------------------------------------
+Recommendation:
+BORDERLINE
+
+Strength:
+STRONG
+
+Grade:
+C
+
+Score:
+56/100
+
+Tournament:
+(Not shown)
+
+Match:
+Bernard Tomic vs Tobon
+
+Predicted Winner:
+Bernard Tomic
+
+Validation:
+56%
+
+Risk:
+27%
+
+Removal:
+36%
+
+Coverage:
+70%
+
+Agreement:
+80% (4/5)
+
+Surface:
+(Not shown)
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 9
+----------------------------------------
+Recommendation:
+BORDERLINE
+
+Strength:
+WEAK
+
+Grade:
+D
+
+Score:
+46/100
+
+Tournament:
+WTA Hamburg
+
+Match:
+Sherif Ahmed Abdelaziz vs Korpatsch
+
+Predicted Winner:
+Sherif Ahmed Abdelaziz
+
+Validation:
+46%
+
+Risk:
+47%
+
+Removal:
+51%
+
+Coverage:
+70%
+
+Agreement:
+0% (0/1)
+
+Surface:
+Clay
+
+WARNING:
+INSUFFICIENT DATA
+
+Details:
+
+Match history could not be retrieved from any source.
+
+Validation scores are unreliable.
+
+Verify player name and try again.
+
+Matches Found:
+
+Selected:
+0
+
+Opponent:
+0
+
+Provider Search:
+
+MatchStat + API Tennis
+
+Player not recognised.
+
+Check name spelling.
+
+Opponent provider search:
+Not recognised.
+
+Additional Error:
+
+Sherif Ahmed Abdelaziz was not recognised by MatchStat + API Tennis.
+
+Name may differ in provider records.
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 10
+----------------------------------------
+Recommendation:
+KEEP
+
+Strength:
+STRONG
+
+Grade:
+C
+
+Score:
+58/100
+
+Tournament:
+ATP Challenger Bloomfield Hills
+
+Match:
+Zheng vs Fearnley
+
+Predicted Winner:
+Zheng
+
+Validation:
+58%
+
+Risk:
+35%
+
+Removal:
+39%
+
+Coverage:
+70%
+
+Agreement:
+78% (7/9)
+
+Surface:
+Hard
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 11
+----------------------------------------
+Recommendation:
+BORDERLINE
+
+Strength:
+MODERATE
+
+Grade:
+C
+
+Score:
+51/100
+
+Tournament:
+ATP Challenger Segovia
+
+Match:
+Crawford vs Martineau
+
+Predicted Winner:
+Crawford
+
+Validation:
+51%
+
+Risk:
+45%
+
+Removal:
+47%
+
+Coverage:
+70%
+
+Agreement:
+50% (3/6)
+
+Surface:
+Hard
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+MATCH 12
+----------------------------------------
+Recommendation:
+REMOVE
+
+Strength:
+WEAK
+
+Grade:
+F
+
+Score:
+37/100
+
+Tournament:
+ATP Estoril
+
+Match:
+Darderi vs Blockx
+
+Predicted Winner:
+Darderi
+
+Validation:
+37%
+
+Risk:
+35%
+
+Removal:
+50%
+
+Coverage:
+70%
+
+Agreement:
+22% (2/9)
+
+Surface:
+Clay
+
+Reasons:
+Collapsed
+
+Factor Breakdown:
+0 active
+
+========================================
+
+(END OF RESPONSE 1)

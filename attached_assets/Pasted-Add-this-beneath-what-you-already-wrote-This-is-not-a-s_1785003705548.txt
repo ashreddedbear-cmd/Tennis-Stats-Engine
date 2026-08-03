@@ -1,0 +1,135 @@
+Add this beneath what you already wrote:
+
+⸻
+
+This is not a spelling problem and must not be treated as a user-input problem. The screenshots prove the same players can be recognized in one workflow but rejected in another.
+
+Examples:
+
+* Lea Ma and Katie Swan were both successfully identified from the screenshot/bulk workflow, but Paste Search later says “Lea Ma not found.”
+* Astra Sharma is listed as having multiple matches in the screenshot workflow, but the exact same name resolves correctly in Paste Search.
+* Hong Yi Cody Wong, Sabastiani Leon, and Aran Teixido Garcia are being marked ambiguous even though the opponent, tournament, date, tour, and current scheduled fixture provide enough context to identify the correct player.
+* Camila Soares and Havana Kadi are visible in valid scheduled matches but are rejected because the local player database does not contain them.
+* Lea Ma vs Katie Swan fully resolves, including the event, but the prediction engine then fails without showing the actual backend error.
+
+I need a root-cause fix, not another UI message, spelling suggestion, or temporary alias.
+
+Required investigation
+
+Trace all three workflows independently:
+
+1. Player Search
+2. Paste Search
+3. Bulk/Screenshot Search
+
+Identify every API endpoint, resolver function, database table, cache, query, normalization function, and fallback source used by each workflow.
+
+Determine why they do not use the same player-resolution pipeline and why a player found in one workflow can be missing or ambiguous in another.
+
+Inspect the server logs and return the exact failure for every affected matchup, including:
+
+* endpoint called
+* normalized input name
+* candidate players returned
+* source of each candidate
+* player IDs
+* schedule candidates
+* tournament and date filtering
+* final rejection reason
+* prediction-engine exception and stack trace
+* missing database fields or statistics
+
+Do not hide backend errors behind the generic message “Prediction engine error.”
+
+Required permanent fix
+
+Create one shared server-side player and fixture resolver used by Search, Paste, Bulk, Screenshot, and Run Model.
+
+Resolution order must be:
+
+1. Exact scheduled fixture match using both players
+2. Tournament and event match
+3. Match date or active schedule window
+4. Tour and gender
+5. Stable provider player ID
+6. Exact normalized full name
+7. Known aliases and alternate name order
+8. Accent-insensitive and punctuation-insensitive match
+9. Safe fuzzy match only when the result is unique
+
+The resolver must use the entire matchup, not resolve each player independently without context.
+
+If multiple player records share a name, automatically choose the record attached to the scheduled fixture containing the entered opponent. Do not require manual selection when only one candidate fits the current matchup.
+
+Missing-player fallback
+
+When a player appears in a current scheduled fixture but is absent from the local player database:
+
+* fetch the player from the live tennis provider
+* create or update the master player record
+* save the provider ID and aliases
+* connect the player to the scheduled fixture
+* continue resolving the matchup
+* do not immediately mark the item “not found”
+
+A missing ranking or limited historical data should lower Data Quality. It should not automatically prevent the model from running when sufficient evidence exists.
+
+Prediction-engine failure
+
+For Lea Ma vs Katie Swan, the names and event were already resolved successfully. Therefore, investigate the prediction pipeline separately.
+
+Find the exact function and input field that failed. Add guarded fallbacks for missing rankings, statistics, Elo, form, H2H, injury, or other optional evidence. The engine must not crash because one optional data source is absent.
+
+When evidence is insufficient, return a valid structured result such as:
+
+* Insufficient Data
+* Low Data Quality
+* No Strong Signal
+
+Do not return a generic server failure unless the request truly encounters an unexpected technical exception.
+
+Data corrections
+
+The screenshots also show incorrect event metadata:
+
+* WTA Washington is being labeled ATP500
+* WTA 125K Vancouver is being labeled WTA250
+
+Fix tournament-level detection so it uses the provider’s event ID and official category rather than unreliable text guessing.
+
+Acceptance tests
+
+Do not report this task complete until all of these pass in the published app:
+
+* Lea Ma vs Katie Swan
+* Astra Sharma vs Aoi Ito
+* Katherine Sebov vs Camila Soares
+* Dasha Plekhanova vs Hong Yi Cody Wong
+* Sijia Wei vs Havana Kadi
+* Katrina Scott vs Sabastiani Leon
+* Anna Frey vs Aran Teixido Garcia
+
+For each matchup, verify:
+
+* Player Search can locate both players
+* Paste Search resolves it
+* Bulk/Screenshot Search resolves it
+* all workflows return the same stable player IDs
+* the correct scheduled event is selected
+* the correct tour level is shown
+* Run Model either produces a prediction or a truthful structured insufficient-data result
+* no item is incorrectly skipped
+* no generic “check spelling” message appears for a valid scheduled player
+
+Also add automated regression tests for these exact names and cross-workflow consistency.
+
+Do not only modify the frontend. Do not hard-code these seven matchups. Fix the shared resolver, provider synchronization, tournament metadata, and prediction-engine fallback logic at the source.
+
+Before publishing, provide:
+
+1. The confirmed root cause
+2. Files and functions changed
+3. Database or cache changes made
+4. Exact backend exception that caused Lea Ma vs Katie Swan to fail
+5. Test results for all seven matchups
+6. Confirmation that the deployed production app was tested, not only the development preview

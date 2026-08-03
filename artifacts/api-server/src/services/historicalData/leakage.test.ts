@@ -12,6 +12,12 @@ import { runHistoricalBackfill } from "./backfill";
 import type { HistoricalFixture, TennisDataProvider } from "../tennisData/types";
 
 test("no feature snapshot has a source timestamp at or after its match's cutoff", async () => {
+  // The backfill pipeline filters to sourceTimestamp < cutoffAt (strictly less) at
+  // backfill.ts:333, so no correctly-produced row should have sourceTimestamp >= cutoffAt.
+  // A prior backfill run (before that strict filter was in place) produced 400 rows with
+  // sourceTimestamp = cutoffAt exactly (delta = 0). Those rows were cleaned up in Task #8
+  // (2026-07-31) via `DELETE FROM match_feature_snapshots WHERE source_timestamp = match_cutoff_at`,
+  // restoring the >= invariant. Any reappearance here is a real regression.
   const rows = await db
     .select({
       id: matchFeatureSnapshotsTable.id,

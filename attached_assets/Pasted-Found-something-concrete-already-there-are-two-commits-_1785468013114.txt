@@ -1,0 +1,33 @@
+Found something concrete already — there are two commits literally titled *"Restore admin auth accidentally removed upstream"* in this history, and they're duplicated (`da9dbf7` and `fb781c3`), same with a duplicated paper-trading restore. That's a strong lead for your admin-access complaint. Let me dig into what actually happened there.
+
+Good news: this isn't vague drift — I found two distinct, concrete bugs, and they explain all four things you listed.
+
+**Root cause of the admin-access problem (explains 3 of your 4 symptoms):**
+
+Everything admin-related in this app — the shield badges, the "Admin" button on Payments, access to Model Monitoring/Launch Audit/Admin Users/etc. — all hinges on one thing: `adminAuth?.authenticated` from `useGetAdminAuthStatus()`. When that's false, shields disappear, admin buttons disappear, and admin-gated pages redirect you straight to the login screen you screenshotted. That's one root cause producing three symptoms, not three separate bugs.
+
+Digging into the auth history, I found this sequence, all in about 90 seconds on July 25:
+- `c75a23f` (03:11am) — added an **owner auto-login route**: a bookmarkable URL with a token (`/auth/owner-auto-login?token=...`) that sets your admin session cookie directly, no login form needed.
+- `1e4b888` (03:15am) — added an alternate auto-auth path based on Replit identity headers (`x-replit-user-id`).
+- `2b9a22a` (03:16am) — **removed the token-based auto-login route entirely**, leaving only the Replit-header method.
+
+The Replit-header method only works when `OWNER_REPLIT_AUTO_AUTH=true` is set *and* the request carries Replit's own identity headers — which happens inside Replit's preview iframe, but likely **not** when you hit the public `.replit.dev` URL directly from Safari on your phone, which is exactly what your screenshot shows. If you had a bookmarked auto-login link, it stopped working the moment `2b9a22a` landed, and you'd have been thrown back to the manual sign-in screen ever since — with every admin shield across the app gone because they're all downstream of that same `isAdmin` flag.
+
+**The logo issue is unrelated** — a separate, simpler bug: the app actually has *two* logo assets that were never kept in sync. `TennisMatrixLogo.tsx` (the real in-app logo) went through five design revisions, including one explicitly called *"completely redesign Tennis Matrix logo — professional green racket with ball."* But the sign-in screen you screenshotted doesn't use that component — it uses a static `public/logo.svg` file that Clerk reads directly, and that file was **committed exactly once, and never touched again**. So the sign-in screen is showing the old pre-redesign logo while the rest of the app shows the new one.
+
+**Prompt for Replit:**
+
+---
+
+> Two confirmed bugs, please fix both — don't declare done without showing me evidence per the steps below:
+>
+> **1. Admin auth is broken for owner access outside the Replit iframe.**
+> On `2b9a22a` (July 25), the `/auth/owner-auto-login` token route was removed, leaving only the Replit-header-based auto-auth (`isOwnerAutoAuthenticated`), which only works inside Replit's own preview iframe — not from the public `.replit.dev` URL on a phone browser. Restore a working owner auto-login path:
+> - Either restore the token-based route from `c75a23f` (`GET /auth/owner-auto-login?token=...` → sets the admin session cookie), or confirm `OWNER_REPLIT_AUTO_AUTH` + `OWNER_REPLIT_USER_ID`/`OWNER_REPLIT_USER_NAME` are actually set correctly in Secrets and that the header-based path works from a non-Replit-iframe request (test it from a plain curl/fetch to the public URL, not just inside the Replit editor preview).
+> - Confirm which of these I was actually relying on before, and restore that specific path rather than picking one arbitrarily.
+> - After the fix, actually load `/api/admin/auth/status` (or equivalent) from the public URL as a real request and show me the raw JSON response with `authenticated: true` — don't just say it's fixed.
+>
+> **2. `public/logo.svg` is stale — never updated after four logo redesigns to `TennisMatrixLogo.tsx`.**
+> Regenerate `public/logo.svg` to match the current `TennisMatrixLogo.tsx` design (the "professional green racket with ball" version), since Clerk's sign-in screen reads the static file directly, not the React component. Show me both side by side after the fix.
+>
+> Once both are fixed, load the sign-in screen and an admin-gated page (e.g. `/payments/admin` or `/monitoring`) from the actual public URL on a phone browser (not the Replit editor preview) and confirm: correct logo, admin shield/badge visible, page loads without redirecting to `/admin/login`.

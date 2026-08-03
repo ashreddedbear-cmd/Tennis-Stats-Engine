@@ -1,4 +1,7 @@
 import { logger } from "../../lib/logger";
+import { withRetry, isTransientError } from "../../lib/retry";
+import { CircuitBreaker } from "../../lib/circuitBreaker";
+import { PriorityCallQueue, type CallPriority } from "../../lib/priorityCallQueue";
 import { TtlCache } from "./cache";
 import { inferLevelFromEventType, normalizeProviderSurface, resolveSurfaceAndLevel } from "./surfaceMap";
 import { resolveTournamentTimezone } from "./timezoneMap";
@@ -368,6 +371,26 @@ export class ApiTennisProvider implements TennisDataProvider {
   private cache = new TtlCache();
   private lastSuccessfulCallAt: string | null = null;
   private lastError: string | null = null;
+  // ── Part 1: Separate circuit breakers per call purpose ─────────────────────
+  // A timeout storm in the bulk-call breaker (walk-forward, historical backfill)
+  // no longer opens the live-call breaker (fixture fetches, player lookups).
+  // Both breakers still appear in getAllBreakerStatuses() so outages stay visible.
+  private readonly liveBreaker = new CircuitBreaker("api-tennis-live", {
+    failureThreshold: 5,
+    openDurationMs: 30_000,
+    windowMs: 60_000,
+  });
+  private readonly bulkBreaker = new CircuitBreaker("api-tennis-bulk", {
+    failureThreshold: 5,
+    openDurationMs: 60_000, // bulk jobs tolerate a longer cooldown
+    windowMs: 60_000,
+  });
+  // ── Part 2: Priority queue ────────────────────────────────────────────────
+  // Live calls always win concurrency slots ahead of bulk calls.
+  // maxConcurrent=4 also caps total parallel API-Tennis requests, which limits
+  // the number of simultaneous timeouts that can accumulate during a heavy
+  // walk-forward run and trip the bulk breaker unnecessarily fast.
+  private readonly queue = new PriorityCallQueue(4);
 
   constructor(apiKey: string) {
     this.apiKey = apiKey;
@@ -382,7 +405,17 @@ export class ApiTennisProvider implements TennisDataProvider {
     };
   }
 
-  private async call<T>(method: string, params: Record<string, string> = {}): Promise<T> {
+  /**
+   * Execute one API-Tennis HTTP call.
+   *
+   * priority="live"  → goes through liveBreaker; gets priority access to the
+   *                    shared concurrency queue. Use for all paths that paper
+   *                    trading or active predictions depend on.
+   * priority="bulk"  → goes through bulkBreaker; waits behind pending live work.
+   *                    Use for walk-forward / historical-backfill player history
+   *                    fetches. A bulk timeout storm never trips the live breaker.
+   */
+  private async call<T>(priority: CallPriority, method: string, params: Record<string, string> = {}): Promise<T> {
     const url = new URL(BASE_URL);
     url.searchParams.set("method", method);
     url.searchParams.set("APIkey", this.apiKey);
@@ -390,18 +423,42 @@ export class ApiTennisProvider implements TennisDataProvider {
       url.searchParams.set(key, value);
     }
 
+    const breaker = priority === "live" ? this.liveBreaker : this.bulkBreaker;
     try {
-      const response = await fetch(url.toString(), { signal: AbortSignal.timeout(10_000) });
-      if (!response.ok) {
-        throw new Error(`API-Tennis responded with HTTP ${response.status}`);
-      }
-      const body = (await response.json()) as ApiTennisEnvelope<T>;
-      if (body.success !== 1) {
-        throw new Error("API-Tennis reported an unsuccessful response");
-      }
+      const result = await this.queue.enqueue(priority, () =>
+        breaker.execute(() =>
+          withRetry(
+            async () => {
+              const response = await fetch(url.toString(), { signal: AbortSignal.timeout(10_000) });
+              if (!response.ok) {
+                const statusErr = Object.assign(
+                  new Error(`API-Tennis responded with HTTP ${response.status}`),
+                  { status: response.status },
+                );
+                throw statusErr;
+              }
+              const body = (await response.json()) as ApiTennisEnvelope<T> & { error?: string; message?: string };
+              if (body.success !== 1) {
+                const detail = body.error ?? body.message ?? JSON.stringify(body);
+                logger.warn({ method, detail }, "API-Tennis success=0 response");
+                throw new Error(`API-Tennis reported an unsuccessful response: ${detail}`);
+              }
+              return body.result;
+            },
+            {
+              attempts: 3,
+              baseDelayMs: 500,
+              maxDelayMs: 5_000,
+              retryOn: (err) => isTransientError(err),
+              onRetry: (err, attempt) =>
+                logger.warn({ err, method, attempt }, "API-Tennis call retrying"),
+            },
+          ),
+        ),
+      );
       this.lastSuccessfulCallAt = new Date().toISOString();
       this.lastError = null;
-      return body.result;
+      return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error calling API-Tennis";
       this.lastError = message;
@@ -413,8 +470,8 @@ export class ApiTennisProvider implements TennisDataProvider {
   private async getStandingsCache(): Promise<RawStandingRow[]> {
     return this.cache.getOrFetch("standings", STANDINGS_TTL_MS, async () => {
       const [atp, wta] = await Promise.all([
-        this.call<RawStandingRow[]>("get_standings", { event_type: "ATP" }),
-        this.call<RawStandingRow[]>("get_standings", { event_type: "WTA" }),
+        this.call<RawStandingRow[]>("live", "get_standings", { event_type: "ATP" }),
+        this.call<RawStandingRow[]>("live", "get_standings", { event_type: "WTA" }),
       ]);
       return [...(atp ?? []), ...(wta ?? [])];
     });
@@ -439,7 +496,7 @@ export class ApiTennisProvider implements TennisDataProvider {
    * map above and the name-based lookup below, so a name search never issues a second real API call. */
   private async getTournamentRows(): Promise<RawTournamentRow[]> {
     return this.cache.getOrFetch("tournamentRows", TOURNAMENTS_TTL_MS, async () => {
-      const rows = await this.call<RawTournamentRow[]>("get_tournaments");
+      const rows = await this.call<RawTournamentRow[]>("live", "get_tournaments");
       return rows ?? [];
     });
   }
@@ -482,8 +539,8 @@ export class ApiTennisProvider implements TennisDataProvider {
    */
   async getCurrentStandings(): Promise<Array<{ playerKey: string; rank: number; name: string; tour: "ATP" | "WTA" }>> {
     const [atp, wta] = await Promise.all([
-      this.call<RawStandingRow[]>("get_standings", { event_type: "ATP" }),
-      this.call<RawStandingRow[]>("get_standings", { event_type: "WTA" }),
+      this.call<RawStandingRow[]>("live", "get_standings", { event_type: "ATP" }),
+      this.call<RawStandingRow[]>("live", "get_standings", { event_type: "WTA" }),
     ]);
     const result: Array<{ playerKey: string; rank: number; name: string; tour: "ATP" | "WTA" }> = [];
     for (const row of atp ?? []) {
@@ -550,7 +607,7 @@ export class ApiTennisProvider implements TennisDataProvider {
 
   async getPlayer(playerId: string): Promise<PlayerProfile | null> {
     const [players, standings] = await Promise.all([
-      this.call<RawPlayer[]>("get_players", { player_key: playerId }),
+      this.call<RawPlayer[]>("live", "get_players", { player_key: playerId }),
       this.getStandingsCache(),
     ]);
     const raw = players?.[0];
@@ -586,7 +643,9 @@ export class ApiTennisProvider implements TennisDataProvider {
 
     const [raw, surfaceByTournamentKey] = await Promise.all([
       this.cache.getOrFetch(`matches:${playerId}`, FIXTURES_TTL_MS, () =>
-        this.call<RawMatch[]>("get_fixtures", {
+        // bulk: walk-forward / parlay-builder player-history fetches; uses the
+        // bulk circuit breaker so timeouts here never trip the live-trading circuit.
+        this.call<RawMatch[]>("bulk", "get_fixtures", {
           player_key: playerId,
           date_start: fmt(dateStart),
           date_stop: fmt(dateStop),
@@ -684,13 +743,19 @@ export class ApiTennisProvider implements TennisDataProvider {
       this.cache.getOrFetch(
         `fixtures:${dateStart}:${dateStop}`,
         FIXTURES_TTL_MS,
-        () => this.call<RawMatch[]>("get_fixtures", { date_start: dateStart, date_stop: dateStop }),
+        () => this.call<RawMatch[]>("live", "get_fixtures", { date_start: dateStart, date_stop: dateStop }),
         { bypass: opts?.bypassCache },
       ),
       this.getTournamentSurfaceMap(),
     ]);
 
-    return (raw ?? []).filter((m) => m.event_winner === null).map((m) => this.mapUpcomingFixture(m, surfaceByTournamentKey));
+    return (raw ?? [])
+      .filter((m) => m.event_winner === null)
+      // Drop doubles fixtures — tournament names include "Doubles" and the
+      // prediction engine is singles-only.
+      .filter((m) => !/doubles/i.test(m.tournament_name ?? ""))
+      .filter((m) => !m.event_first_player?.includes("/") && !m.event_second_player?.includes("/"))
+      .map((m) => this.mapUpcomingFixture(m, surfaceByTournamentKey));
   }
 
   /**
@@ -712,7 +777,7 @@ export class ApiTennisProvider implements TennisDataProvider {
     const dateStop = new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
     const raw = await this.cache.getOrFetch(`live-scores:${dateStart}:${dateStop}`, LIVE_SCORE_TTL_MS, () =>
-      this.call<RawMatch[]>("get_fixtures", { date_start: dateStart, date_stop: dateStop }),
+      this.call<RawMatch[]>("live", "get_fixtures", { date_start: dateStart, date_stop: dateStop }),
     );
 
     for (const m of raw ?? []) {
@@ -732,7 +797,8 @@ export class ApiTennisProvider implements TennisDataProvider {
    */
   async getCompletedMatchesByDateRange(dateStart: string, dateStop: string): Promise<HistoricalFixture[]> {
     const [raw, surfaceByTournamentKey] = await Promise.all([
-      this.call<RawMatch[]>("get_fixtures", { date_start: dateStart, date_stop: dateStop }),
+      // bulk: historical backfill date-range pull; isolated from live-trading circuit.
+      this.call<RawMatch[]>("bulk", "get_fixtures", { date_start: dateStart, date_stop: dateStop }),
       this.getTournamentSurfaceMap(),
     ]);
 
@@ -810,7 +876,7 @@ export class ApiTennisProvider implements TennisDataProvider {
   async getHeadToHead(player1Id: string, player2Id: string): Promise<HeadToHeadRecord> {
     const [raw, surfaceByTournamentKey] = await Promise.all([
       this.cache.getOrFetch(`h2h:${player1Id}:${player2Id}`, FIXTURES_TTL_MS, () =>
-        this.call<{ H2H: RawMatch[] }>("get_H2H", {
+        this.call<{ H2H: RawMatch[] }>("live", "get_H2H", {
           first_player_key: player1Id,
           second_player_key: player2Id,
         }),

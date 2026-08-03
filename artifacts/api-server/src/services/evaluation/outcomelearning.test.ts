@@ -39,6 +39,8 @@ import { runPatternAnalysis } from "./patternAnalysis";
 import { runThresholdEvaluation } from "./thresholdEvaluation";
 import { applyTieBreaker, TIE_BAND } from "../predictionEngine/tieBreakers";
 import type { TieBreakerInputs } from "../predictionEngine/tieBreakers";
+import { checkTrainingModeGuard, MIN_ELIGIBLE_FOR_TRAINING } from "./walkForward";
+import { countNewGradedSinceLastRefit } from "../../jobs/runCalibrationRefitJob";
 
 // ── Test 1: evaluationOnly guard — code-structure verification + early-return path ───────────────
 
@@ -426,4 +428,148 @@ test("Task #12 — DB schema: pattern_analysis_runs and threshold_evaluation_run
 
   const thresholdRows = await db.select({ id: thresholdEvaluationRunsTable.id }).from(thresholdEvaluationRunsTable).limit(1);
   assert.ok(Array.isArray(thresholdRows), "threshold_evaluation_runs table must be queryable");
+});
+
+// ── Test 7: Training-mode guards (task #78) ───────────────────────────────────────────────────────
+//
+// Two guards prevent a degenerate calibration refit from firing when historical data is sparse:
+//
+//   A. walkForward.ts — inline training-mode floor: if an active calibration model exists
+//      AND the run is unscoped (scopedMatchIds === null) AND eligible < MIN_ELIGIBLE_FOR_TRAINING,
+//      return early without writing to calibration_models.
+//      Exceptions: scoped runs (matchIds provided) and bootstrap (no active model) always proceed.
+//
+//   B. runCalibrationRefitJob.ts — pre-flight guard: before calling runWalkForwardEvaluation(),
+//      count new graded paper_trade/live evaluation_predictions since the last ACTIVE model's
+//      fittedAt. If < MIN_NEW_GRADED_FOR_REFIT, record a skipped job_runs row and return.
+//      Bootstrap (no active model) always proceeds.
+//
+// Both tests are source-code structural checks — fast (<5ms), no DB required.
+
+// ── Behavioral tests ──────────────────────────────────────────────────────────────────────────────
+
+test("Task #78 — behavioral: checkTrainingModeGuard returns skip=false for evaluation-only runs regardless of DB state", async () => {
+  // evaluationOnly=true must always bypass the training guard — it never writes calibration.
+  const result = await checkTrainingModeGuard({ evaluationOnly: true, scopedMatchIds: null, eligibleCount: 5 });
+  assert.equal(result.skip, false, "evaluationOnly run must never be blocked by the training-mode guard");
+  assert.equal(result.reason, "evaluationOnly");
+});
+
+test("Task #78 — behavioral: checkTrainingModeGuard returns skip=false for scoped (test) runs regardless of DB state", async () => {
+  // Scoped runs (matchIds provided) are test/development invocations. They must bypass the guard
+  // so integration tests seeded with a small corpus can still exercise the fold pipeline.
+  const result = await checkTrainingModeGuard({ evaluationOnly: false, scopedMatchIds: [1, 2, 3], eligibleCount: 5 });
+  assert.equal(result.skip, false, "Scoped run must never be blocked by the training-mode guard");
+  assert.equal(result.reason, "scoped");
+});
+
+test("Task #78 — behavioral: checkTrainingModeGuard returns skip=false when eligible count exceeds floor", async () => {
+  // When eligible >= MIN_ELIGIBLE_FOR_TRAINING the floor does not apply regardless of DB state.
+  const result = await checkTrainingModeGuard({ evaluationOnly: false, scopedMatchIds: null, eligibleCount: MIN_ELIGIBLE_FOR_TRAINING + 100 });
+  assert.equal(result.skip, false, "Above-floor run must not be blocked by the training-mode guard");
+  assert.equal(result.reason, "aboveFloor");
+});
+
+test("Task #78 — behavioral: checkTrainingModeGuard defers to active-model DB state for unscoped below-floor training runs", async () => {
+  // This is the core guard behavior: unscoped, training-mode, below the eligible-count floor.
+  // Whether it skips depends on whether an active calibration model exists in the DB.
+  const result = await checkTrainingModeGuard({ evaluationOnly: false, scopedMatchIds: null, eligibleCount: 10 });
+  const [activeModel] = await db.select({ id: calibrationModelsTable.id }).from(calibrationModelsTable).where(eq(calibrationModelsTable.active, true)).limit(1);
+  if (activeModel) {
+    assert.equal(result.skip, true,
+      "With an active calibration model and only 10 eligible matches, the guard must skip to protect the deployed model");
+    assert.equal(result.reason, "activeModelExists");
+  } else {
+    assert.equal(result.skip, false,
+      "Bootstrap: no active model means the run must proceed so the first real model can be fitted");
+    assert.equal(result.reason, "bootstrap");
+  }
+});
+
+test("Task #78 — behavioral: countNewGradedSinceLastRefit returns a valid count or null (bootstrap)", async () => {
+  // Verifies the job pre-flight query runs without error and returns a type-valid result.
+  const result = await countNewGradedSinceLastRefit();
+  if (result === null) {
+    // No active calibration model: bootstrap environment, guard does not apply.
+    const [activeModel] = await db.select({ id: calibrationModelsTable.id }).from(calibrationModelsTable).where(eq(calibrationModelsTable.active, true)).limit(1);
+    assert.ok(!activeModel, "countNewGradedSinceLastRefit must return null only when no active calibration model exists");
+  } else {
+    assert.ok(typeof result === "number" && result >= 0,
+      `countNewGradedSinceLastRefit must return a non-negative integer when an active model exists, got: ${result}`);
+  }
+});
+
+// ── Structural invariant tests ─────────────────────────────────────────────────────────────────────
+
+test("Task #78 — training-mode guard in walkForward.ts: source must gate training on eligible count when an active model exists", () => {
+  const src = readFileSync(resolve(__dirname, "walkForward.ts"), "utf-8");
+
+  // The guard constant must be present
+  assert.ok(
+    src.includes("MIN_ELIGIBLE_FOR_TRAINING"),
+    "walkForward.ts must define MIN_ELIGIBLE_FOR_TRAINING",
+  );
+
+  // The guard must check evaluationOnly (only training mode)
+  assert.ok(
+    src.includes("!evaluationOnly"),
+    "walkForward.ts training guard must be gated on !evaluationOnly",
+  );
+
+  // The guard must check for an active calibration model (bootstrap exception)
+  assert.ok(
+    src.includes("active: true") || src.includes("active, true"),
+    "walkForward.ts training guard must query for an active calibration model (bootstrap exception: no active model → always run)",
+  );
+
+  // The guard must check for scoped runs (scopedMatchIds === null means unscoped = production)
+  assert.ok(
+    src.includes("scopedMatchIds === null"),
+    "walkForward.ts training guard must be skipped for scoped (test) runs by checking scopedMatchIds === null",
+  );
+
+  // The guard must appear before any calibration_models insert
+  const guardIdx = src.indexOf("MIN_ELIGIBLE_FOR_TRAINING");
+  const calibrationInsertIdx = src.indexOf("insert(calibrationModelsTable)");
+  assert.ok(
+    guardIdx < calibrationInsertIdx,
+    "walkForward.ts: MIN_ELIGIBLE_FOR_TRAINING guard must appear before calibration_models insert",
+  );
+});
+
+test("Task #78 — pre-flight guard in runCalibrationRefitJob.ts: source must skip refit when too few new graded predictions since last active model", () => {
+  const jobSrc = readFileSync(
+    resolve(__dirname, "../../jobs/runCalibrationRefitJob.ts"),
+    "utf-8",
+  );
+
+  // The minimum threshold constant must be present
+  assert.ok(
+    jobSrc.includes("MIN_NEW_GRADED_FOR_REFIT"),
+    "runCalibrationRefitJob.ts must define MIN_NEW_GRADED_FOR_REFIT",
+  );
+
+  // The guard must check only the active model (not inactive/degenerate rows)
+  assert.ok(
+    jobSrc.includes("active: true") || jobSrc.includes("active, true"),
+    "runCalibrationRefitJob.ts preflight must filter to the active calibration model only (inactive degenerate rows must not block bootstrap)",
+  );
+
+  // The guard must order by fittedAt descending for safety-critical correctness
+  assert.ok(
+    jobSrc.includes("fittedAt") && jobSrc.includes("desc"),
+    "runCalibrationRefitJob.ts active-model query must order by fittedAt desc",
+  );
+
+  // The guard must produce a skipped job_runs row when it fires (not an error row)
+  assert.ok(
+    jobSrc.includes('"skipped"') || jobSrc.includes("skipped: true"),
+    "runCalibrationRefitJob.ts must record a skipped job_runs row when the guard fires (not an error)",
+  );
+
+  // The guard must return null when no active model exists (bootstrap always proceeds)
+  assert.ok(
+    jobSrc.includes("return null"),
+    "runCalibrationRefitJob.ts preflight must return null when no active model exists so bootstrap always runs",
+  );
 });

@@ -1,0 +1,64 @@
+Priority Fix
+
+🛑🛑🛑
+Bug: the "Too Close to Call" hero banner in PredictionResult.tsx displays prediction.calibratedProbability, but tieBreakerApplied is set based on rawEnsembleProbability being within TIE_BAND of 50 (see index.ts line ~485-497). These are different values from different pipeline stages, and nothing keeps them consistent — confirmed real cases where the banner reads "too close to call / no strong signal" while the displayed percentages show 100.0%/0.0% (e.g. E. Winter vs J. Brooksby, A. Gea vs Michael Zheng).
+
+Root cause: calibration, segment-specialist blending, and simulator blending all run AFTER the tie-breaker check, and can push the probability to an extreme even when the raw ensemble was genuinely a coin flip.
+
+Fix needed — pick the correct semantic, don't just patch the display:
+1. Determine whether "Too Close to Call" should reflect the RAW ensemble (in which case the banner should show rawEnsembleProbability / 100-rawEnsembleProbability, not calibratedProbability), or
+2. Whether calibratedProbability swinging to an extreme AFTER a tie-breaker determination should itself invalidate tieBreakerApplied (i.e. re-check tie-band membership on the FINAL calibratedProbability, not just the raw input).
+
+Investigate which of these two matches the intended product behavior, fix accordingly, and add a test that specifically catches this case: rawEnsembleProbability near 50 (triggering tieBreakerApplied) combined with a calibration/specialist/simulator path that pushes calibratedProbability to an extreme — assert the displayed banner and the displayed percentage are never contradictory again.
+
+Also audit whether this same inconsistency exists anywhere else calibratedProbability is displayed without checking tieBreakerApplied's underlying rawEnsembleProbability — report all locations found, don't just fix PredictionResult.tsx in isolation.
+🛑🛑🛑
+
+Confirmed bug in builderScoringService.ts: risk and validation scoring can improve (lower risk, higher score, Elite tier) at the exact moment a matchup's opponent-side data collapses (e.g. Michael Zheng dropping to "1 match found"). Two root causes, both need fixing:
+
+1. `if (sel.total < 10) risk += 12` only checks the SELECTED player's total match count. Add an equivalent check for the opponent (`opp.total < 10`) so thin opponent data is penalized the same way thin selected-player data is.
+
+2. `if (agreementRate > 0.75) risk -= 8` has no sample-size gate — a 3/3 (100%) unanimous agreement from a collapsed factor set gets the same or stronger risk reduction as a 7/8 (88%) agreement from a full factor set. Add a minimum `available` count (e.g. available >= 5) before this bonus applies, so a small coincidental-agreement sample can't outscore a larger, more genuinely-tested one.
+
+3. Add a consistency check (similar to the prediction engine's checkFinalConsistency) that catches the specific contradiction just reproduced: a card showing "Very limited match history for [player]" or "INSUFFICIENT DATA" should never simultaneously be eligible for ELITE tier or a risk score below some floor (e.g. risk < 20). If both conditions are true, force the tier down and flag it as a caught inconsistency, the same pattern already used in the prediction engine's finalConsistencyCheck.ts.
+
+Write a test reproducing this exact scenario: a matchup where available opinionated factors drop from a large number to a small one (e.g. 8→3) due to one player's data becoming unavailable, all remaining factors happening to agree, and assert that risk does NOT decrease and tier does NOT improve as a result.
+🛑🛑🛑
+
+Two items to close out before considering this session done:
+
+1. Add or point to an explicit test confirming walk-forward's specialist behavior is byte-for-byte unchanged by this diff — not just "existing tests pass," but a direct before/after comparison on a specific matchup's specialist weight/contribution, since isPointInTimeReplay defaults to undefined there and that default path has no dedicated coverage in what was reported.
+
+2. Triage (don't just note) the two pre-existing failures:
+   - leakage.test.ts: read the actual assertion that's failing and report what real condition it's flagging — a leakage test failure usually points at a genuine train/eval contamination risk, not a flaky test. If it's truly unrelated and pre-existing, file it as its own tracked issue with the actual root cause, not just "pre-existing."
+   - runHistoricalBackfillJob.smoke.test.ts: read the actual exit-1 error output (not the exit code alone) and confirm it really is dev-environment API connectivity, not a real regression. Quote the actual error.
+
+Report findings plainly — if either turns out to be a real bug, say so rather than closing the loop on an assumption.
+
+
+Once the deploy is live and requireAdmin is confirmed working:
+
+1. Before triggering the backfill, confirm: does requireAdmin fully replace the subscription entitlement check on this route, or run alongside it? State which, plainly.
+
+2. Trigger the narrow run: POST /api/evaluation/sackmann-backfill/run { startYear: 2023, endYear: 2023, tours: ["atp"], includeChallengerItf: true }. Poll status to completion.
+
+3. Report exact new rows inserted specifically from the Sackmann challenger/ITF file for 2023 ATP — not combined with existing counts.
+
+4. Critical: run a real dedup check across ALL sources, not just Sackmann-vs-Sackmann. For Jodar, Mannarino, and Nishikori specifically, check whether any of the 57/27/17 already-present Challenger/ITF matches (from other providers) now have a duplicate Sackmann-sourced row for the same match (same date + both players + same tournament, allowing for name-format differences). Report exact count of any collisions found, and whether they were prevented or need manual cleanup.
+
+5. Spot-check 5 actual newly-inserted rows for correct player identity resolution (do names match existing player IDs, or did any create phantom duplicate player records?), correct date, correct surface, correct tournament level.
+
+6. Report final Jodar/Mannarino/Nishikori total match counts and updated Data Quality scores, compared to the production baseline (104/112/39 total, 0/0/0 Sackmann-specific).
+
+Do not report success until the cross-source dedup check in step 4 has been run and its results shown.
+
+Confirmed bug in builderScoringService.ts's agreement-counting logic: across every tested matchup with real factor data, agreeing(Player A selected) + agreeing(Player B selected) exceeds the total available factor count by exactly +1, consistently, across at least 11 distinct matchups. This points to exactly one factor among the "decisive factors" set that is non-directional (does not actually evaluate which of the two players it supports) and is being unconditionally counted toward "agreeing" regardless of which player is currently selected.
+
+Fix required:
+1. Audit every factor that contributes to the sourceAgreement/decisiveFactors count and identify which one lacks a real sel-vs-opp directional comparison — likely a coverage, quality, or availability-style factor that was meant to gate inclusion, not count as agreement.
+2. Either give that factor a genuine directional check (does it actually favor sel over opp, or opp over sel, or neither), or exclude it from the agreement numerator/denominator entirely if it's meant to be a data-quality gate rather than a predictive signal.
+3. Add a regression test that runs the SAME matchup from both selection directions and asserts: agreeing(A) + agreeing(B) <= total available, for every factor set — this is a structural invariant that should never be violated regardless of which specific factors are active.
+4. Re-run this test against all matchups from this session's screenshots (Khachanov/Tomic, Onclin/Gentzsch, Valentova/Snigur, Krejcikova/Tagger, Grubor/Schoppe, Brooksby/Winter, Wong/Lehecka, Fearnley/Zheng, Sakellaridis/Damas, Prisacariu/Chiesa, Pieri/Gomez, Pankin/Dhamne, Ibragimova/Bronzetti) and confirm the invariant holds post-fix, reporting corrected Agreement and tier for each.
+
+
+

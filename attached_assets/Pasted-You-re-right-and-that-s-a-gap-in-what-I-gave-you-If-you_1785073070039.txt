@@ -1,0 +1,27 @@
+You’re right, and that’s a gap in what I gave you.
+
+If you’re building a professional-grade validation engine, I wouldn’t stop at Tennis Abstract. I’d build a panel of sources that each contribute a different type of information.
+
+My top choices would be:
+
+1. Tennis Abstract — The gold standard for Elo ratings, surface-adjusted ratings, historical match data, and player statistics. It should be the backbone of the validation layer. 
+2. UTR Sports (Universal Tennis Rating) — UTR uses its own rating system and also provides head-to-head predictions and tournament simulations. It often has broader coverage of Challenger and lower-level players than Elo leaderboards alone. 
+3. ATP/WTA Official Rankings — Rankings shouldn’t drive your decisions by themselves, but they provide context that complements Elo, especially when Elo and ranking disagree. 
+4. Betting market consensus (especially Pinnacle closing odds or equivalent sharp markets) — Historically, betting markets have been among the strongest predictors of match outcomes because they aggregate large amounts of information. Even Tennis Abstract has highlighted that betting markets can outperform individual rating systems in predictive accuracy. 
+5. Recent form and match history — Last 10 matches, surface-specific record, quality of opponents, and hold/break percentages. Tennis Abstract provides much of this data, but it’s valuable enough that I’d score it separately rather than bury it inside Elo. 
+6. Head-to-head and surface-specific matchup — A 5–0 head-to-head on clay tells you something different than overall Elo. It shouldn’t dominate the model, but it belongs in the validation layer.
+
+⸻
+
+If this were my validation engine, I’d weight them roughly like this:
+
+* 30% – Tennis Abstract (surface Elo + overall Elo)
+* 20% – UTR Rating & matchup projections
+* 20% – Recent form and surface performance
+* 15% – Sharp betting market consensus
+* 10% – Head-to-head and matchup characteristics
+* 5% – ATP/WTA rankings and tournament context
+
+The key is that no single source decides whether a pick stays or goes. Instead, they all contribute to an independent validation score.
+
+I also think there’s one improvement that would make your Parlay Builder much stronger: instead of asking, “Who does Tennis Abstract like?”, ask, “How many independent systems agree with my engine?” If your engine, Tennis Abstract, UTR, recent form, and the betting market all point to the same player, that’s a much stronger signal than relying on any one source alone.

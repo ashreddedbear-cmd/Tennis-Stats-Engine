@@ -34,6 +34,23 @@ export interface HistoricalScoringContext {
    * cycle's own validation output, so they must never be applied back to this SAME cycle's rows.
    */
   specialistRowsBySegmentKey: ReadonlyMap<string, SpecialistModelRow>;
+  /**
+   * Set to `true` by shadow replay (`shadowReplay.ts`) to signal that this scoring call is a
+   * point-in-time historical evaluation.  When true, the segment specialist is suppressed:
+   * specialist calibration mappings in `specialistRowsBySegmentKey` are always from TODAY's DB
+   * state (the previous run's persisted fit), never from the mapping that was in force as of the
+   * match's own `cutoffAt`, so applying them alongside a historical general-calibration override
+   * mixes two incompatible time-points and partially defeats the override.
+   *
+   * Walk-forward leaves this undefined/false: it legitimately uses the previous cycle's specialist
+   * fit (pre-circular by design), so suppression is wrong there.
+   *
+   * Do NOT gate this on whether `activeCalibrationOverride` was supplied by the caller — that
+   * would be a "caller-supplied-or-not" signal the calibration-architecture doc explicitly forbids,
+   * because the override can be null even in a shadow replay run (no calibration history before
+   * that match's date) while still needing consistent specialist treatment throughout the replay.
+   */
+  isPointInTimeReplay?: boolean;
 }
 
 function minimalProfile(id: string, name: string): PlayerProfile {
@@ -96,7 +113,21 @@ export function scoreHistoricalMatch(
   const headToHead = reconstructHeadToHead(context.matchHistory, match.player1Id, match.player2Id, match.cutoffAt);
   // Task #65: previous-cycle specialist fit, never this cycle's own -- see the doc on
   // `HistoricalScoringContext.specialistRowsBySegmentKey`.
-  const segment = resolveSegmentSpecialistInputSync(match.tour, surface, context.specialistRowsBySegmentKey);
+  // Shadow replay sets `context.isPointInTimeReplay = true` to suppress the specialist:
+  // specialist calibration is always today's DB state, never the mapping in force at the match's
+  // own cutoffAt, so mixing it with a per-match historical general calibration produces
+  // inconsistent results. Walk-forward leaves isPointInTimeReplay false/undefined and continues
+  // to apply the previous cycle's specialist fit (non-circular by design).
+  //
+  // NOTE: this intentionally does NOT gate on whether `activeCalibrationOverride` was supplied.
+  // The shadow replay always suppresses specialists regardless of whether a calibration override
+  // was resolved for a given match (the override can be null when no prior calibration artifact
+  // predates that match's cutoffAt). Gating on the override presence would let specialist
+  // behaviour silently diverge within a single replay run -- the pattern the
+  // predictionengine-calibration-architecture.md doc explicitly forbids.
+  const segment = context.isPointInTimeReplay
+    ? null
+    : resolveSegmentSpecialistInputSync(match.tour, surface, context.specialistRowsBySegmentKey);
 
   const output = runPredictionEngine({
     player1: minimalProfile(match.player1Id, match.player1Name),

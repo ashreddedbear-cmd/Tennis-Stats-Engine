@@ -1,111 +1,114 @@
-import type { UpsetRisk } from "./upsetRisk";
 import type { DataQualityLabel } from "./dataQuality";
 import type { ModelAgreement } from "./ensemble";
 
-export type Recommendation = "STRONG_RECOMMENDATION" | "MODERATE_LEAN" | "HIGH_RISK" | "NO_STRONG_SIGNAL" | "DO_NOT_RECOMMEND";
-
-const HIGH_PROBABILITY_MARGIN_FLOOR = 40; // 90% winner-confidence equivalent (or 10% for player1-relative probability)
+export type Recommendation =
+  | "HIGHEST_CONFIDENCE"
+  | "HIGH_CONFIDENCE"
+  | "MODERATE_CONFIDENCE"
+  | "LOW_CONFIDENCE"
+  | "INSUFFICIENT_EDGE";
 
 /**
- * NO_STRONG_SIGNAL is distinct from HIGH_RISK: HIGH_RISK means the engine has a real lean but the
- * matchup carries genuine upset danger (e.g. a big favorite who could plausibly lose).
- * NO_STRONG_SIGNAL means the engine simply doesn't have a lean at all -- the probability is close
- * to a coin flip AND the underlying models don't agree -- so there's nothing meaningful to
- * recommend either way, as opposed to a real signal that's merely risky.
+ * Floor used by the "very high confidence" guardrail below.
+ * margin ≥ 40 is equivalent to a calibrated winner probability ≥ 90%.
+ */
+const HIGH_PROBABILITY_MARGIN_FLOOR = 40;
+
+/**
+ * Recommendation measures how strongly the total available evidence supports
+ * the predicted winner — NOT how likely an upset is or how risky the match is.
+ * Upset Risk is a separate, independent signal that answers a different question
+ * ("how volatile is this match?"). These two signals are intentionally decoupled:
+ * a prediction may validly show HIGH_CONFIDENCE + MODERATE Upset Risk, or
+ * LOW_CONFIDENCE + LOW Upset Risk. Forcing them to match produces a redundant,
+ * confusing badge (the old HIGH_RISK fallthrough said "risky" while Upset Risk
+ * already said "Extreme" — two labels for one claim).
+ *
+ * Tier meanings:
+ *   HIGHEST_CONFIDENCE  — strong, reliable, consistent evidence across several
+ *                         independent signals; all three core signals agree.
+ *   HIGH_CONFIDENCE     — clear model-supported advantage; doesn't satisfy every
+ *                         HIGHEST_CONFIDENCE requirement, but well-supported.
+ *   MODERATE_CONFIDENCE — meaningful advantage, but evidence is mixed, incomplete,
+ *                         or contested (mixed models or modest margin).
+ *   LOW_CONFIDENCE      — projected winner, but the advantage is fragile, narrow,
+ *                         or heavily affected by uncertainty.
+ *   INSUFFICIENT_EDGE   — pass / abstain: evidence doesn't reliably separate the
+ *                         players; not a forced confident pick.
+ *
+ * INSUFFICIENT_EDGE is distinct from LOW_CONFIDENCE: INSUFFICIENT_EDGE means the
+ * engine has no reliable directional lean at all (coin-flip range, conflicted
+ * models on a thin margin, or data too poor to trust), while LOW_CONFIDENCE means
+ * the engine does identify a lean but the supporting evidence is fragile.
  */
 export function computeRecommendation(
   calibratedProbability: number,
   dataQuality: number,
   dataQualityLabel: DataQualityLabel,
-  upsetRisk: UpsetRisk,
   modelAgreement: ModelAgreement,
   /**
-   * Pass `tieBreaker.applied` from the engine output. When true the raw ensemble sat within
-   * `TIE_BAND` of 50 -- no validated signal provides a reliable directional edge in that
-   * probability range (every cascade step measured at or below coin-flip accuracy on real graded
-   * outcomes; see tieBreakers.ts history block). Routing to NO_STRONG_SIGNAL ensures the stored
-   * recommendation is consistent with the UI's "Too close to call" treatment and prevents a
-   * genuinely ambiguous match from being mislabelled HIGH_RISK by the fallthrough branch.
-   * Defaults to false so old call sites (e.g. finalConsistencyCheck Rule 10 on legacy rows) are
-   * not retroactively changed.
+   * Pass `tieBreaker.applied` from the engine output. When true the raw ensemble
+   * sat within TIE_BAND of 50 — no validated signal provides a reliable
+   * directional edge in that range. Routes to INSUFFICIENT_EDGE, consistent with
+   * the UI's "Too close to call" treatment.
+   * Defaults to false so call sites that predate this parameter are unchanged.
    */
   tieBreakerApplied = false,
+  /**
+   * True when all three primary signals — Surface Elo, Serve & Return, and
+   * Recent Form — independently point at the same player. This is the same
+   * corroboration check the Elite tier gate uses (eliteTier.ts) and is the
+   * cleanest proxy for "evidence agreement across independent streams". Required
+   * for HIGHEST_CONFIDENCE: modelAgreement (the weighted-vote consensus) can be
+   * "Strong" even when the three core signals split 2-vs-1 on direction; requiring
+   * all three to independently agree is a meaningfully higher bar.
+   * Defaults to false so call sites that predate this parameter continue producing
+   * the same output they always did.
+   */
+  coreSignalsAlign = false,
 ): Recommendation {
   const margin = Math.abs(calibratedProbability - 50);
 
-  if (dataQualityLabel === "Poor" || dataQuality < 25) return "DO_NOT_RECOMMEND";
-  // Raw ensemble was coin-flip level — no validated signal exists in this probability range.
-  // Returning NO_STRONG_SIGNAL keeps the recommendation consistent with the UI's "Too close to
-  // call" disclosure and avoids the HIGH_RISK fallthrough mislabelling an ambiguous match.
-  if (tieBreakerApplied) return "NO_STRONG_SIGNAL";
-  if (margin < 8 && (modelAgreement === "Mixed" || modelAgreement === "HighDisagreement")) return "NO_STRONG_SIGNAL";
-  if (upsetRisk === "EXTREME") return "HIGH_RISK";
-  // Phase 7 fix: at ≥85% confidence (margin≥35), non-extreme risk, and no active model
-  // disagreement, always return STRONG_RECOMMENDATION — a 92% prediction mislabeled "LEAN"
-  // due to modelAgreement not being exactly "Strong" is confusing and misleading. This gate
-  // applies ONLY going forward; saved records are never retroactively mutated.
-  if (
-    margin >= 35 &&
-    dataQuality >= 45 &&
-    (upsetRisk === "LOW" || upsetRisk === "MODERATE") &&
-    modelAgreement !== "Mixed" &&
-    modelAgreement !== "HighDisagreement"
-  )
-    return "STRONG_RECOMMENDATION";
-  // Task #75: the dataQuality>=55 floor here was tuned before Task #68 excluded Head-to-Head from
-  // the Data Quality blend, which pushed most real scores higher. A real walk-forward re-run
-  // (docs/audit-task75-dq-threshold-revalidation.md) shows the 45-55 band is now the
-  // best-calibrated slice of the whole distribution (log loss 0.662, only +2.6pt gap vs. observed
-  // favorite win rate) -- better than 55-65 (log loss 0.693, -2.9pt gap), which the old >=55 floor
-  // let through untouched while excluding the stronger 45-55 band. Lowered to 45 (the "Acceptable"
-  // label floor) so STRONG_RECOMMENDATION reaches the segment the evidence actually supports.
-  // Task #120: Task #116's audit found STRONG_RECOMMENDATION (margin>=22, i.e. confidence>=72%)
-  // had the worst log loss of any tier (0.736, worse than a coin flip) on n=189 -- a real but
-  // small-sample warning. This task re-checked it against an independent fresh backtest sample
-  // (n=44) and found the same pattern reproduces (log loss 0.729, accuracy indistinguishable from
-  // MODERATE_LEAN) -- see docs/audit-task120-strong-recommendation-revalidation.md. Thresholds are
-  // left unchanged: the better-powered confidence-band calibration curve (n=307-136 in the
-  // relevant range) shows overconfidence *worsens*, not improves, above this gate's ~72%
-  // confidence floor, so raising the margin further would select an equally/more overconfident
-  // population rather than a better-calibrated one (unlike Task #75's DQ retune, where a threshold
-  // move did land on a genuinely better-calibrated band). The real fix belongs in the calibration
-  // curve itself (calibration.ts), not this gate -- re-check this threshold again once that's
-  // addressed and once live paper-trading volume (Task #121) exists to compare against.
-  if (
-    margin >= 26 &&
-    dataQuality >= 50 &&
-    upsetRisk === "LOW" &&
-    modelAgreement === "Strong"
-  )
-    return "STRONG_RECOMMENDATION";
-  if (
-    margin >= 12 &&
-    (upsetRisk === "LOW" || upsetRisk === "MODERATE") &&
-    modelAgreement !== "Mixed" &&
-    modelAgreement !== "HighDisagreement"
-  )
-    return "MODERATE_LEAN";
-  // Margin 8-10 (exclusive of the >=10 branch above, so effectively [8, 10)) with a genuinely
-  // low/moderate upset risk and non-Mixed/HighDisagreement agreement is a real, if modest, lean --
-  // not a case of "genuine upset danger" (HIGH_RISK's documented meaning above). Falling through
-  // to HIGH_RISK for these rows mislabeled otherwise-unremarkable matches as risky.
-  if (
-    margin >= 9 &&
-    (upsetRisk === "LOW" || upsetRisk === "MODERATE") &&
-    modelAgreement !== "Mixed" &&
-    modelAgreement !== "HighDisagreement"
-  )
-    return "MODERATE_LEAN";
-  // Guardrail: very high-confidence picks (>=90% winner-confidence equivalent) should not be
-  // shown as HIGH_RISK unless there is explicit severe conflict evidence (Mixed/HighDisagreement)
-  // or truly extreme upset danger. This keeps top-badge semantics aligned with user-facing
-  // intuition while preserving the stricter STRONG_RECOMMENDATION gate above.
-  if (
-    margin >= HIGH_PROBABILITY_MARGIN_FLOOR &&
-    upsetRisk !== "EXTREME" &&
-    modelAgreement !== "Mixed" &&
-    modelAgreement !== "HighDisagreement"
-  )
-    return "MODERATE_LEAN";
-  return "HIGH_RISK";
+  // ── INSUFFICIENT_EDGE ──────────────────────────────────────────────────────
+  // The evidence does not support a reliable directional pick.
+
+  // 1. Data too thin / poor quality to trust any signal.
+  if (dataQualityLabel === "Poor" || dataQuality < 25) return "INSUFFICIENT_EDGE";
+  // 2. Raw ensemble within coin-flip range — no validated directional edge exists.
+  if (tieBreakerApplied) return "INSUFFICIENT_EDGE";
+  // 3. Small lean with conflicted or mixed models = no reliable edge.
+  if (margin < 8 && (modelAgreement === "Mixed" || modelAgreement === "HighDisagreement")) return "INSUFFICIENT_EDGE";
+
+  // ── HIGHEST_CONFIDENCE ─────────────────────────────────────────────────────
+  // Strong, reliable, consistent evidence across independent signals. Requires:
+  //  • all three core signals agree on the same player (coreSignalsAlign)
+  //  • strong probability margin from a coin flip
+  //  • data quality above the "Acceptable" floor
+  //  • full model consensus (Strong agreement)
+  // Upset risk is NOT checked here — it is a separate, independent dimension.
+  if (margin >= 35 && dataQuality >= 45 && modelAgreement === "Strong" && coreSignalsAlign)
+    return "HIGHEST_CONFIDENCE";
+  if (margin >= 26 && dataQuality >= 50 && modelAgreement === "Strong" && coreSignalsAlign)
+    return "HIGHEST_CONFIDENCE";
+
+  // ── HIGH_CONFIDENCE ────────────────────────────────────────────────────────
+  // Clear, well-supported advantage with non-conflicted models.
+  if (margin >= 20 && modelAgreement === "Strong") return "HIGH_CONFIDENCE";
+  if (margin >= 12 && (modelAgreement === "Strong" || modelAgreement === "Moderate")) return "HIGH_CONFIDENCE";
+  if (margin >= 9 && modelAgreement === "Strong") return "HIGH_CONFIDENCE";
+  // Guardrail: very high-confidence picks (≥ 90% winner-equivalent margin) with
+  // non-conflicted models must never be classified as merely a modest lean.
+  if (margin >= HIGH_PROBABILITY_MARGIN_FLOOR && modelAgreement !== "Mixed" && modelAgreement !== "HighDisagreement")
+    return "HIGH_CONFIDENCE";
+
+  // ── MODERATE_CONFIDENCE ────────────────────────────────────────────────────
+  // Meaningful advantage, but with mixed evidence or lower model consensus.
+  if (margin >= 9 && modelAgreement === "Moderate") return "MODERATE_CONFIDENCE";
+  // Mixed or HighDisagreement models with a real (≥ 12pt) margin — there IS a
+  // lean, but the models don't consistently agree on direction.
+  if (margin >= 12) return "MODERATE_CONFIDENCE";
+
+  // ── LOW_CONFIDENCE ─────────────────────────────────────────────────────────
+  // Projected winner, but the advantage is fragile, narrow, or contested.
+  return "LOW_CONFIDENCE";
 }

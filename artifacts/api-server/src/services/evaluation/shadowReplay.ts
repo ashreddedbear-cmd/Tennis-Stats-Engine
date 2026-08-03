@@ -260,6 +260,13 @@ export async function runShadowPaperTradingReplay(options: ShadowReplayOptions):
       eloHistory: await buildEloHistoryIndex(identityIndex, [...eloPlayerIds]),
       identityIndex,
       specialistRowsBySegmentKey,
+      // Shadow replay is point-in-time historical evaluation: suppress the segment specialist
+      // so its today's-DB calibration doesn't override the per-match historical general
+      // calibration resolved by `getCalibrationMappingAsOf`. See HistoricalScoringContext for
+      // the full rationale. This is set unconditionally (not gated on whether a calibration
+      // override was resolved for a given match) so specialist behaviour is consistent across
+      // the entire replay run regardless of calibration history coverage.
+      isPointInTimeReplay: true,
     };
 
     for (const match of dayMatches) {

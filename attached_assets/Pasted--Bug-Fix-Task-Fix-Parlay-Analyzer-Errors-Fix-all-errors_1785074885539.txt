@@ -1,0 +1,122 @@
+# Bug Fix Task – Fix Parlay Analyzer Errors
+
+Fix all errors shown below before continuing any new feature work.
+
+## 1. Fix "Vision AI provider unavailable"
+
+Three red error cards appear stating:
+
+"Could not read matchup"
+"Vision AI provider unavailable"
+
+### Required Fix
+
+- Determine why the Vision OCR provider is unavailable.
+- If the primary OCR provider fails, automatically fall back to a secondary OCR provider.
+- Do not leave the user with an unreadable matchup.
+- Display a helpful error only if every OCR provider fails.
+- Remove the duplicate error cards. One failed upload should generate only one error message.
+
+---
+
+## 2. Fix Player Resolution
+
+Current message:
+
+Read "B. Shick" for Player 1, but multiple matching players were found.
+
+### Required Fix
+
+Improve player resolution.
+
+The resolver should use:
+
+- Tournament
+- Tour
+- Surface
+- Opponent
+- Draw position
+- Event date
+
+to automatically determine the correct player whenever possible.
+
+Only ask the user to choose a player if there is genuinely no unique match after all contextual checks.
+
+---
+
+## 3. Fix Analyze Parlay Failure
+
+When pressing **Analyze Parlay**, evaluation fails with:
+
+Error:
+
+column "data_quality" does not exist
+
+### Required Fix
+
+Find where the application references the `data_quality` column.
+
+Either:
+
+- create the missing database column through a migration
+
+OR
+
+- update the code to use the correct existing schema.
+
+There should never be a runtime SQL error when Analyze Parlay is pressed.
+
+---
+
+## 4. Prevent Application Crash
+
+If one validation field is missing:
+
+DO NOT terminate the evaluation.
+
+Instead:
+
+- log the error
+- continue evaluating remaining factors
+- mark the missing factor as unavailable
+- slightly reduce validation confidence
+
+The analysis should complete whenever possible.
+
+---
+
+## 5. Improve Error Handling
+
+Replace raw database errors with user-friendly messages.
+
+Never expose errors like:
+
+column "data_quality" does not exist
+
+Instead display:
+
+"One validation source is temporarily unavailable. The analysis continued using the remaining available data."
+
+Log the technical error internally.
+
+---
+
+## 6. Validation Checklist
+
+After the fixes:
+
+✓ No "Vision AI provider unavailable" cards appear unless every OCR provider fails.
+
+✓ Duplicate OCR errors are eliminated.
+
+✓ Player resolution automatically identifies the correct player whenever context makes it possible.
+
+✓ Analyze Parlay completes successfully.
+
+✓ No SQL schema errors occur.
+
+✓ Missing validation fields do not crash the application.
+
+✓ Database errors are logged internally only.
+
+✓ The user always receives a completed analysis whenever enough data exists.

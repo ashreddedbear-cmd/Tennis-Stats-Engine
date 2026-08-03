@@ -1,4 +1,5 @@
 import type { MatchFormat, MatchRecord, PlayerProfile, Surface, HeadToHeadRecord } from "../tennisData/types";
+import type { OddsQuote } from "../oddsData/types";
 import type { OpponentEloLookup } from "./opponentStrength";
 import type { WeatherConditions } from "./weather";
 import type { CalibrationKnot } from "../evaluation/types";
@@ -60,6 +61,14 @@ export interface PredictionEngineInput {
    */
   tournamentLevel?: string | null;
   /**
+   * Task #107 (Phase 5): Optional real-time web-research result for this matchup (injury status,
+   * fatigue, recent news), fetched by the caller via `researchPlayerMatchup` from
+   * `services/shared/webResearchProvider`. The engine itself stays synchronous/external-API-free;
+   * the caller decides whether the prediction context warrants the Gemini call (e.g. close
+   * predictions near 50%, or explicit user requests). Omit/null to skip entirely.
+   */
+  webResearch?: import("../shared/webResearchProvider.js").MatchupResearch | null;
+  /**
    * The currently active Phase 4 isotonic calibration mapping (fitted from real walk-forward
    * validation data), pre-fetched by the caller. When present, this is used in place of the
    * engine's own dataQuality-based heuristic shrink -- a real, data-validated calibration beats a
@@ -85,6 +94,15 @@ export interface PredictionEngineInput {
    */
   simulatorAdoption?: SimulatorAdoptionInput | null;
   /**
+   * Real pre-match head-to-head market odds for this specific matchup, pre-fetched by the caller
+   * via `fetchMarketOdds` (mirrors the `activeCalibration` pattern — the engine stays sync/DB-free).
+   * Orientation: `player1DecimalOdds` / `player2DecimalOdds` are player-1-relative (same as every
+   * other engine input). When present, the engine adds a Market Consensus vote to the ensemble
+   * using the vig-normalized implied probability. Omit/null when no odds are available for this
+   * matchup — the module is simply absent from the ensemble rather than falling back to 50/50.
+   */
+  marketOdds?: OddsQuote | null;
+  /**
    * Ablation-analysis only (see `services/evaluation/ablation.ts`). When present, each named
    * model source is removed from the ensemble for this single call: the remaining feature
    * modules' weights are re-normalized by the ensemble's own existing method (nothing special
@@ -105,7 +123,7 @@ export interface PredictionEngineInput {
   asOfDate?: Date;
 }
 
-/** The 8 named vote sources the ablation analysis can remove one (or a few) of at a time. */
+/** The named vote sources the ablation analysis can remove one (or a few) of at a time. */
 export type AblationModelKey =
   | "surfaceElo"
   | "serveReturn"
@@ -114,6 +132,7 @@ export type AblationModelKey =
   | "availability"
   | "headToHead"
   | "matchLoadRecovery"
+  | "marketOdds"
   | "generalEnsemble"
   | "segmentSpecialist";
 

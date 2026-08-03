@@ -1,0 +1,47 @@
+That team-recognizes-each-player instinct is right, and I found the second bug it’s pointing at. Here’s both, with fixes.
+Bug 1 — the risk floor cliff (already found)
+Lines 1170–1172:
+let riskFloor = 0;
+if (closenessScore >= 80) riskFloor = 55;
+else if (closenessScore >= 65) riskFloor = 40;
+Fix — replace the two hard breakpoints with a continuous ramp:
+function closenessRiskFloor(closenessScore: number): number {
+  // Smooth ramp instead of step function: no single point of closeness
+  // should cause a 40-point jump in the risk floor.
+  if (closenessScore <= 50) return 0;
+  if (closenessScore <= 80) {
+    return Math.round(((closenessScore - 50) / 30) * 40); // 50→0 ... 80→40
+  }
+  return Math.round(40 + ((closenessScore - 80) / 20) * 15); // 80→40 ... 100→55
+}
+
+const riskFloor = closenessRiskFloor(closenessScore);
+const riskScore = clamp(Math.max(preClosenessRisk, riskFloor), 0, 100);
+Now closeness 64 and closeness 65 differ by ~1.3 points of floor, not 40.
+Bug 2 — thin data makes different players computationally identical
+This is the one behind your “each player should be recognized” point. In computePlayerStats (lines 471, 526–527):
+const winRate = total > 0 ? wins / total : 0.5;
+...
+surfaceWinRate: surfaceMatches.length > 0 ? surfaceWins / surfaceMatches.length : 0.5,
+recentWinRate: recent10.length > 0 ? recent10Wins / recent10.length : 0.5,
+Any player with 0 matches — or a player with 1 match, which still divides cleanly — gets the exact same flat 0.5 “neutral” stat as any other thin-data player. That’s why Michelsen (1 match) and Cocciaretto (2 matches) — completely different players — can produce near-identical downstream numbers: the formula isn’t reading their stats, it’s reading a placeholder that ignores who they are.
+Fix — stop treating “no data” as “average player,” and make the uncertainty penalty scale with exactly how thin the data is instead of a flat cliff:
+// Instead of a bare 0.5 default, expose how much to trust each rate via a
+// confidence-weighted version, and let the caller scale uncertainty by 'total'
+// rather than a single <10 threshold.
+const winRate = total > 0 ? wins / total : 0.5;
+const winRateConfidence = Math.min(1, total / 10); // 0 at n=0, 1 at n>=10
+
+// then in the risk formula, replace:
+//   if (sel.total < 10) risk += 12;
+// with a continuous version so 1 match and 9 matches aren't penalized the same:
+const dataScarcityPenalty = Math.round((1 - Math.min(1, sel.total / 10)) * 15);
+risk += dataScarcityPenalty;
+And the same winRateConfidence/recentWinRate-confidence pattern should feed into closenessSignals too — a closeness score built from a 0.5-vs-0.5 win rate gap (two unknowns) is not a real signal of an even matchup, it’s an absence of signal, and right now it’s being treated identically to a genuinely even matchup between two well-documented players.
+Want me to package this as the actual diff/patch for Replit to apply, including the flag that should show on the card when a stat is a placeholder rather than real data (so “Grade C, 1 match found” doesn’t visually look as trustworthy as a real 62% validation)?
+
+1.	The risk floor cliff (closeness ≥65→40, ≥80→55). This is the bigger of the two bugs and is completely separate code (the riskFloor step function). The snippet above doesn’t reference closeness at all. Without this fix, the low-Keep-rate problem barely improves.
+	2.	The other ~12 flat boolean risk adders (if (sel.recentWinRate < 0.4) risk += 12, if (surface && sel.surfaceWinRate < 0.4...) risk += 10, etc. — lines 1106-1120). Same shape of bug as the one you fixed, just not converted yet. Right now only the data-scarcity one is continuous; the rest are still all-or-nothing switches, which is still collapsing risk into a small set of repeated values.
+	3.	Coverage still measures factor-category availability, not real player sample size — the near-constant 73% problem. Unrelated to this snippet.
+	4.	winRateConfidence is computed but never used. You defined it in the comment but nothing downstream (validationScore, closeness, agreement) actually reads it yet. Right now winRate itself still gets used directly in diffScore() calls elsewhere as if a 1-match win rate were as trustworthy as a 50-match one — the confidence variable needs to actually discount those factor scores, not just sit there. Same applies to recentWinRate/surfaceWinRate, which still default to a flat 0.5 with no confidence weighting at all.
+

@@ -33,27 +33,39 @@ test("a fully consistent prediction has zero violations", () => {
   assert.deepEqual(checkFinalConsistency(baseInput()).violations, []);
 });
 
-test("rule 10: a stale stored recommendation that no longer matches computeRecommendation's current output is caught", () => {
-  // Same shape as the real bug class: a row's `recommendation` was computed and stored under
-  // older recommendation.ts logic (here simulated as "HIGH_RISK") and never recomputed, even
-  // though calibratedProbability=59 (margin 9), dataQuality=70/"Strong", upsetRisk=LOW, and
-  // modelAgreement=Strong now unambiguously compute to MODERATE_LEAN under current logic.
+test("rule 10: a stale stored v2 recommendation that no longer matches computeRecommendation's current output is caught", () => {
+  // Same shape as the real staleness class: a row's `recommendation` was stored as LOW_CONFIDENCE
+  // under older logic, but calibratedProbability=59 (margin 9), dataQuality=70/"Strong", and
+  // modelAgreement=Strong now produce HIGH_CONFIDENCE under the current logic. Legacy recommendation
+  // values (STRONG_RECOMMENDATION, MODERATE_LEAN, etc.) are deliberately skipped by Rule 10 to
+  // avoid retroactively flagging pre-rename rows -- this test uses a v2 value (LOW_CONFIDENCE) to
+  // confirm the freshness check still works for current-schema rows.
   const { violations } = checkFinalConsistency(
-    baseInput({ calibratedProbability: 59, predictedWinnerProbability: 59, dataQuality: 70, dataQualityLabel: "Strong", upsetRisk: "LOW", modelAgreement: "Strong", recommendation: "HIGH_RISK" }),
+    baseInput({ calibratedProbability: 59, predictedWinnerProbability: 59, dataQuality: 70, dataQualityLabel: "Strong", upsetRisk: "LOW", modelAgreement: "Strong", recommendation: "LOW_CONFIDENCE" }),
   );
-  // This exact shape (margin 9, LOW risk, Strong agreement, stored HIGH_RISK) also independently
-  // trips rule 12 (Task 87's hardcoded catch-all-gap guard) -- both rules correctly fire here,
-  // from two different mechanisms (recompute-and-compare vs. a hardcoded expected outcome).
+  // This exact shape (margin 9, Strong agreement, stored LOW_CONFIDENCE) also independently
+  // trips rule 12 (hardcoded catch-all-gap guard) -- both rules correctly fire here.
   assert.equal(violations.length, 2);
   assert.ok(violations.some((v) => v.includes("Rule 10")));
   assert.ok(violations.some((v) => v.includes("Rule 12")));
 });
 
-test("rule 10: a recommendation that matches computeRecommendation's current output for the same inputs is not flagged", () => {
+test("rule 10: a v2 recommendation that matches computeRecommendation's current output for the same inputs is not flagged", () => {
+  // margin=9, DQ=70/Strong, Strong agreement → HIGH_CONFIDENCE under current logic
+  const { violations } = checkFinalConsistency(
+    baseInput({ calibratedProbability: 59, predictedWinnerProbability: 59, dataQuality: 70, dataQualityLabel: "Strong", upsetRisk: "LOW", modelAgreement: "Strong", recommendation: "HIGH_CONFIDENCE" }),
+  );
+  assert.deepEqual(violations, []);
+});
+
+test("rule 10: legacy stored recommendations (pre-v2 rename) are never flagged as stale even when they differ from current logic", () => {
+  // MODERATE_LEAN was the old name for a middle-confidence tier; it's now a legacy value.
+  // Rule 10 explicitly skips legacy names so pre-rename rows aren't flooded with freshness
+  // violations. The shadow replay (recommendationCalibration route) is the right audit path.
   const { violations } = checkFinalConsistency(
     baseInput({ calibratedProbability: 59, predictedWinnerProbability: 59, dataQuality: 70, dataQualityLabel: "Strong", upsetRisk: "LOW", modelAgreement: "Strong", recommendation: "MODERATE_LEAN" }),
   );
-  assert.deepEqual(violations, []);
+  assert.ok(!violations.some((v) => v.includes("Rule 10")));
 });
 
 test("rule 11: a valid simulation resolves cleanly when the winner is stored as player1", () => {
@@ -79,26 +91,29 @@ test("rule 11: a malformed/out-of-range simulation value is caught", () => {
   assert.ok(violations.some((v) => v.includes("Rule 11")));
 });
 
-test("rule 12: the exact margin 9-12 catch-all gap (HIGH_RISK on a modest, low-risk, agreeing pick) is caught independent of computeRecommendation", () => {
-  // margin = |59 - 50| = 9, inside [9,12); LOW risk; Strong agreement -- computeRecommendation
-  // itself would now say MODERATE_LEAN for this, but rule 12 hardcodes the check so it still
-  // fires even if some future regression made computeRecommendation agree with the bad HIGH_RISK.
+test("rule 12: the exact margin 9-12 catch-all gap (LOW_CONFIDENCE on a Strong-agreement pick) is caught independent of computeRecommendation", () => {
+  // margin = |59 - 50| = 9, inside [9,12); Strong agreement -- computeRecommendation produces
+  // HIGH_CONFIDENCE for this (margin>=9 + Strong), but Rule 12 hardcodes the expected outcome
+  // independently so it still fires even if a future regression makes computeRecommendation agree
+  // with the bad LOW_CONFIDENCE. upsetRisk is intentionally not a Rule 12 input any more.
   const { violations } = checkFinalConsistency(
-    baseInput({ calibratedProbability: 59, predictedWinnerProbability: 59, upsetRisk: "LOW", upsetRiskBreakdownTier: "LOW", modelAgreement: "Strong", recommendation: "HIGH_RISK" }),
+    baseInput({ calibratedProbability: 59, predictedWinnerProbability: 59, upsetRisk: "LOW", upsetRiskBreakdownTier: "LOW", modelAgreement: "Strong", recommendation: "LOW_CONFIDENCE" }),
   );
   assert.ok(violations.some((v) => v.includes("Rule 12")));
 });
 
-test("rule 12: a margin 9-12 pick correctly labeled MODERATE_LEAN is not flagged", () => {
+test("rule 12: a margin 9-12 pick correctly labeled HIGH_CONFIDENCE is not flagged", () => {
   const { violations } = checkFinalConsistency(
-    baseInput({ calibratedProbability: 59, predictedWinnerProbability: 59, upsetRisk: "LOW", upsetRiskBreakdownTier: "LOW", modelAgreement: "Strong", recommendation: "MODERATE_LEAN" }),
+    baseInput({ calibratedProbability: 59, predictedWinnerProbability: 59, upsetRisk: "LOW", upsetRiskBreakdownTier: "LOW", modelAgreement: "Strong", recommendation: "HIGH_CONFIDENCE" }),
   );
   assert.ok(!violations.some((v) => v.includes("Rule 12")));
 });
 
-test("rule 12: a margin 9-12 pick with genuinely High Disagreement is not caught by rule 12 (HIGH_RISK may be correct there)", () => {
+test("rule 12: a margin 9-12 pick with HighDisagreement agreement is not caught by rule 12 (LOW_CONFIDENCE is valid there)", () => {
+  // Rule 12 only fires when modelAgreement === "Strong" to guard the specific window where a
+  // Strong-agreement lean must always produce at least HIGH_CONFIDENCE.
   const { violations } = checkFinalConsistency(
-    baseInput({ calibratedProbability: 59, predictedWinnerProbability: 59, upsetRisk: "LOW", upsetRiskBreakdownTier: "LOW", modelAgreement: "HighDisagreement", recommendation: "HIGH_RISK", disagreementNote: "HIGHDISAGREEMENT: some real note." }),
+    baseInput({ calibratedProbability: 59, predictedWinnerProbability: 59, upsetRisk: "LOW", upsetRiskBreakdownTier: "LOW", modelAgreement: "HighDisagreement", recommendation: "LOW_CONFIDENCE", disagreementNote: "HIGHDISAGREEMENT: some real note." }),
   );
   assert.ok(!violations.some((v) => v.includes("Rule 12")));
 });
@@ -157,33 +172,59 @@ test("rule 5: a top-level upsetRisk that disagrees with the detailed breakdown's
   assert.ok(violations.some((v) => v.includes("Rule 5")));
 });
 
-test("rule 6: a Strong Recommendation paired with High/Extreme upset risk is caught", () => {
-  const { violations } = checkFinalConsistency(baseInput({ recommendation: "STRONG_RECOMMENDATION", upsetRisk: "HIGH", upsetRiskBreakdownTier: "HIGH" }));
-  assert.ok(violations.some((v) => v.includes("Rule 6") && v.includes("upset risk")));
-});
-
-test("rule 6: a Strong Recommendation paired with Mixed/High Model Disagreement is caught", () => {
-  const { violations } = checkFinalConsistency(baseInput({ recommendation: "STRONG_RECOMMENDATION", modelAgreement: "HighDisagreement" }));
+test("rule 6: HIGHEST_CONFIDENCE paired with Mixed model agreement is caught", () => {
+  // upsetRisk is intentionally NOT a Rule 6 input any more — Recommendation and Upset Risk are
+  // now decoupled, independent signals. Rule 6 only guards the model-agreement invariant.
+  const { violations } = checkFinalConsistency(
+    baseInput({
+      recommendation: "HIGHEST_CONFIDENCE",
+      modelAgreement: "Mixed",
+      disagreementNote: "MIXED: some note.",
+    }),
+  );
   assert.ok(violations.some((v) => v.includes("Rule 6") && v.includes("model agreement")));
 });
 
-test("rule 6: a Strong Recommendation with LOW upset risk and Strong agreement is clean", () => {
-  // margin=26 (calibratedProbability=76) so this is a REAL STRONG_RECOMMENDATION under
-  // computeRecommendation's own logic (margin>=26, dataQuality>=50, LOW risk, Strong agreement)
-  // -- otherwise Rule 10 (added alongside this task) would itself flag the mismatch and this
-  // "clean" case would no longer be clean.
+test("rule 6: HIGHEST_CONFIDENCE paired with HighDisagreement is caught", () => {
   const { violations } = checkFinalConsistency(
-    baseInput({ calibratedProbability: 76, predictedWinnerProbability: 76, recommendation: "STRONG_RECOMMENDATION", upsetRisk: "LOW", upsetRiskBreakdownTier: "LOW", modelAgreement: "Strong" }),
+    baseInput({
+      recommendation: "HIGHEST_CONFIDENCE",
+      modelAgreement: "HighDisagreement",
+      disagreementNote: "HIGHDISAGREEMENT: some real note explaining the conflicting models.",
+    }),
   );
-  assert.deepEqual(violations, []);
+  assert.ok(violations.some((v) => v.includes("Rule 6") && v.includes("model agreement")));
 });
 
-test("rule 7: Elite tier paired with No Strong Signal is caught", () => {
+test("rule 6: HIGHEST_CONFIDENCE with Strong agreement is clean (even with High upset risk — upset risk is no longer a Rule 6 input)", () => {
+  // Rule 6 no longer checks upsetRisk; this scenario used to trip Rule 6 under the old
+  // STRONG_RECOMMENDATION naming but is now correctly clean for Rule 6 specifically.
+  // coreSignalsAlign=true + margin>=26 + DQ>=50 + Strong → HIGHEST_CONFIDENCE under current logic.
+  const { violations } = checkFinalConsistency(
+    baseInput({
+      calibratedProbability: 76,
+      predictedWinnerProbability: 76,
+      recommendation: "HIGHEST_CONFIDENCE",
+      upsetRisk: "HIGH",
+      upsetRiskBreakdownTier: "HIGH",
+      modelAgreement: "Strong",
+      coreSignalsAlign: true,
+    }),
+  );
+  assert.ok(!violations.some((v) => v.includes("Rule 6")));
+});
+
+test("rule 7: Elite tier paired with INSUFFICIENT_EDGE is caught", () => {
+  const { violations } = checkFinalConsistency(baseInput({ isEliteTier: true, recommendation: "INSUFFICIENT_EDGE" }));
+  assert.ok(violations.some((v) => v.includes("Rule 7")));
+});
+
+test("rule 7: Elite tier paired with legacy No Strong Signal is caught", () => {
   const { violations } = checkFinalConsistency(baseInput({ isEliteTier: true, recommendation: "NO_STRONG_SIGNAL" }));
   assert.ok(violations.some((v) => v.includes("Rule 7")));
 });
 
-test("rule 7: Elite tier paired with Do Not Recommend is caught", () => {
+test("rule 7: Elite tier paired with legacy Do Not Recommend is caught", () => {
   const { violations } = checkFinalConsistency(baseInput({ isEliteTier: true, recommendation: "DO_NOT_RECOMMEND" }));
   assert.ok(violations.some((v) => v.includes("Rule 7")));
 });

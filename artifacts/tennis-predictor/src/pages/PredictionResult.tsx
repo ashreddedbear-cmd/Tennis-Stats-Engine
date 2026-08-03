@@ -11,10 +11,14 @@ import { asPercentage, asFraction, formatPercentage, fractionToPercentage, type 
 import { deriveMonteCarloHeadline } from "@/lib/monteCarloHeadline"
 import { buildPredictionCopyText } from "@/lib/predictionCopyText"
 import { getRecommendationLabel } from "@/lib/recommendationLabels"
-import { Activity, ShieldAlert, CheckCircle2, XCircle, TrendingUp, AlertTriangle, ChevronRight, Dna, ActivitySquare, Database, Vote, Info, Dices, Crown, Scale, Zap, GitBranch, ChevronDown, Copy } from "lucide-react"
+import { Activity, ShieldAlert, CheckCircle2, XCircle, TrendingUp, AlertTriangle, ChevronRight, Dna, ActivitySquare, Database, Vote, Info, Dices, Crown, Scale, Zap, GitBranch, ChevronDown, Copy, Bookmark, BookmarkCheck, FolderOpen } from "lucide-react"
 import { useState } from "react"
 import { UPSET_RISK_LABEL, UPSET_RISK_SHORT, UPSET_RISK_TEXT_CLASS, upsetRiskBadgeClasses } from "@/lib/upsetRiskColors"
 import { useToast } from "@/hooks/use-toast"
+import { useAuth } from "@clerk/react"
+
+const BASE = import.meta.env.BASE_URL.replace(/\/$/, "")
+const api = (path: string) => `${BASE}${path}`
 
 const UPSET_RISK_SHORT_LABEL = UPSET_RISK_SHORT
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts"
@@ -132,6 +136,9 @@ export default function PredictionResultPage() {
   })
   const { data: adminAuth } = useGetAdminAuthStatus()
   const { toast } = useToast()
+  const { isSignedIn } = useAuth()
+  const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
 
   const recordOutcome = useRecordPredictionOutcome()
 
@@ -149,11 +156,54 @@ export default function PredictionResultPage() {
   }
 
   const engine = prediction.engine;
+
+  // When tieBreakerApplied=true, the banner must display the RAW ensemble probability that
+  // triggered the disclosure — not calibratedProbability, which can land at extreme values
+  // (e.g. 100%/0%) after calibration, specialist-blending, and simulator-blending run *after*
+  // the tie-breaker check. Showing calibratedProbability inside a "Too Close to Call" banner
+  // directly contradicts the banner's own text ("The raw ensemble probability is shown").
+  //
+  // Semantic choice (Option b): tieBreakerApplied is anchored to the raw ensemble. If
+  // calibration subsequently resolves the signal strongly, the UI still surfaces the raw
+  // ensemble in the banner — the ensemble was genuinely a coin flip regardless of what
+  // calibration did after. calibratedProbability remains the authoritative stored value and is
+  // used everywhere outside the "Too Close to Call" hero.
+  //
+  // rawEnsembleProbability is a proper typed API field populated by the GET /predictions/:id
+  // route from decisionTrace.pipeline.rawEnsemble. Null for legacy predictions that predate the
+  // decisionTrace field — fallback to calibratedProbability in that case (banner still shows
+  // something coherent, just not the ideal raw value).
+  const rawEnsemble: number = prediction.rawEnsembleProbability ?? prediction.calibratedProbability;
+
   const isResolved = !!prediction.actualWinnerId;
   const isCorrect = prediction.actualWinnerId === prediction.predictedWinnerId;
   // Auth status represents the single owner session cookie, so this stays owner-only.
   const isOwnerSession = adminAuth?.authenticated === true
   const canCopy = isOwnerSession
+
+  const handleSaveCard = async () => {
+    if (!prediction || saving) return
+    setSaving(true)
+    try {
+      const res = await fetch(api("/api/saved-cards"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ predictionId: prediction.id }),
+      })
+      if (res.ok) {
+        const data = await res.json() as { alreadySaved?: boolean }
+        setSaved(true)
+        toast({ title: data.alreadySaved ? "Already in your Cards folder" : "✅ Saved to Cards folder" })
+      } else {
+        toast({ title: "Could not save — try again", variant: "destructive" })
+      }
+    } catch {
+      toast({ title: "Network error — try again", variant: "destructive" })
+    } finally {
+      setSaving(false)
+    }
+  }
 
   const handleCopyPrediction = async () => {
     const text = buildPredictionCopyText(prediction)
@@ -200,18 +250,47 @@ export default function PredictionResultPage() {
 
       {/* COMPACT SUMMARY HERO */}
       <Card className="border border-primary/20 overflow-hidden relative shadow-xl glass-panel">
-        {canCopy && (
-          <Button
-            variant="outline"
-            size="sm"
-            className="absolute top-3 right-3 z-20 h-8 px-2.5 text-xs font-mono gap-1.5 bg-background/95"
-            onClick={handleCopyPrediction}
-            title="Copy social summary"
-          >
-            <Copy className="w-3.5 h-3.5" />
-            📋 Copy
-          </Button>
+        {/* Top-left: Save to Cards folder — shown for signed-in users and admin sessions */}
+        {(isSignedIn || isOwnerSession) && (
+          <div className="absolute top-3 left-3 z-20">
+            <Button
+              variant="outline"
+              size="sm"
+              className={`h-8 px-3 text-xs font-mono gap-1.5 bg-background/95 transition-all ${
+                saved
+                  ? "border-success/60 text-success bg-success/10"
+                  : "border-primary/30 text-primary hover:border-primary hover:bg-primary/10"
+              }`}
+              onClick={handleSaveCard}
+              disabled={saving}
+              title="Save to your Cards folder"
+            >
+              {saving ? (
+                <Bookmark className="w-3.5 h-3.5 animate-pulse" />
+              ) : saved ? (
+                <BookmarkCheck className="w-3.5 h-3.5" />
+              ) : (
+                <FolderOpen className="w-3.5 h-3.5" />
+              )}
+              {saved ? "SAVED" : "SAVE"}
+            </Button>
+          </div>
         )}
+        {/* Top-right: admin copy button */}
+        <div className="absolute top-3 right-3 z-20 flex gap-2">
+          {canCopy && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 px-2.5 text-xs font-mono gap-1.5 bg-background/95"
+              onClick={handleCopyPrediction}
+              title="Copy social summary"
+            >
+              <Copy className="w-3.5 h-3.5" />
+              📋 Copy
+            </Button>
+          )}
+        </div>
         <div className="absolute right-0 top-0 w-96 h-96 bg-primary/10 rounded-full blur-3xl -mr-32 -mt-32 pointer-events-none" />
         <div className="absolute left-0 bottom-0 w-64 h-64 bg-accent/5 rounded-full blur-3xl -ml-20 -mb-20 pointer-events-none" />
         
@@ -231,14 +310,14 @@ export default function PredictionResultPage() {
                       <h2 className="text-3xl md:text-4xl font-display font-bold tracking-tight text-foreground break-words leading-tight">
                         {prediction.player1Name}
                       </h2>
-                      <span className="text-lg font-mono text-muted-foreground tabular-nums">{prediction.calibratedProbability.toFixed(1)}%</span>
+                      <span className="text-lg font-mono text-muted-foreground tabular-nums">{rawEnsemble.toFixed(1)}%</span>
                     </div>
                     <div className="text-muted-foreground font-mono text-xs tracking-widest uppercase px-1">vs</div>
                     <div className="flex items-baseline gap-3">
                       <h2 className="text-3xl md:text-4xl font-display font-bold tracking-tight text-foreground break-words leading-tight">
                         {prediction.player2Name}
                       </h2>
-                      <span className="text-lg font-mono text-muted-foreground tabular-nums">{(100 - prediction.calibratedProbability).toFixed(1)}%</span>
+                      <span className="text-lg font-mono text-muted-foreground tabular-nums">{(100 - rawEnsemble).toFixed(1)}%</span>
                     </div>
                   </div>
                   <div className="mt-6 flex flex-wrap gap-3">
@@ -278,15 +357,34 @@ export default function PredictionResultPage() {
                   <div className="mt-6 flex flex-wrap gap-3">
                     <Badge
                       variant={
+                        // v2 tiers (current engine output)
+                        prediction.recommendation === 'HIGHEST_CONFIDENCE' ? 'success' :
+                        prediction.recommendation === 'HIGH_CONFIDENCE'    ? 'success' :
+                        prediction.recommendation === 'MODERATE_CONFIDENCE' ? 'secondary' :
+                        prediction.recommendation === 'LOW_CONFIDENCE'     ? 'warning' :
+                        prediction.recommendation === 'INSUFFICIENT_EDGE'  ? 'outline' :
+                        // Legacy tiers (stored in older prediction rows)
                         prediction.recommendation === 'STRONG_RECOMMENDATION' ? 'success' :
-                        prediction.recommendation === 'MODERATE_LEAN' ? 'secondary' :
-                        prediction.recommendation === 'HIGH_RISK' ? 'warning' :
-                        prediction.recommendation === 'NO_STRONG_SIGNAL' ? 'outline' : 'destructive'
+                        prediction.recommendation === 'MODERATE_LEAN'     ? 'secondary' :
+                        prediction.recommendation === 'HIGH_RISK'          ? 'warning' :
+                        prediction.recommendation === 'NO_STRONG_SIGNAL'  ? 'outline' :
+                        prediction.recommendation === 'DO_NOT_RECOMMEND'  ? 'destructive' :
+                        'outline' // safe fallback — unknown label stays neutral, not red
                       }
-                      className="text-sm px-3 py-1.5 font-bold shadow-md"
+                      className={`text-sm px-3 py-1.5 font-bold shadow-md${
+                        prediction.recommendation === 'INSUFFICIENT_EDGE'
+                          ? ' text-muted-foreground border-muted-foreground/30'
+                          : ''
+                      }`}
                       title={
-                        prediction.recommendation === 'STRONG_RECOMMENDATION'
-                          ? "The engine's highest-confidence call by its own gating criteria -- backtesting has not yet shown this tier beating other tiers, so treat it as a signal, not a guarantee."
+                        prediction.recommendation === 'HIGHEST_CONFIDENCE'
+                          ? "All three core signals (Surface Elo, Serve & Return, Recent Form) agree on the same player."
+                          : prediction.recommendation === 'HIGH_CONFIDENCE'
+                          ? "Strong directional agreement across the core engine signals."
+                          : prediction.recommendation === 'INSUFFICIENT_EDGE'
+                          ? "The pick is within ±3% of a coin flip — not enough edge to recommend confidently."
+                          : prediction.recommendation === 'STRONG_RECOMMENDATION'
+                          ? "The engine's highest-confidence legacy tier — validate against more recent outputs."
                           : undefined
                       }
                     >
@@ -386,11 +484,13 @@ export default function PredictionResultPage() {
                 <div className="space-y-3 bg-secondary/30 p-5 rounded-2xl border border-border/50">
                   <div className="flex justify-between font-mono text-sm items-center">
                     <span className="font-bold text-muted-foreground tracking-widest">RAW PROBABILITY SPLIT</span>
-                    <span className="font-mono text-sm text-muted-foreground tabular-nums">{prediction.calibratedProbability.toFixed(1)} / {(100 - prediction.calibratedProbability).toFixed(1)}</span>
+                    <span className="font-mono text-sm text-muted-foreground tabular-nums">{rawEnsemble.toFixed(1)} / {(100 - rawEnsemble).toFixed(1)}</span>
                   </div>
-                  {/* Centred bar showing how close to 50/50 the split is */}
+                  {/* Centred bar showing how close to 50/50 the split is — uses rawEnsemble,
+                      the value that triggered the close-match disclosure, not calibratedProbability
+                      (which can diverge significantly after calibration and blending). */}
                   <div className="h-4 w-full bg-background rounded-full overflow-hidden flex border border-border shadow-inner relative">
-                    <div className="h-full bg-primary/40 transition-all duration-1000 ease-out" style={{ width: `${prediction.calibratedProbability}%` }} />
+                    <div className="h-full bg-primary/40 transition-all duration-1000 ease-out" style={{ width: `${rawEnsemble}%` }} />
                     <div className="absolute top-0 bottom-0 left-1/2 w-0.5 bg-border/80" />
                   </div>
                   <div className="flex justify-between text-[10px] font-mono text-muted-foreground">

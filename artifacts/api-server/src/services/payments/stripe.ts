@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { getStripePriceId, getStripeSecretKey, getStripeWebhookSecret } from "./config";
+import { getStripePriceId, getStripeElitePriceId, getStripeProAnnualPriceId, getStripeEliteAnnualPriceId, getStripeTeamPriceId, getStripeSecretKey, getStripeWebhookSecret } from "./config";
 
 interface StripeRequestOptions {
   method: "GET" | "POST" | "DELETE";
@@ -12,8 +12,8 @@ function assertStripeSecretKey(): string {
   if (!secretKey) {
     throw new Error("Stripe secret key is not configured");
   }
-  if (!secretKey.startsWith("sk_test_")) {
-    throw new Error("Payments V2 requires Stripe test mode keys (sk_test_...)");
+  if (!secretKey.startsWith("sk_test_") && !secretKey.startsWith("sk_live_")) {
+    throw new Error("Stripe secret key must start with sk_test_ or sk_live_");
   }
   return secretKey;
 }
@@ -91,12 +91,50 @@ function toIsoTimestamp(epochSeconds: number | null | undefined): Date | null {
   return new Date(epochSeconds * 1000);
 }
 
+export type StripePlanKey = "pro" | "pro_annual" | "elite" | "elite_annual" | "team";
+
 export function resolveStripePriceId(): string {
   const priceId = getStripePriceId();
   if (!priceId) {
     throw new Error("STRIPE_PRICE_ID must be configured when PAYMENTS_V2_ENABLED is true");
   }
   return priceId;
+}
+
+export function resolveStripeElitePriceId(): string {
+  const priceId = getStripeElitePriceId();
+  if (!priceId) {
+    throw new Error("STRIPE_ELITE_PRICE_ID must be configured to offer the Elite plan");
+  }
+  return priceId;
+}
+
+export function resolveStripeProAnnualPriceId(): string {
+  const priceId = getStripeProAnnualPriceId();
+  if (!priceId) throw new Error("STRIPE_PRO_ANNUAL_PRICE_ID must be configured to offer the Pro Annual plan");
+  return priceId;
+}
+
+export function resolveStripeEliteAnnualPriceId(): string {
+  const priceId = getStripeEliteAnnualPriceId();
+  if (!priceId) throw new Error("Elite Annual plan is not yet available. Please choose the monthly Elite plan or contact support.");
+  return priceId;
+}
+
+export function resolveStripeTeamPriceId(): string {
+  const priceId = getStripeTeamPriceId();
+  if (!priceId) throw new Error("STRIPE_TEAM_PRICE_ID must be configured to offer the Team plan");
+  return priceId;
+}
+
+function resolvePriceIdForPlan(plan: StripePlanKey): string {
+  switch (plan) {
+    case "elite":        return resolveStripeElitePriceId();
+    case "elite_annual": return resolveStripeEliteAnnualPriceId();
+    case "pro_annual":   return resolveStripeProAnnualPriceId();
+    case "team":         return resolveStripeTeamPriceId();
+    default:             return resolveStripePriceId(); // "pro"
+  }
 }
 
 export async function createStripeCheckoutSession(form: {
@@ -107,8 +145,11 @@ export async function createStripeCheckoutSession(form: {
   accountKey: string;
   planKey: string;
   planName: string;
+  plan?: StripePlanKey;
+  /** Clerk user ID — embedded in metadata so webhooks can route to the correct per-user billing record. */
+  clerkUserId?: string | null;
 }): Promise<StripeCheckoutSession> {
-  const priceId = resolveStripePriceId();
+  const priceId = resolvePriceIdForPlan(form.plan ?? "pro");
   return stripeRequest<StripeCheckoutSession>({
     method: "POST",
     path: "/v1/checkout/sessions",
@@ -122,9 +163,11 @@ export async function createStripeCheckoutSession(form: {
       "subscription_data[metadata][accountKey]": form.accountKey,
       "subscription_data[metadata][planKey]": form.planKey,
       "subscription_data[metadata][planName]": form.planName,
+      ...(form.clerkUserId ? { "subscription_data[metadata][clerkUserId]": form.clerkUserId } : {}),
       "metadata[accountKey]": form.accountKey,
       "metadata[planKey]": form.planKey,
       "metadata[planName]": form.planName,
+      ...(form.clerkUserId ? { "metadata[clerkUserId]": form.clerkUserId } : {}),
       ...(form.customerId ? { customer: form.customerId } : {}),
       ...(form.customerEmail ? { customer_email: form.customerEmail } : {}),
     },
@@ -176,7 +219,7 @@ export function verifyStripeWebhookSignature(params: {
     throw new Error("Stripe webhook secret is not configured");
   }
   if (!secret.startsWith("whsec_")) {
-    throw new Error("Payments V2 requires a Stripe test-mode webhook secret (whsec_...)");
+    throw new Error("Stripe webhook secret must start with whsec_");
   }
 
   const headerValue = Array.isArray(params.signatureHeader) ? params.signatureHeader[0] : params.signatureHeader;

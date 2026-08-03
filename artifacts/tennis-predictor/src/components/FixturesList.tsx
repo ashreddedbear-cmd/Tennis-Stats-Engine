@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { EmptyDataState } from "./DataWarning"
-import { Calendar, Clock, Swords, Trash2, Zap, RefreshCw, Wifi, XCircle } from "lucide-react"
+import { Calendar, Clock, Trash2, Zap, RefreshCw, Wifi, XCircle } from "lucide-react"
 import { formatEasternDateTime } from "@/lib/timezone"
 import { createPredictionWithIntegrity } from "@/lib/predictionRequestIntegrity"
 
@@ -111,16 +111,21 @@ function isStaleFixture(fixture: Fixture): boolean {
 }
 
 function formatFixtureTime(fixture: Fixture): string {
-  return formatEasternDateTime(fixture.scheduledStart)
-}
-
-function buildCustomMatchUrl(fixture: Fixture): string {
-  const params = new URLSearchParams({ p1: fixture.player1Id, p2: fixture.player2Id })
-  if (fixture.surface) params.set("surface", fixture.surface)
-  if (fixture.matchFormat) params.set("format", fixture.matchFormat)
-  if (fixture.tournamentLevel) params.set("level", fixture.tournamentLevel)
-  if (fixture.tournamentName) params.set("tournamentName", fixture.tournamentName)
-  return `/predict?${params.toString()}`
+  if (fixture.scheduledStart) {
+    return formatEasternDateTime(fixture.scheduledStart)
+  }
+  // No confirmed match time — show the tournament date so users know when the match is
+  // scheduled without fabricating a time from the raw tournament-start timestamp.
+  if (fixture.date) {
+    const dateOnly = fixture.date.slice(0, 10) // handles both "2026-08-03" and "2026-08-03T…"
+    const dateLabel = new Date(dateOnly + "T12:00:00Z").toLocaleDateString("en-US", {
+      timeZone: "America/New_York",
+      month: "short",
+      day: "numeric",
+    })
+    return `${dateLabel} · Time TBD`
+  }
+  return "Time TBD"
 }
 
 /** Level badge colour tiers */
@@ -328,6 +333,22 @@ export const FixturesList = forwardRef<
   // Dismissed fixture IDs — user-dismissed via swipe-delete or "Remove Cancelled" button
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(loadDismissed)
 
+  // Auto-clear stale dismissals: when the provider returns fixtures but every one of them is
+  // in the dismissed set (sessionStorage poisoning across page-loads), silently reset so the
+  // list isn't permanently blank without the user pressing Refresh.
+  // Guard with a ref so this only fires once per fixtures-load, not on every re-render.
+  const autoResetDoneRef = useRef(false)
+  useEffect(() => {
+    if (!fixtures || fixtures.length === 0) return
+    if (autoResetDoneRef.current) return
+    const allDismissed = fixtures.every(f => dismissedIds.has(f.id))
+    if (allDismissed && dismissedIds.size > 0) {
+      setDismissedIds(new Set())
+      persistDismissed(new Set())
+    }
+    autoResetDoneRef.current = true
+  }, [fixtures]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const dismissFixture = (id: string) => {
     setDismissedIds(prev => {
       const next = new Set(prev)
@@ -391,9 +412,14 @@ export const FixturesList = forwardRef<
     const startingSoon: Fixture[] = []
     const laterToday: Fixture[] = []
     const recentlyCompleted: Fixture[] = []
+    // Future fixtures grouped by calendar date (YYYY-MM-DD key, sorted ascending in render)
+    const upcomingByDate = new Map<string, Fixture[]>()
 
     for (const fixture of visibleFixtures) {
       const scheduledMs = fixture.scheduledStart ? new Date(fixture.scheduledStart).getTime() : null
+      // Normalise to "YYYY-MM-DD" regardless of whether the API returned a bare date or full ISO
+      const fixtureDate = (fixture.date ?? "").slice(0, 10)
+
       if (fixture.isLive) {
         liveNow.push(fixture)
         continue
@@ -406,14 +432,17 @@ export const FixturesList = forwardRef<
         startingSoon.push(fixture)
         continue
       }
-      if (fixture.date === today) {
+      if (fixtureDate === today) {
         laterToday.push(fixture)
         continue
       }
-      laterToday.push(fixture)
+      // Future date — group by YYYY-MM-DD so each day gets its own labeled section
+      const bucket = upcomingByDate.get(fixtureDate) ?? []
+      bucket.push(fixture)
+      upcomingByDate.set(fixtureDate, bucket)
     }
 
-    return { liveNow, startingSoon, laterToday, recentlyCompleted }
+    return { liveNow, startingSoon, laterToday, recentlyCompleted, upcomingByDate }
   }, [visibleFixtures])
 
   const diagnostics = useMemo(() => {
@@ -470,7 +499,7 @@ export const FixturesList = forwardRef<
         },
       )
       setPredictNowFixtureId(null)
-      setLocation(`/predictions/${prediction.id}`)
+      setLocation(`/predictions/${prediction.id}?from=home`)
     } catch {
       setPredictNowFixtureId(null)
       setPredictNowError(fixture.id)
@@ -545,6 +574,18 @@ export const FixturesList = forwardRef<
           { title: "Starting Soon", items: groupedFixtures.startingSoon },
           { title: "Later Today", items: groupedFixtures.laterToday },
           { title: "Recently Completed", items: groupedFixtures.recentlyCompleted },
+          // Future dates sorted ascending — each calendar day becomes its own labeled section
+          ...[...groupedFixtures.upcomingByDate.entries()]
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([dateStr, items]) => ({
+              title: new Date(dateStr + "T12:00:00Z").toLocaleDateString("en-US", {
+                timeZone: "America/New_York",
+                weekday: "short",
+                month: "short",
+                day: "numeric",
+              }),
+              items,
+            })),
         ].map((group) => {
           if (group.items.length === 0) return null
           return (
@@ -572,7 +613,7 @@ export const FixturesList = forwardRef<
                         {fixture.tournamentLevel || 'TOURNAMENT'}
                       </Badge>
                       {fixture.tournamentName && (
-                        <span className="truncate max-w-[42vw] sm:max-w-[180px] text-muted-foreground/80">
+                        <span className="truncate min-w-0 sm:max-w-[180px] text-muted-foreground/80">
                           {fixture.tournamentName}
                         </span>
                       )}
@@ -650,15 +691,6 @@ export const FixturesList = forwardRef<
                         <Zap className="w-3 h-3" />
                       )}
                       PREDICT
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="flex-1 sm:w-full font-mono font-bold text-[0.6875rem] h-9 gap-1.5"
-                      onClick={(e) => { e.stopPropagation(); setLocation(buildCustomMatchUrl(fixture)) }}
-                    >
-                      <Swords className="w-3 h-3" />
-                      CUSTOM
                     </Button>
                   </div>
                 </div>

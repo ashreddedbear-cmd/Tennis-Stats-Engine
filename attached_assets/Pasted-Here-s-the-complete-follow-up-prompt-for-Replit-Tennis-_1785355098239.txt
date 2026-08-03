@@ -1,0 +1,111 @@
+Here's the complete follow-up prompt for Replit:
+
+---
+
+**Tennis Matrix AI — Final Verification & Remaining Work**
+
+Phases 1, 2, and 4 are verified complete. Phases 3 (partially), 5 (not started), plus three follow-up tasks remain. Start items 1 and 115 immediately in parallel — they don't block each other.
+
+---
+
+**STATUS: PHASES 1, 2, 4 CONFIRMED DONE**
+
+- **Phase 1 (tie-break cascade fix)** — verified in code; non-applied baseline accuracy maintained
+- **Phase 2 (walk-forward fold preservation)** — append-only guard + `matchIds` scope confirmed; both unit tests pass in ~18s
+- **Phase 4 (Parlay Builder risk floor + import boundary safeguard)** — commit `9263abe` includes full closeness-floor logic with before/after examples; `checkParlayBoundary.ts` with 3/3 tests passing
+
+---
+
+**BLOCKING ITEMS — START NOW**
+
+**Item 1: Configure Replit Scheduled Deployment (no coding required)**
+
+Paper-trading currently runs on an in-process timer that dies if the dev workflow stops. Replace it with a real Replit Scheduled Deployment — it's a one-time UI config, no code changes needed.
+
+Steps (exact as-is):
+1. Open **Deploy panel** → **Create new deployment** → select **Scheduled**
+2. **Build command:** `pnpm --filter @workspace/api-server run build`
+3. **Run command:** `PAPER_TRADING_JOB_STANDALONE=1 node --enable-source-maps artifacts/api-server/dist/jobs/runPaperTradingJob.mjs`
+4. **Schedule:** `*/15 * * * *` (every 15 minutes)
+5. Deploy and confirm it shows as active
+
+**Pass criteria:** Deployment shows as **Active** in the Replit Deploy panel, and paper-trading job logs appear in the scheduled job logs (not dev workflow logs).
+
+**Item 115: Delete the stale DQ test** (can run in parallel with Item 1)
+
+The `prediction-engine-invariants` test in `src/services/predictionEngine/__tests__/dataQuality.test.ts` fails every run with "availability/fatigue/matchLoadRecovery genuinely contribute to DQ" — this test predates those modules being added to `EXCLUDED_FROM_DATA_QUALITY`. It's a known failure blocking real regression detection.
+
+Delete this entire test block. Do not re-tune or fix it — deleting it is correct.
+
+**Pass criteria:** The test file no longer contains this test; all other tests in the file still pass.
+
+---
+
+**VERIFICATION ITEMS — AFTER ITEM 1 IS LIVE**
+
+**Item 2: Run live quiet-pipeline alert test**
+
+Once Scheduled Deployment is active, deliberately pause the paper-trading job, wait longer than the quiet window (check `isPipelineQuiet()` threshold in `src/services/paperTrading/quietPipelineAlert.ts`), confirm the alert fires with a real timestamp, then resume the job and confirm it clears.
+
+**Pass criteria:** Real timestamps showing the alert fired and cleared; confirm it went to the actual alert channel (Slack, email, or wherever it's wired).
+
+**Item 3: Let walk-forward job finish, report final accuracy**
+
+The full-corpus walk-forward (134,808 matches) is still running from the earlier session. Do not interrupt it. Let it finish naturally — it will take 2–3 hours total.
+
+When it completes, query `GET /api/evaluation/walk-forward/status` and report:
+- Total matches processed
+- Final calibrated accuracy (and which fold it came from — validation vs. test)
+- Any test segment or calibration-model rows created
+
+**Pass criteria:** A real final accuracy number from the held-out test segment (not validation data).
+
+**Item 4: Confirm import-boundary coverage**
+
+The `checkParlayBoundary.ts` script caught `predictionEngine/` imports and `evaluationPredictionsTable` references. Confirm it also blocks:
+- Direct imports of `calibrationModelsTable`
+- Direct imports of `historicalMatchesTable` (if accessible from parlay builder)
+- References to calibration fit/mapping logic
+
+Run a deliberate test: try to import one of these from a parlay builder file and confirm `checkParlayBoundary` exits with code 1.
+
+**Pass criteria:** Script correctly blocks at least one calibration/cards/history table reference; exit code 1 confirmed.
+
+---
+
+**FOLLOW-UP TASKS (start after items 1–4 above)**
+
+**#114: Wire `matchupCloseness` to the parlay card UI**
+
+The field is computed and in `BuilderResult`, but not displayed on the card. Add it to the return type and render it on the UI card next to Risk/Validation/Coverage.
+
+**#115: (already listed above — delete stale test)**
+
+**#116: Wire `isPipelineQuiet()` to an actual operator alert**
+
+Currently unit-tested only. Make it send a real Slack/email/PagerDuty message (pick one) when a gap is detected. Confirm via live test in Item 2 above.
+
+---
+
+**THEN: Phase 5 (Data Source Expansion) in this order:**
+1. Sackmann historical backfill (fixes thin-data bug)
+2. tennis-data.co.uk (feeds calibration refit)
+3. Wikidata name resolution (fixes name-matching failures)
+4. Extend RapidAPI/Matchstat/Sofascore across both engines
+5. The Odds API consensus/line-movement
+6. Web-search AI (fallback only, low-confidence cases)
+7. Ultimate Tennis Statistics, Match Charting Project, news API (lowest priority)
+
+---
+
+**Deliverables:**
+- Item 1: Screenshot of active Scheduled Deployment in Deploy panel + timestamp of first auto-run in job logs
+- Item 115: Confirm deletion + full test suite still passes
+- Item 2: Real alert fire/clear timestamps
+- Item 3: Final walk-forward accuracy query result (full output)
+- Item 4: Test output showing boundary check catching a deliberate violation
+- Items #114–116: git diffs for each
+
+Do not claim any item done without the evidence listed above.
+
+---

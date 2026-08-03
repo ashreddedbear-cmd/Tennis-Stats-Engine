@@ -1,0 +1,31 @@
+This spec is more rigorous than #86 was — it adds a pre-flight dry-run check (avoid burning 2-3 hours if candidates are 0), a documented edge-attenuation ratio instead of just a raw comparison, and it explicitly flags the hindsight caveat already noted in the memory file. Here's the handoff prompt:
+
+---
+
+**Prompt:**
+
+Run task #94 — Section C market-odds engine ablation to completion. This re-scopes and replaces the now-archived #83/#86.
+
+**Step 1 — Dry-run check first.** Before starting the long run, query the DB to confirm `historicalOddsCandidates.length > 0` — graded `historical_test` rows with `avgWinner`/`avgLoser` embedded in `raw_source`. If the count is 0, stop and diagnose (walk-forward may need a score-unscored trigger) before running anything else.
+
+**Step 2 — Run the ablation:**
+```
+cd artifacts/api-server && node --import tsx/esm src/scripts/auditMarketConsensusAblation.ts
+```
+- Do **not** use `pnpm exec tsx` — hangs in this environment.
+- Do **not** restart the API server during the run — kills the in-process 134k+ row match-history index build (2–3h).
+- Log progress (`[C] Processed i/N...` every 200 rows).
+
+**Step 3 — Parse Section C output:** paired sample count (n), with-odds accuracy + log-loss, without-odds accuracy + log-loss, Δaccuracy, Δlog-loss.
+
+**Step 4 — Apply the decision rule:**
+- Δacc ≥ +0.5pp at n≥500 → **KEEP** (weight-tuning not needed).
+- Δacc < +0.5pp or negative → **INVESTIGATE** (market signal degrades as an engine input vs. standalone; weight-tuning or exclusion may be warranted).
+
+**Step 5 — Compute edge-attenuation ratio:** Section C Δacc ÷ fast-direction-audit Δacc (+3.7pp) — the fraction of market signal that survives engine integration. Document alongside the existing hindsight caveat in the memory file (tennis-data.co.uk's player1 = actual winner, so Section C is an upper bound on live improvement, not a live-conditions estimate).
+
+**Step 6 — Update memory:** add a `## Section C — Full Engine Re-run (historical)` heading to `.agents/memory/market-odds-ablation-results.md` with the results, the attenuation ratio, and the decision. Update the Combined interpretation table at the bottom of that file.
+
+**Out of scope:** no engine weight/module code changes, no re-running Sections A or B, no API server restarts.
+
+**Report back with:** n, with/without accuracy and log-loss, Δacc, Δlog-loss, the +3.7pp comparison, the attenuation ratio, and which decision branch applied.

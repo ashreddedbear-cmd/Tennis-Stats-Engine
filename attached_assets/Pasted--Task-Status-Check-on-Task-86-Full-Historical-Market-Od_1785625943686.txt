@@ -1,0 +1,24 @@
+**Task — Status Check on Task #86 (Full Historical Market-Odds Engine Comparison, Section C)**
+
+**What & Why**
+
+Task #86 (feeding market odds through the ensemble via a full engine re-run against the historical corpus, rather than comparing it as a standalone signal) was proposed several messages ago but explicitly held back — it depends on the circuit-breaker separation fix (isolating `api-tennis-live` from `api-tennis-bulk`) being confirmed in production first, since #86's 2-3 hour `buildMatchHistoryIndex` preload is the same shape of job that caused today's live-paper-trading outage. This is a genuine open question right now: is this the actual weighted-ensemble accuracy test that would answer whether adding market odds to the prediction formula helps, and has it actually run yet?
+
+**Done looks like**
+
+- Confirm current status of #86: not started / in progress / completed. If in progress, report elapsed time and expected completion.
+- If #86 hasn't started yet, confirm why — specifically, has the circuit-breaker fix been deployed to **production** (not just verified on the dev server, per the earlier report that dev had it but production was still on the old single-breaker binary)? If production still isn't updated, that's the actual blocker and should be resolved first.
+- If #86 has completed, report the full Section C results: with-odds accuracy, without-odds accuracy, Δaccuracy, Δlog-loss, and sample size (n).
+- If Δaccuracy ≥ +0.5pp per the original decision rule: confirm whether Task #83 (engine weight-tuning) has been retired as planned.
+- If completed, also confirm no circuit breaker opened on `api-tennis-live` during the run — that's the real proof the separation fix held under the exact load condition it was built for, not just a clean compile.
+
+**Out of scope**
+
+- Making the final #84 KEEP/EXCLUDE production decision — that still depends on both #86's result and the live paper-trade count (separately still accumulating toward its own threshold).
+- Any new code changes — this is a status/verification check only.
+
+**Relevant files**
+
+- `artifacts/api-server/src/scripts/auditMarketConsensusAblation.ts` (Section C, lines 726–787)
+- `.agents/memory/market-odds-ablation-results.md`
+- Circuit breaker registry / `getAllBreakerStatuses()` (to confirm live breaker state during/after the run)

@@ -1,0 +1,37 @@
+**Task — Accelerate Market-Odds Validation via Historical Data, and Confirm the Live Pipeline Actually Recovers**
+
+**What & Why**
+
+Two things, both time-sensitive for different reasons:
+
+1. **Market-odds validation is blocked on live data that isn't accumulating.** Paper-trade rows with real odds are stuck at 184 of the 500 needed for Task #85. Diagnosis just confirmed why: the walk-forward job's `getPlayerMatches` calls tripped the API-Tennis circuit breaker open, which broke `getUpcomingFixtures` — so the entire live paper-trading loop has been dark (zero new fixtures locked, zero new predictions of any kind, not just market-odds ones). Real historical odds data already exists in `historical_matches` via `tennisDataCoUkBackfill.ts` (`raw_source->'_marketOdds'`, ~11,007 rows spanning 2016–2020) and is completely unaffected by this outage — it doesn't touch fixtures, the circuit breaker, or live provider calls at all.
+
+2. **The circuit-breaker recovery is currently assumed, not confirmed.** The working theory is "it resets on its next health check once the walk-forward finishes" — but that's an inference, not something read directly from the reset/half-open logic. Given the walk-forward and live paper-trading now have a confirmed interference pattern (one job's API load breaks the other job's fixture fetching), this needs to be verified explicitly, not assumed, or it could silently still be dark hours from now — and this exact conflict will recur every time a heavy backfill runs concurrently with live trading unless it's addressed structurally.
+
+**Done looks like — Part A (historical market-odds acceleration)**
+
+- Query: `SELECT provider, MIN(match_date), MAX(match_date), COUNT(*) FROM historical_matches WHERE provider = 'tennis-data-co-uk' AND raw_source->'_marketOdds'->>'avgWinner' IS NOT NULL GROUP BY provider` — confirm actual available row count before proceeding.
+- Exclude any rows inside the calibration/specialist model's fitting window (check `calibrationModelsTable`/`specialistModelsTable` for the fitted-through boundary) — no leakage.
+- Extend `auditMarketConsensusAblation.ts` (or add a sibling script) with a data path that reads from this historical corpus instead of live `evaluation_predictions` paper_trade rows, reusing the existing with/without-market-odds replay logic.
+- Run it, report accuracy delta and log-loss delta at whatever sample size this reaches (should comfortably exceed 500 given ~11,007 available rows).
+- Cross-check against the live paper-trade arm once it resumes accumulating (Part B) — flag if the two disagree meaningfully.
+
+**Done looks like — Part B (circuit breaker recovery verification)**
+
+- Read the actual circuit-breaker reset/half-open logic (not inferred) — confirm what triggers recovery: time-based cooldown, next successful health check, manual reset, or something else.
+- Once the walk-forward finishes, explicitly verify (don't assume) that `getUpcomingFixtures` starts succeeding again — check logs or trigger a manual fixture fetch and confirm it returns data.
+- If recovery requires manual intervention (not automatic), do it, and document that it's manual so this doesn't silently stay broken next time.
+- Document the walk-forward/circuit-breaker interference as a known issue — propose (but don't necessarily implement here) a structural fix: separate rate-limit pools per job type, or a guard preventing walk-forward and live paper-trading from running concurrently.
+
+**Out of scope**
+
+- Any further Parlay Builder weight or Agreement mechanism changes.
+- Turning market odds on in production — both parts here produce evidence only; the KEEP/EXCLUDE call is #84.
+- Fully re-architecting the rate-limit/concurrency system — flag and propose only, don't rebuild it under this task.
+
+**Relevant files**
+
+- `artifacts/api-server/src/scripts/auditMarketConsensusAblation.ts`
+- `artifacts/api-server/src/services/historicalData/tennisDataCoUkBackfill.ts`
+- `artifacts/api-server/src/services/evaluation/paperTrading.ts` (fixture fetch, circuit breaker interaction)
+- Circuit breaker implementation (wherever the API-Tennis provider's breaker logic lives — locate and read directly rather than inferring)
