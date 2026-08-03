@@ -8,7 +8,7 @@
  *
  * These tests assert the three properties that must hold for the fix to remain correct:
  *   1. Within TIE_BAND: the returned probability equals the raw input (NO directional nudge).
- *   2. Within TIE_BAND: decidingStep is always null (no step "decided the direction").
+ *   2. Within TIE_BAND: decidingStep is diagnostic-only and never changes no-pick behavior.
  *   3. Outside TIE_BAND: applied is false and the probability is unchanged.
  *
  * If a future change re-introduces directional nudging inside TIE_BAND, these tests will fail.
@@ -20,18 +20,36 @@ import { applyTieBreaker, TIE_BAND } from "./tieBreakers";
 import type { TieBreakerInputs } from "./tieBreakers";
 
 /**
- * The cascade no longer reads from TieBreakerInputs, but the call signature is retained for
- * backward compatibility with the call site in index.ts. An empty cast is sufficient here --
- * any real usage would supply real module outputs, but for this test the inputs are irrelevant.
+ * Minimal, deterministic fixtures for the core modules consumed by the tie-break diagnostics.
  */
-const IGNORED_INPUTS = {} as TieBreakerInputs;
+const BASE_INPUTS: TieBreakerInputs = {
+  surfaceElo: { eloDifference: 0 } as TieBreakerInputs["surfaceElo"],
+  serveReturn: {
+    player1ServeRating: 0,
+    player1ReturnRating: 0,
+    player2ServeRating: 0,
+    player2ReturnRating: 0,
+  } as TieBreakerInputs["serveReturn"],
+  recentForm: { player1Form: 50, player2Form: 50 } as TieBreakerInputs["recentForm"],
+  fatigue: {} as TieBreakerInputs["fatigue"],
+  headToHead: {} as TieBreakerInputs["headToHead"],
+  player1: {} as TieBreakerInputs["player1"],
+  player2: {} as TieBreakerInputs["player2"],
+  player1Matches: [],
+  player2Matches: [],
+  surface: "Hard",
+};
+
+function withInputs(overrides: Partial<TieBreakerInputs>): TieBreakerInputs {
+  return { ...BASE_INPUTS, ...overrides };
+}
 
 // ── Core regression: no directional nudge when within TIE_BAND ──────────────────────────────────
 
 test("applyTieBreaker: within TIE_BAND — adjustedProbability equals raw input (no nudge)", () => {
   const within = [50, 50 + TIE_BAND - 0.1, 50 - TIE_BAND + 0.1, 50.5, 49.2, 51.8];
   for (const raw of within) {
-    const result = applyTieBreaker(raw, IGNORED_INPUTS);
+    const result = applyTieBreaker(raw, BASE_INPUTS);
     assert.equal(
       result.adjustedProbability,
       raw,
@@ -40,18 +58,27 @@ test("applyTieBreaker: within TIE_BAND — adjustedProbability equals raw input 
   }
 });
 
-test("applyTieBreaker: within TIE_BAND — decidingStep is always null", () => {
+test("applyTieBreaker: within TIE_BAND — decidingStep is diagnostic-only and can be populated", () => {
+  const withServeReturn = withInputs({
+    serveReturn: {
+      player1ServeRating: 5,
+      player1ReturnRating: 2,
+      player2ServeRating: 1,
+      player2ReturnRating: 1,
+    } as TieBreakerInputs["serveReturn"],
+  });
   const within = [50, 50 + TIE_BAND - 0.1, 50 - TIE_BAND + 0.1];
   for (const raw of within) {
-    const result = applyTieBreaker(raw, IGNORED_INPUTS);
-    assert.equal(result.decidingStep, null, `Expected decidingStep null for raw=${raw}, got ${result.decidingStep}`);
+    const result = applyTieBreaker(raw, withServeReturn);
+    assert.equal(result.decidingStep, "Serve & Return", `Expected diagnostic decidingStep for raw=${raw}`);
+    assert.equal(result.direction, 0, `Expected no-pick direction for raw=${raw}`);
   }
 });
 
 test("applyTieBreaker: within TIE_BAND — direction is 0 (no pick)", () => {
   const within = [50, 50 + TIE_BAND - 0.1, 50 - TIE_BAND + 0.1];
   for (const raw of within) {
-    const result = applyTieBreaker(raw, IGNORED_INPUTS);
+    const result = applyTieBreaker(raw, BASE_INPUTS);
     assert.equal(result.direction, 0, `Expected direction 0 for raw=${raw}, got ${result.direction}`);
   }
 });
@@ -59,13 +86,13 @@ test("applyTieBreaker: within TIE_BAND — direction is 0 (no pick)", () => {
 test("applyTieBreaker: within TIE_BAND — applied is true (close-match disclosure fires)", () => {
   const within = [50, 50 + TIE_BAND - 0.1, 50 - TIE_BAND + 0.1];
   for (const raw of within) {
-    const result = applyTieBreaker(raw, IGNORED_INPUTS);
+    const result = applyTieBreaker(raw, BASE_INPUTS);
     assert.equal(result.applied, true, `Expected applied true for raw=${raw}`);
   }
 });
 
 test("applyTieBreaker: within TIE_BAND — note is non-null (honest disclosure always present)", () => {
-  const result = applyTieBreaker(50, IGNORED_INPUTS);
+  const result = applyTieBreaker(50, BASE_INPUTS);
   assert.ok(result.note !== null && result.note.length > 0, "Expected a non-empty disclosure note for a close match");
 });
 
@@ -73,11 +100,11 @@ test("applyTieBreaker: within TIE_BAND — note is non-null (honest disclosure a
 
 test("applyTieBreaker: exactly at TIE_BAND boundary — not applied (ensemble already clear)", () => {
   // Math.abs(50 + TIE_BAND - 50) === TIE_BAND → the condition is `>= TIE_BAND` → NOT applied.
-  const atBoundaryAbove = applyTieBreaker(50 + TIE_BAND, IGNORED_INPUTS);
+  const atBoundaryAbove = applyTieBreaker(50 + TIE_BAND, BASE_INPUTS);
   assert.equal(atBoundaryAbove.applied, false);
   assert.equal(atBoundaryAbove.adjustedProbability, 50 + TIE_BAND);
 
-  const atBoundaryBelow = applyTieBreaker(50 - TIE_BAND, IGNORED_INPUTS);
+  const atBoundaryBelow = applyTieBreaker(50 - TIE_BAND, BASE_INPUTS);
   assert.equal(atBoundaryBelow.applied, false);
   assert.equal(atBoundaryBelow.adjustedProbability, 50 - TIE_BAND);
 });
@@ -87,7 +114,7 @@ test("applyTieBreaker: exactly at TIE_BAND boundary — not applied (ensemble al
 test("applyTieBreaker: outside TIE_BAND — applied is false and probability passes through unchanged", () => {
   const outside = [50 + TIE_BAND + 1, 50 - TIE_BAND - 1, 65, 35, 70, 30];
   for (const raw of outside) {
-    const result = applyTieBreaker(raw, IGNORED_INPUTS);
+    const result = applyTieBreaker(raw, BASE_INPUTS);
     assert.equal(result.applied, false, `Expected applied false for raw=${raw}`);
     assert.equal(result.adjustedProbability, raw, `Expected probability unchanged for raw=${raw}`);
     assert.equal(result.note, null);
@@ -106,11 +133,54 @@ test("applyTieBreaker: regression — probabilities formerly nudged by cascade n
     { raw: 50.0, oldCascadeWouldHaveReturned: 47.5 }, // all steps had some signal → old cascade picked one
   ];
   for (const { raw } of examples) {
-    const result = applyTieBreaker(raw, IGNORED_INPUTS);
+    const result = applyTieBreaker(raw, withInputs({
+      serveReturn: {
+        player1ServeRating: 10,
+        player1ReturnRating: 1,
+        player2ServeRating: 1,
+        player2ReturnRating: 1,
+      } as TieBreakerInputs["serveReturn"],
+    }));
     assert.equal(
       result.adjustedProbability,
       raw,
       `Raw ${raw} must pass through unchanged — old cascade would have nudged it to 52.5 or 47.5`,
     );
   }
+});
+
+test("applyTieBreaker: diagnostics priority remains Serve & Return → Surface Elo → Recent Form", () => {
+  const raw = 50;
+
+  const serveReturnFirst = applyTieBreaker(
+    raw,
+    withInputs({
+      serveReturn: {
+        player1ServeRating: 2,
+        player1ReturnRating: 1,
+        player2ServeRating: 1,
+        player2ReturnRating: 1,
+      } as TieBreakerInputs["serveReturn"],
+      surfaceElo: { eloDifference: 64 } as TieBreakerInputs["surfaceElo"],
+      recentForm: { player1Form: 60, player2Form: 50 } as TieBreakerInputs["recentForm"],
+    }),
+  );
+  assert.equal(serveReturnFirst.decidingStep, "Serve & Return");
+
+  const surfaceEloSecond = applyTieBreaker(
+    raw,
+    withInputs({
+      surfaceElo: { eloDifference: 64 } as TieBreakerInputs["surfaceElo"],
+      recentForm: { player1Form: 60, player2Form: 50 } as TieBreakerInputs["recentForm"],
+    }),
+  );
+  assert.equal(surfaceEloSecond.decidingStep, "Surface Elo");
+
+  const recentFormThird = applyTieBreaker(
+    raw,
+    withInputs({
+      recentForm: { player1Form: 60, player2Form: 50 } as TieBreakerInputs["recentForm"],
+    }),
+  );
+  assert.equal(recentFormThird.decidingStep, "Recent Form");
 });

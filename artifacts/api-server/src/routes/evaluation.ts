@@ -75,6 +75,7 @@ import { startOptimizerJob, getOptimizerJobStatus } from "../services/evaluation
 import { getLatestPatternAnalysis } from "../services/evaluation/patternAnalysis";
 import { getLatestThresholdEvaluation } from "../services/evaluation/thresholdEvaluation";
 import { getOptimizerAccuracySummary } from "../services/evaluation/optimizerSummary";
+import { runCalibrationRefitJob } from "../jobs/runCalibrationRefitJob";
 import { computeRecommendation, type Recommendation } from "../services/predictionEngine/recommendation";
 import { enforceEntitlement } from "../lib/entitlements";
 import {
@@ -89,6 +90,7 @@ import {
 } from "../services/payments/entitlementService";
 
 const router: IRouter = Router();
+let calibrationRefitInFlight = false;
 
 /**
  * Task #30: mirrors `withHistoricalMatchFallbackFlag` in `routes/predictions.ts` for evaluation
@@ -137,8 +139,41 @@ router.post("/evaluation/walk-forward/run", async (req, res): Promise<void> => {
     res.status(400).json({ error: parsed.error.message });
     return;
   }
-  const result = startWalkForwardJob(parsed.data);
+
+  // Guard against silent no-op refit calls: callers must be explicit about evaluation-only
+  // behavior. Empty-body POSTs default to true in schema-land and would otherwise silently skip
+  // calibration refitting.
+  const rawBody = (req.body ?? {}) as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(rawBody, "evaluationOnly")) {
+    res.status(400).json({
+      error:
+        "Missing required field 'evaluationOnly'. Pass true for metrics-only walk-forward, or false to refit calibration/specialists.",
+    });
+    return;
+  }
+
+  const result = await startWalkForwardJob(parsed.data);
   res.json(StartWalkForwardResponse.parse(result));
+});
+
+router.post("/evaluation/calibration-refit/run", async (_req, res): Promise<void> => {
+  if (!(await enforceEntitlement(res, canUseOptimizer, "optimizer"))) return;
+
+  if (calibrationRefitInFlight) {
+    res.json({ started: false, reason: "A calibration-refit run is already in progress." });
+    return;
+  }
+
+  calibrationRefitInFlight = true;
+  res.json({ started: true });
+
+  void runCalibrationRefitJob()
+    .catch((err) => {
+      logger.error({ err }, "Manual calibration-refit trigger failed");
+    })
+    .finally(() => {
+      calibrationRefitInFlight = false;
+    });
 });
 
 router.get("/evaluation/walk-forward/status", async (_req, res): Promise<void> => {
@@ -461,6 +496,105 @@ router.get("/evaluation/calibration-refit/job-runs", async (req, res): Promise<v
     .limit(parsed.data.limit);
 
   res.json(ListCalibrationRefitJobRunsResponse.parse(rows));
+});
+
+router.get("/evaluation/calibration-refit/health", async (_req, res): Promise<void> => {
+  const STALE_THRESHOLD_HOURS = 30;
+  const now = Date.now();
+
+  const [latestRun, activeCalibration] = await Promise.all([
+    db
+      .select({
+        id: jobRunsTable.id,
+        status: jobRunsTable.status,
+        startedAt: jobRunsTable.startedAt,
+        finishedAt: jobRunsTable.finishedAt,
+        attempts: jobRunsTable.attempts,
+        summary: jobRunsTable.summary,
+        errorMessage: jobRunsTable.errorMessage,
+      })
+      .from(jobRunsTable)
+      .where(eq(jobRunsTable.jobName, CALIBRATION_REFIT_JOB_NAME))
+      .orderBy(desc(jobRunsTable.startedAt))
+      .limit(1),
+    db
+      .select({
+        id: calibrationModelsTable.id,
+        method: calibrationModelsTable.method,
+        holdoutSampleSize: calibrationModelsTable.holdoutSampleSize,
+        fittedAt: calibrationModelsTable.fittedAt,
+      })
+      .from(calibrationModelsTable)
+      .where(eq(calibrationModelsTable.active, true))
+      .limit(1),
+  ]);
+
+  const run = latestRun[0] ?? null;
+  const model = activeCalibration[0] ?? null;
+  const summary = (run?.summary ?? null) as
+    | { skippedNoEligibleMatches?: boolean; foldsRun?: number; evaluationOnly?: boolean }
+    | null;
+
+  const ageHours = run?.finishedAt ? (now - run.finishedAt.getTime()) / (60 * 60 * 1000) : null;
+  const stale = ageHours === null || ageHours > STALE_THRESHOLD_HOURS;
+  const skipped = summary?.skippedNoEligibleMatches === true || (summary?.foldsRun ?? 0) === 0;
+  const noop = summary?.evaluationOnly === true;
+  const failed = run?.status === "failed";
+  const degenerateActiveModel = !!model && (model.holdoutSampleSize ?? 0) === 0;
+
+  const issues: string[] = [];
+  if (!run) issues.push("no_recent_refit_job");
+  if (stale) issues.push("stale_refit_cadence");
+  if (failed) issues.push("last_refit_failed");
+  if (skipped) issues.push("last_refit_skipped_or_zero_folds");
+  if (noop) issues.push("last_refit_noop_evaluation_only");
+  if (degenerateActiveModel) issues.push("degenerate_active_calibration_model");
+
+  const status = degenerateActiveModel || failed ? "fail" : issues.length > 0 ? "warning" : "pass";
+
+  const recommendedAction =
+    status === "pass"
+      ? "none"
+      : degenerateActiveModel
+        ? "Run calibration refit and keep degenerate activation guard enabled; do not accept holdoutSampleSize=0 as active."
+        : noop
+          ? "Ensure calibration-refit trigger runs with evaluationOnly:false explicitly."
+          : skipped
+            ? "Investigate walk-forward eligibility/data freshness; latest refit skipped or scored zero folds."
+            : stale
+              ? "Verify Scheduled Deployment cadence and ensure calibration refit runs at least daily."
+              : failed
+                ? "Inspect last failure in job-runs and rerun calibration refit."
+                : "Check calibration refit scheduler and recent run history.";
+
+  res.json({
+    status,
+    checkedAt: new Date(now).toISOString(),
+    staleThresholdHours: STALE_THRESHOLD_HOURS,
+    issues,
+    recommendedAction,
+    latestRun: run
+      ? {
+          id: run.id,
+          status: run.status,
+          startedAt: run.startedAt.toISOString(),
+          finishedAt: run.finishedAt.toISOString(),
+          ageHours: ageHours === null ? null : Math.round(ageHours * 10) / 10,
+          attempts: run.attempts,
+          summary,
+          errorMessage: run.errorMessage,
+        }
+      : null,
+    activeCalibration: model
+      ? {
+          id: model.id,
+          method: model.method,
+          holdoutSampleSize: model.holdoutSampleSize,
+          fittedAt: model.fittedAt.toISOString(),
+          degenerate: degenerateActiveModel,
+        }
+      : null,
+  });
 });
 
 router.post("/evaluation/historical-backfill/run-cycle", async (_req, res): Promise<void> => {

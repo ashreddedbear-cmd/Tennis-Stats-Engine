@@ -48,7 +48,9 @@ async function runWithRetry(): Promise<{ attempts: number; summary: WalkForwardS
   let lastError: unknown;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      const summary = await runWalkForwardEvaluation();
+      // Never rely on walk-forward defaults here: this job exists specifically to REFIT
+      // calibration, so evaluationOnly must be explicitly false.
+      const summary = await runWalkForwardEvaluation({ evaluationOnly: false });
       return { attempts: attempt, summary };
     } catch (err) {
       lastError = err;

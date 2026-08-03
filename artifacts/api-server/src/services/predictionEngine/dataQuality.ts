@@ -264,6 +264,89 @@ export interface DataQualityModuleInput {
   importance: number;
 }
 
+export interface MatchupDifficultySignal {
+  /** Preferred source: absolute ATP/WTA rank gap when both ranks are known and positive. */
+  rankGap: number | null;
+  /** Fallback source: absolute Surface Elo-derived probability margin from 50 (0-50 points). */
+  eloGapProbabilityPoints: number | null;
+  /** 0-100 scale where higher means this matchup is structurally less competitive/easier to call. */
+  decisivenessScore: number;
+  source: "rank-gap" | "elo-gap-fallback";
+}
+
+const RANK_GAP_DECISIVENESS_CAP = 120;
+const DQ_MATCHUP_DIFFICULTY_MAX_ADJUSTMENT = 8;
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function rankGapToDecisivenessScore(rankGap: number): number {
+  // Saturating curve: early rank-gap gains move decisiveness most; large gaps flatten.
+  const normalized = clamp01(1 - Math.exp(-Math.max(0, rankGap) / RANK_GAP_DECISIVENESS_CAP));
+  return Math.round(normalized * 1000) / 10;
+}
+
+function eloGapToDecisivenessScore(eloGapProbabilityPoints: number): number {
+  // 0-50 probability-point margin maps to 0-100 decisiveness.
+  const normalized = clamp01(Math.max(0, eloGapProbabilityPoints) / 50);
+  return Math.round(normalized * 1000) / 10;
+}
+
+/**
+ * Measures how structurally COMPETITIVE this specific matchup is, independent of data richness.
+ *
+ * Preferred source is absolute rank gap (real ATP/WTA ranking parity). When rank is unknown for
+ * either player, falls back to absolute Surface Elo probability margin so the signal still
+ * resolves for lower-tier players that often lack live rankings.
+ */
+export function computeMatchupDifficultySignal(input: {
+  player1Rank: number | null;
+  player2Rank: number | null;
+  surfaceEloEdge: number;
+}): MatchupDifficultySignal {
+  const hasRanks =
+    typeof input.player1Rank === "number" &&
+    Number.isFinite(input.player1Rank) &&
+    input.player1Rank > 0 &&
+    typeof input.player2Rank === "number" &&
+    Number.isFinite(input.player2Rank) &&
+    input.player2Rank > 0;
+
+  if (hasRanks) {
+    const rankGap = Math.abs((input.player1Rank as number) - (input.player2Rank as number));
+    return {
+      rankGap,
+      eloGapProbabilityPoints: null,
+      decisivenessScore: rankGapToDecisivenessScore(rankGap),
+      source: "rank-gap",
+    };
+  }
+
+  const eloGapProbabilityPoints = Math.abs((1 / (1 + Math.exp(-Math.max(-50, Math.min(50, input.surfaceEloEdge)) / 12))) * 100 - 50);
+  return {
+    rankGap: null,
+    eloGapProbabilityPoints: Math.round(eloGapProbabilityPoints * 10) / 10,
+    decisivenessScore: eloGapToDecisivenessScore(eloGapProbabilityPoints),
+    source: "elo-gap-fallback",
+  };
+}
+
+/**
+ * Additive Data Quality adjustment from matchup difficulty: close/parity matchups reduce trust,
+ * lopsided matchups increase it, while preserving sample-richness reliability as the base score.
+ */
+export function adjustDataQualityForMatchupDifficulty(baseDataQuality: number, signal: MatchupDifficultySignal): number {
+  const sourceWeight = signal.source === "rank-gap" ? 1 : 0.7;
+  const centered = (signal.decisivenessScore - 50) / 50; // -1..+1 centered around neutral parity
+  const delta = centered * DQ_MATCHUP_DIFFICULTY_MAX_ADJUSTMENT * sourceWeight;
+  return Math.max(0, Math.min(100, Math.round(baseDataQuality + delta)));
+}
+
+export function dataQualityLabelForScore(score: number): DataQualityLabel {
+  return score >= 85 ? "Excellent" : score >= 65 ? "Strong" : score >= 45 ? "Acceptable" : score >= 25 ? "Limited" : "Poor";
+}
+
 /**
  * Blends per-module reliabilities into one overall Data Quality score, weighted by each module's
  * fixed importance prior (see `MODULE_IMPORTANCE`) rather than a flat average. A flat average
@@ -277,6 +360,6 @@ export function computeDataQuality(modules: DataQualityModuleInput[]): { score: 
   const weightTotal = modules.reduce((sum, m) => sum + m.importance, 0);
   const weightedSum = modules.reduce((sum, m) => sum + m.reliability * m.importance, 0);
   const score = weightTotal > 0 ? Math.round(weightedSum / weightTotal) : 0;
-  const label: DataQualityLabel = score >= 85 ? "Excellent" : score >= 65 ? "Strong" : score >= 45 ? "Acceptable" : score >= 25 ? "Limited" : "Poor";
+  const label = dataQualityLabelForScore(score);
   return { score, label };
 }

@@ -390,7 +390,14 @@ async function runJobChecks(): Promise<LaunchAuditFinding[]> {
     // Check for recent paper trading job runs (last 48h)
     const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
     const recentJobs = await db
-      .select({ jobName: jobRunsTable.jobName, status: jobRunsTable.status, finishedAt: jobRunsTable.finishedAt })
+      .select({
+        jobName: jobRunsTable.jobName,
+        status: jobRunsTable.status,
+        finishedAt: jobRunsTable.finishedAt,
+        startedAt: jobRunsTable.startedAt,
+        summary: jobRunsTable.summary,
+        errorMessage: jobRunsTable.errorMessage,
+      })
       .from(jobRunsTable)
       .where(sql`${jobRunsTable.finishedAt} > ${cutoff}`)
       .orderBy(desc(jobRunsTable.finishedAt))
@@ -413,15 +420,61 @@ async function runJobChecks(): Promise<LaunchAuditFinding[]> {
       timestamp: ts(),
     });
 
+    const latestCalibration = calibJobs[0] as
+      | {
+          status: string;
+          startedAt: Date | null;
+          finishedAt: Date | null;
+          summary: unknown;
+          errorMessage: string | null;
+        }
+      | undefined;
+    const latestCalibrationSummary = (latestCalibration?.summary ?? null) as
+      | { skippedNoEligibleMatches?: boolean; foldsRun?: number; evaluationOnly?: boolean }
+      | null;
+    const latestCalibrationAgeHours = latestCalibration?.finishedAt
+      ? (Date.now() - latestCalibration.finishedAt.getTime()) / (60 * 60 * 1000)
+      : null;
+    const calibrationStale = latestCalibrationAgeHours === null || latestCalibrationAgeHours > 30;
+    const calibrationSkipped = latestCalibrationSummary?.skippedNoEligibleMatches === true || (latestCalibrationSummary?.foldsRun ?? 0) === 0;
+    const calibrationNoop = latestCalibrationSummary?.evaluationOnly === true;
+
     findings.push({
       category: 'Background Jobs',
       checkName: 'Calibration refit (48h)',
-      status: calibJobs.length > 0 ? (calibJobs[0]?.status === 'success' ? 'Pass' : 'Warning') : 'Warning',
-      severity: calibJobs.length > 0 ? 'Informational' : 'Low',
-      evidence: calibJobs.length > 0 ? `Last run: ${calibJobs[0]?.finishedAt?.toISOString()} — ${calibJobs[0]?.status}` : 'No calibration refit in last 48 hours',
+      status:
+        calibJobs.length === 0
+          ? 'Warning'
+          : calibrationNoop || calibrationSkipped || calibrationStale
+            ? 'Warning'
+            : latestCalibration?.status === 'success'
+              ? 'Pass'
+              : 'Warning',
+      severity:
+        calibJobs.length === 0
+          ? 'High'
+          : calibrationNoop || calibrationSkipped || calibrationStale
+            ? 'Medium'
+            : latestCalibration?.status === 'success'
+              ? 'Informational'
+              : 'Low',
+      evidence:
+        calibJobs.length === 0
+          ? 'No calibration refit in last 48 hours'
+          : `Last run: ${latestCalibration?.finishedAt?.toISOString()} — ${latestCalibration?.status}; ` +
+            `summary=${JSON.stringify(latestCalibrationSummary ?? {})}; error=${latestCalibration?.errorMessage ?? 'none'}`,
       expectedResult: 'Calibration refit has been run',
       actualResult: calibJobs.length > 0 ? `${calibJobs.length} run(s) in last 48h` : 'No recent runs',
-      recommendedAction: calibJobs.length === 0 ? 'Trigger POST /api/evaluation/calibration-refit to update calibration' : 'Keep monitoring',
+      recommendedAction:
+        calibJobs.length === 0
+          ? 'Scheduled Deployment likely stalled/missing — run POST /api/evaluation/calibration-refit/run and restore daily scheduler.'
+          : calibrationNoop
+            ? 'Refit run was evaluationOnly=true (no-op for calibration). Ensure refit path always passes evaluationOnly:false.'
+            : calibrationSkipped
+              ? 'Latest refit skipped/scored zero folds. Check historical corpus freshness and walk-forward eligibility.'
+              : calibrationStale
+                ? 'Latest refit is older than 30h. Verify Scheduled Deployment cadence and last successful completion.'
+                : 'Keep monitoring',
       relatedService: 'calibration-refit',
       timestamp: ts(),
     });
@@ -509,7 +562,7 @@ async function runCalibrationChecks(): Promise<LaunchAuditFinding[]> {
   try {
     // Check for an active calibration model
     const activeModels = await db
-      .select({ id: calibrationModelsTable.id, method: calibrationModelsTable.method, foldId: calibrationModelsTable.foldId })
+      .select({ id: calibrationModelsTable.id, method: calibrationModelsTable.method, foldId: calibrationModelsTable.foldId, holdoutSampleSize: calibrationModelsTable.holdoutSampleSize })
       .from(calibrationModelsTable)
       .where(eq(calibrationModelsTable.active, true))
       .limit(1);
@@ -527,10 +580,25 @@ async function runCalibrationChecks(): Promise<LaunchAuditFinding[]> {
         : 'No active calibration model — probabilities are uncalibrated',
       expectedResult: 'Active calibration model present',
       actualResult: hasActive ? `Active model (id=${activeModel?.id})` : 'No active model',
-      recommendedAction: hasActive ? 'Keep monitoring' : 'Run calibration refit via POST /api/evaluation/calibration-refit',
+      recommendedAction: hasActive ? 'Keep monitoring' : 'Run calibration refit via POST /api/evaluation/calibration-refit/run',
       relatedService: 'calibration_models',
       timestamp: ts(),
     });
+
+    if (hasActive && (activeModel?.holdoutSampleSize ?? 0) === 0) {
+      findings.push({
+        category: 'Calibration',
+        checkName: 'Degenerate active calibration guard',
+        status: 'Fail',
+        severity: 'Critical',
+        evidence: `Active calibration model id=${activeModel?.id} has holdoutSampleSize=0 (degenerate fit signal).`,
+        expectedResult: 'Active calibration model must have holdoutSampleSize > 0',
+        actualResult: 'Degenerate active model detected',
+        recommendedAction: 'Re-run calibration refit; block activation of holdoutSampleSize=0 models.',
+        relatedService: 'calibration_models',
+        timestamp: ts(),
+      });
+    }
 
     // Walk-forward folds
     const evalPredCount = await db

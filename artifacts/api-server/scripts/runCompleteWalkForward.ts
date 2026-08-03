@@ -84,6 +84,12 @@ async function runPostFit(): Promise<void> {
   console.log(`    - Holdout size: ${liveFit.holdoutSampleSize}`);
   console.log(`    - Knots: ${liveFit.knots.length}`);
 
+  if (liveFit.holdoutSampleSize === 0) {
+    throw new Error(
+      "Refusing to activate degenerate calibration model: holdoutSampleSize is 0 (collapsed fit guard)",
+    );
+  }
+
   // 3. Get the date range from the validation window
   const [dateRange] = await db
     .select({

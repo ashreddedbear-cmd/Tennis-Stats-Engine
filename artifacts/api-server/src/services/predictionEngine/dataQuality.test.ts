@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { computeDataQuality, computeSurfaceSampleDepth, MODULE_IMPORTANCE, EXCLUDED_FROM_DATA_QUALITY } from "./dataQuality";
+import { computeDataQuality, computeSurfaceSampleDepth, computeMatchupDifficultySignal, adjustDataQualityForMatchupDifficulty, MODULE_IMPORTANCE, EXCLUDED_FROM_DATA_QUALITY } from "./dataQuality";
 
 function modules(overrides: Partial<Record<keyof typeof MODULE_IMPORTANCE, number>>) {
   const defaults: Record<keyof typeof MODULE_IMPORTANCE, number> = {
@@ -87,4 +87,31 @@ test("computeSurfaceSampleDepth flags the weaker side and labels Low/Moderate/Hi
   assert.equal(high.label, "High");
   assert.equal(high.player1Sample, 15);
   assert.equal(high.player2Sample, 30);
+});
+
+test("matchup difficulty prefers rank-gap when both ranks are known", () => {
+  const signal = computeMatchupDifficultySignal({ player1Rank: 8, player2Rank: 108, surfaceEloEdge: 0 });
+  assert.equal(signal.source, "rank-gap");
+  assert.equal(signal.rankGap, 100);
+  assert.equal(signal.eloGapProbabilityPoints, null);
+  assert.ok(signal.decisivenessScore > 0);
+});
+
+test("matchup difficulty falls back to Elo gap when rank is missing", () => {
+  const signal = computeMatchupDifficultySignal({ player1Rank: null, player2Rank: 45, surfaceEloEdge: 20 });
+  assert.equal(signal.source, "elo-gap-fallback");
+  assert.equal(signal.rankGap, null);
+  assert.ok(typeof signal.eloGapProbabilityPoints === "number");
+  assert.ok(signal.decisivenessScore > 0);
+});
+
+test("Data Quality adjustment lowers close-parity matchups and raises lopsided matchups", () => {
+  const base = 70;
+  const close = computeMatchupDifficultySignal({ player1Rank: 28, player2Rank: 30, surfaceEloEdge: 0 });
+  const lopsided = computeMatchupDifficultySignal({ player1Rank: 5, player2Rank: 200, surfaceEloEdge: 0 });
+  const closeAdjusted = adjustDataQualityForMatchupDifficulty(base, close);
+  const lopsidedAdjusted = adjustDataQualityForMatchupDifficulty(base, lopsided);
+
+  assert.ok(closeAdjusted < base, `expected parity matchup to reduce DQ from ${base}, got ${closeAdjusted}`);
+  assert.ok(lopsidedAdjusted > base, `expected lopsided matchup to increase DQ from ${base}, got ${lopsidedAdjusted}`);
 });

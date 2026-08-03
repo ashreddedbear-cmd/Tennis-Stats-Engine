@@ -482,3 +482,85 @@ export const PaymentsWebhookResponse = zod.object({
 export const GetEvaluationPredictionStatsQueryParams = zod.object({
   runKind: zod.enum(["historical_test", "paper_trade", "live"]).optional(),
 });
+
+// ── Parlay Builder: Cross-Engine Agreement (Feature) ──────────────────────────
+
+/**
+ * Score breakdown for a single factor considered by the parlay builder
+ * when validating whether a selectedPlayerId is well-supported by the evidence.
+ */
+export const FactorScore = zod.object({
+  name: zod.string(),
+  weight: zod.number(),
+  score: zod.number(),
+  reasoning: zod.string(),
+});
+
+/**
+ * Diagnostics breakdown for data sources used in builder scoring.
+ */
+export const DataSourceDiagnostics = zod.object({
+  headsToHeadsCount: zod.number(),
+  recentFormSampleCount: zod.number(),
+  surfaceEloReliability: zod.number(),
+  fatigueDataAvailable: zod.boolean(),
+  availabilityDataAvailable: zod.boolean(),
+  styleMatchupReliability: zod.number(),
+});
+
+/**
+ * BuilderResult: outcome of the parlay builder's validation of a proposed selectedPlayerId.
+ * The builder is a VALIDATOR, not an independent predictor — it takes a selectedPlayerId
+ * and rates how well that side is supported by various factors (head-to-head, recent form,
+ * surface Elo, fatigue, availability, style matchup, etc.). It does NOT independently
+ * declare a winner; instead, it evaluates whether the proposed selectedPlayerId is robust.
+ *
+ * For cross-engine agreement: take the prediction-engine's selectedPlayerId and pass it
+ * into the builder. Then:
+ *   - decision === "KEEP" or "BORDERLINE" → agreement = true
+ *   - decision === "REMOVE" → agreement = false
+ *   - decision === "DATA_UNAVAILABLE" → agreement = null (unknown, not false)
+ */
+export const BuilderResult = zod.object({
+  /** 0-100 scale: how well the selectedPlayerId is supported by the evidence. */
+  validationScore: zod.number().min(0).max(100),
+  /** 0-100 scale: risk score for the selectedPlayerId (opposite direction from validationScore). */
+  riskScore: zod.number().min(0).max(100),
+  /** 0-100 scale: how close the matchup is (0=blowout, 100=coin flip). */
+  matchupCloseness: zod.number().min(0).max(100),
+  /** Reliability grade for the selectedPlayerId's support profile. */
+  reliabilityGrade: zod.enum(["A", "B", "C", "D", "F"]),
+  /** Overall parlay grade for including this match in a parlay. */
+  parlayGrade: zod.enum(["Elite", "Strong", "Moderate", "Weak", "Reject"]),
+  /** Probability (0-1) that the selectedPlayerId should be removed from a parlay. */
+  removalProbability: zod.number().min(0).max(1),
+  /**
+   * Final decision on the selectedPlayerId's viability:
+   * - KEEP: strong support, include in parlay
+   * - BORDERLINE: acceptable support, include with caution
+   * - REMOVE: weak support or evidence favors opponent, exclude from parlay
+   * - DATA_UNAVAILABLE: insufficient data to decide
+   */
+  decision: zod.enum(["KEEP", "BORDERLINE", "REMOVE", "DATA_UNAVAILABLE"]),
+  /** Reasons supporting the decision (human-readable explanations). */
+  reasons: zod.array(zod.string()),
+  /** Critical flags (e.g. "missing head-to-head", "extreme fatigue concern"). */
+  criticalFlags: zod.array(zod.string()),
+  /** Data coverage percentage: 0-100 scale indicating how complete the available data is. */
+  dataCoverage: zod.number().min(0).max(100),
+  /**
+   * Agreement score: what fraction of evaluated factors support the selectedPlayerId
+   * (0-1 scale). Higher = more factors agree on selectedPlayerId.
+   */
+  sourceAgreement: zod.number().min(0).max(1),
+  /** Count of factors that support the selectedPlayerId. */
+  sourcesAgreeing: zod.number().nonnegative(),
+  /** Total count of factors evaluated. */
+  sourcesTotal: zod.number().positive(),
+  /** Per-factor scoring breakdown. */
+  factorScores: zod.array(FactorScore),
+  /** Diagnostic information about data sources used in the analysis. */
+  dataSourceDiagnostics: DataSourceDiagnostics,
+  /** Version identifier for the builder logic (for tracking changes over time). */
+  builderVersion: zod.string(),
+});

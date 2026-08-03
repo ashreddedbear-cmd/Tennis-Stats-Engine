@@ -6,7 +6,7 @@ import { computeMatchLoadRecoveryModule } from "./matchLoadRecovery";
 import { computeAvailabilityModule } from "./availability";
 import { computeStyleMatchupModule } from "./styleMatchup";
 import { computeHeadToHeadModule } from "./headToHead";
-import { computeDataQuality, computeSurfaceSampleDepth, MODULE_IMPORTANCE, ENSEMBLE_WEIGHT_PRIOR, EXCLUDED_FROM_ENSEMBLE, EXCLUDED_FROM_DATA_QUALITY, CONFIDENCE_SHRINK, TOUR_RELIABILITY_DISCOUNT, LOW_SURFACE_SAMPLE_DISCOUNT } from "./dataQuality";
+import { computeDataQuality, computeSurfaceSampleDepth, computeMatchupDifficultySignal, adjustDataQualityForMatchupDifficulty, dataQualityLabelForScore, MODULE_IMPORTANCE, ENSEMBLE_WEIGHT_PRIOR, EXCLUDED_FROM_ENSEMBLE, EXCLUDED_FROM_DATA_QUALITY, CONFIDENCE_SHRINK, TOUR_RELIABILITY_DISCOUNT, LOW_SURFACE_SAMPLE_DISCOUNT } from "./dataQuality";
 import { buildEnsemble, edgeToProbability, worseAgreement, type ModelVote } from "./ensemble";
 import { computeWeightedDisagreement, computeMatchupCloseness, buildDisagreementNote, AGREEMENT_ORDER, type MatchupCloseness } from "./disagreement";
 import { calibrateProbability } from "./calibration";
@@ -17,6 +17,7 @@ import { deriveServicePointEstimate, runMatchSimulation, deriveMatchSeed, type M
 import { applyTieBreaker } from "./tieBreakers";
 import { computeEliteTier, voteFavorsPlayer1 } from "./eliteTier";
 import { checkFinalConsistency } from "./finalConsistencyCheck";
+import { computeBuilderScore, computeCrossEngineAgreement } from "../parlayBuilder/builderScoringService";
 import type { PredictionEngineInput } from "./types";
 import type { WeatherConditions } from "./weather";
 
@@ -76,6 +77,8 @@ export interface EngineBreakdown {
   modelConflict: boolean;
   /** Concise, always-non-null-when-modelConflict-is-true explanation of which metrics favored the other side and which stage of the pipeline (general calibration, segment specialist, or simulator) flipped the final pick. Null when there's no conflict. */
   modelConflictNote: string | null;
+  /** Rank-parity / Elo-gap fallback signal used to adjust trust for structural matchup competitiveness (independent of data richness). */
+  matchupDifficulty: ReturnType<typeof computeMatchupDifficultySignal>;
   /**
    * True when the raw ensemble landed within `TIE_BAND` of a coin flip — signals a genuinely
    * close matchup. The old directional cascade (Serve & Return → Surface Elo → …) was removed
@@ -132,6 +135,14 @@ export interface EngineOutput {
   engine: EngineBreakdown;
   /** Task #32: full auditable trace of every intermediate pipeline stage and decision-chain rule. */
   decisionTrace: DecisionTrace;
+  /**
+   * Cross-engine agreement: does the parlay builder VALIDATE the engine's own predicted winner?
+   * true  — builder decision is KEEP or BORDERLINE (doesn't disagree with the engine's pick)
+   * false — builder decision is REMOVE (evidence favors the opponent)
+   * null  — builder returned DATA_UNAVAILABLE (not enough data to decide; not a disagreement)
+   * Never merged into the underlying probability or grade — surfaced as a separate signal only.
+   */
+  crossEngineAgreement: boolean | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -170,6 +181,10 @@ export interface DecisionTrace {
     calibrationMethod: "fitted" | "fallback";
     /** Shrink factor applied by the fallback (1.0 if fitted calibration was used instead). */
     fallbackShrinkFactor: number;
+    dataQualityBase: number;
+    dataQualityAdjusted: number;
+    matchupDifficultyDecisiveness: number;
+    matchupDifficultySource: "rank-gap" | "elo-gap-fallback";
     afterCalibration: number;
     specialistWeight: number;
     afterSpecialist: number;
@@ -483,9 +498,16 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
   // (it still votes in the ensemble above) -- see `EXCLUDED_FROM_DATA_QUALITY`'s rationale: the
   // common "no prior meetings" case isn't a fixable data gap, so it shouldn't be able to drag the
   // score down.
-  const { score: dataQuality, label: dataQualityLabel } = computeDataQuality(
+  const { score: baseDataQuality } = computeDataQuality(
     allModuleEdgesForDataQuality.map((m) => ({ reliability: m.reliability, importance: m.importance })),
   );
+  const matchupDifficulty = computeMatchupDifficultySignal({
+    player1Rank: input.player1.currentRank,
+    player2Rank: input.player2.currentRank,
+    surfaceEloEdge: rawEloEdge,
+  });
+  const dataQuality = adjustDataQualityForMatchupDifficulty(baseDataQuality, matchupDifficulty);
+  const dataQualityLabel = dataQualityLabelForScore(dataQuality);
 
   // Requirement 2 of this phase: expose the surface sample-depth count that `surfaceElo.ts`
   // already tracks internally, so a low-sample surface matchup is visibly flagged rather than
@@ -784,6 +806,12 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     risks.push("Probability is close to a coin flip and the underlying models don't agree -- there is no strong signal either way for this matchup.");
   }
 
+  if (matchupDifficulty.decisivenessScore <= 35) {
+    disclosures.push("This matchup profiles as structurally competitive (high parity), independent of data richness; trust is adjusted downward accordingly.");
+  } else if (matchupDifficulty.decisivenessScore >= 70) {
+    disclosures.push("This matchup profiles as structurally less competitive (clearer parity gap), independent of data richness; trust is adjusted upward accordingly.");
+  }
+
   // Auditable upset-risk explanation (2026-07-13 spec, Part 2D) -- named top contributors, never
   // a silent tier label. Shown whenever the tier is above LOW.
   if (upsetRisk !== "LOW") {
@@ -889,6 +917,7 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     simulatorNote,
     modelConflict,
     modelConflictNote,
+    matchupDifficulty,
     tieBreakerApplied: tieBreaker.applied,
     tieBreakerDecidingStep: tieBreaker.decidingStep,
     tieBreakerNote: tieBreaker.applied ? tieBreaker.note : null,
@@ -949,6 +978,10 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
       afterTieBreaker: ensembleProbability,
       calibrationMethod,
       fallbackShrinkFactor,
+      dataQualityBase: baseDataQuality,
+      dataQualityAdjusted: dataQuality,
+      matchupDifficultyDecisiveness: matchupDifficulty.decisivenessScore,
+      matchupDifficultySource: matchupDifficulty.source,
       afterCalibration: generalProbability,
       specialistWeight,
       afterSpecialist: blendedProbability,
@@ -982,6 +1015,33 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     computedAt: new Date().toISOString(),
   };
 
+  // ── Cross-engine agreement: validate the engine's pick against the parlay builder ──
+  // The builder takes the same EngineBreakdown already computed above and re-interprets
+  // the feature signals from the perspective of the predicted winner. This is synchronous
+  // and does not query the database -- it re-reads the engine's own already-computed outputs.
+  const builderResult = computeBuilderScore({
+    selectedPlayerId: predictedWinnerId,
+    opponentId: favorsPlayer1 ? input.player2.id : input.player1.id,
+    engineBreakdown: engine,
+    engineOutput: {
+      predictedWinnerId,
+      predictedWinnerName,
+      calibratedProbability,
+      predictedWinnerProbability,
+      rawEnsembleProbability: ensembleProbability,
+      dataQuality,
+      dataQualityLabel,
+      upsetRisk,
+      recommendation,
+      predictedSetScore,
+      engine,
+      decisionTrace,
+      crossEngineAgreement: null, // not yet computed; builder doesn't recurse
+    },
+    selectedIsPlayer1: favorsPlayer1,
+  });
+  const crossEngineAgreement = computeCrossEngineAgreement(builderResult.decision);
+
   return {
     predictedWinnerId,
     predictedWinnerName,
@@ -995,5 +1055,6 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     predictedSetScore,
     engine,
     decisionTrace,
+    crossEngineAgreement,
   };
 }

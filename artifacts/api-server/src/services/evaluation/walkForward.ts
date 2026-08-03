@@ -230,10 +230,20 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
       { pooledValidationPoints: allValidationPoints.length },
       "Fitting pooled calibration model (cascade-bad rows already excluded per fold)",
     );
-    await db.update(calibrationModelsTable).set({ active: false }).where(eq(calibrationModelsTable.active, true));
     const liveFit = fitBestCalibration(allValidationPoints);
+    // Hard safety guard: never let a degenerate calibration (known collapsed case from prior
+    // audits: holdoutSampleSize === 0, often a constant y=1 isotonic mapping) replace a working
+    // active model. Failing closed here keeps the previous active model in place.
+    if (liveFit.holdoutSampleSize === 0) {
+      throw new Error(
+        "Refusing to activate degenerate calibration model: holdoutSampleSize is 0 (collapsed fit guard)",
+      );
+    }
     const liveMapping = liveFit.knots;
     const dates = allMatches.map((m) => m.scheduledStartAt.getTime());
+
+    // Only now (after passing the guard) swap active calibration rows.
+    await db.update(calibrationModelsTable).set({ active: false }).where(eq(calibrationModelsTable.active, true));
     await db.insert(calibrationModelsTable).values({
       method: liveFit.method,
       mapping: liveMapping,

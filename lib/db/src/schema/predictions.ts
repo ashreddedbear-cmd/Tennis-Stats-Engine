@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, real, jsonb, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, real, jsonb, timestamp, boolean, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -64,6 +64,18 @@ export const predictionsTable = pgTable(
      * Shape: DecisionTrace (see predictionEngine/index.ts).
      */
     decisionTrace: jsonb("decision_trace"),
+
+    /**
+     * Cross-engine agreement: does the parlay builder VALIDATE the prediction engine's own
+     * predicted winner?
+     *   true  — builder decision is KEEP or BORDERLINE (doesn't disagree with the engine's pick)
+     *   false — builder decision is REMOVE (evidence favors opponent)
+     *   null  — builder returned DATA_UNAVAILABLE, or prediction was made before this field existed
+     *
+     * Never merged into the underlying probability or grade — stored as a separate signal only.
+     * Backfilled by scripts/backfillCrossEngineAgreement.ts for historical predictions.
+     */
+    crossEngineAgreement: boolean("cross_engine_agreement"),
 
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),

@@ -257,6 +257,7 @@ router.post("/predictions", async (req, res): Promise<void> => {
       predictedSetScore: output.predictedSetScore,
       engine: output.engine,
       decisionTrace: output.decisionTrace,
+      crossEngineAgreement: output.crossEngineAgreement,
       matchIdentityKey,
       inputSnapshotHash,
     });
