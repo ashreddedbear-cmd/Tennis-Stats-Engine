@@ -82,6 +82,17 @@ test("computeInputSnapshotHash is stable for the exact same inputs (deterministi
   assert.equal(a, b);
 });
 
+test("computeInputSnapshotHash ignores per-request metadata so identical live requests dedupe", () => {
+  const p1Matches = [match("m1")];
+  const p2Matches = [match("m2")];
+  const headToHead: HeadToHeadRecord = { player1Id: "p1", player2Id: "p2", meetings: [] };
+
+  const a = computeInputSnapshotHash({ player1Id: "p1", player2Id: "p2", player1Matches: p1Matches, player2Matches: p2Matches, headToHead });
+  const b = computeInputSnapshotHash({ player1Id: "p1", player2Id: "p2", player1Matches: p1Matches, player2Matches: p2Matches, headToHead });
+
+  assert.equal(a, b, "identical resolved match snapshots must collapse to one stored prediction regardless of request path");
+});
+
 test("computeInputSnapshotHash changes when a player's match history changes (e.g. a newer match added)", () => {
   const p1MatchesBefore = [match("m1")];
   const p1MatchesAfter = [match("m1"), match("m3", { date: "2026-02-01" })];

@@ -83,15 +83,15 @@ export interface InputSnapshotFields {
   headToHead: HeadToHeadRecord | null;
   player1OpponentElo?: OpponentEloLookup;
   player2OpponentElo?: OpponentEloLookup;
-  /** Optional immutable client request id to keep each user-submitted request distinct. */
-  requestNonce?: string;
 }
 
 /**
  * SHA-256 hash of the actual resolved inputs used to compute a prediction, keyed by real player
  * id (not by "player1"/"player2" role) so the hash is identical no matter which player happens to
  * be designated player1 in a given request -- matching `computeMatchIdentityKey`'s own
- * order-independence.
+ * order-independence. Deliberately excludes per-request metadata: two entry points that resolve
+ * to the same real pre-match snapshot must hash identically so persistence can collapse them to a
+ * single stored prediction instead of keeping contradictory duplicates alive.
  */
 export function computeInputSnapshotHash(input: InputSnapshotFields): string {
   const perPlayer = [
@@ -110,7 +110,6 @@ export function computeInputSnapshotHash(input: InputSnapshotFields): string {
   const snapshot = {
     players: perPlayer,
     headToHead: normalizeHeadToHead(input.headToHead),
-    requestNonce: input.requestNonce ?? null,
   };
 
   return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");

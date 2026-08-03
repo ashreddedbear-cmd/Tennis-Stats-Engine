@@ -362,7 +362,6 @@ router.post("/predictions", requireClerkUser, predictionLimiter, async (req, res
       headToHead,
       player1OpponentElo: player1OpponentStrength.lookup,
       player2OpponentElo: player2OpponentStrength.lookup,
-      requestNonce: integrity.requestId,
     });
 
     // Request IDs are internal integrity tokens stored via inputSnapshotHash above -- never

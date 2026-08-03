@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { computeWeightedDisagreement, computeMatchupCloseness, buildDisagreementNote, type DisagreementModelInput } from "./disagreement";
+import { computeWeightedDisagreement, computeMatchupCloseness, buildDisagreementNote, normalizeSupportToWinner, type DisagreementModelInput } from "./disagreement";
 
 function models(overrides: Partial<Record<string, DisagreementModelInput>>): DisagreementModelInput[] {
   return Object.values(overrides).filter((v): v is DisagreementModelInput => v !== undefined);
@@ -312,4 +312,28 @@ test("Task #114: buildDisagreementNote describes a unanimous-but-spread-out case
   const conflictNote = buildDisagreementNote(genuineConflict, "Alice", "Bob");
   assert.ok(conflictNote);
   assert.doesNotMatch(conflictNote!, /confidence levels vary/i, "a genuine conflict must not be softened into a confidence-spread framing");
+});
+
+// Three models all backing playerA with 89% aggregate weight. Two cards for the same real match
+// stored with opposite player-slot assignments must show identical winner-relative agreement.
+test("normalizeSupportToWinner: same match stored with opposite player-slot assignments shows identical winner-relative agreement (89/11 inversion fix)", () => {
+  const threeModels = (player1IsA: boolean): DisagreementModelInput[] => [
+    { modelName: "Surface Elo",   player1Probability: player1IsA ? 70 : 30, weightUsed: 0.40 },
+    { modelName: "Serve & Return", player1Probability: player1IsA ? 65 : 35, weightUsed: 0.35 },
+    { modelName: "Recent Form",   player1Probability: player1IsA ? 55 : 45, weightUsed: 0.25 },
+  ];
+
+  const playerAId = "playerA";
+  const playerBId = "playerB";
+
+  // Card 1: playerA occupies the player1 slot and is the predicted winner.
+  const { player1SupportPercent: psp1 } = computeWeightedDisagreement(threeModels(true));
+  const card1 = normalizeSupportToWinner(psp1, playerAId, playerAId);
+
+  // Card 2: playerA occupies the player2 slot but is still the predicted winner.
+  const { player1SupportPercent: psp2 } = computeWeightedDisagreement(threeModels(false));
+  const card2 = normalizeSupportToWinner(psp2, playerBId, playerAId);
+
+  assert.equal(card1, card2, "both cards must show the same winner-relative agreement regardless of which player slot playerA occupies");
+  assert.ok(card1 > 50, "the majority-backed player must show >50% winner agreement on both cards");
 });

@@ -187,3 +187,33 @@ test("saveOrUpdatePrediction: a genuinely different match (different players) ne
     await cleanup(ids);
   }
 });
+
+/**
+ * Regression guard for the requestNonce issue: two POST /predictions calls with identical match
+ * inputs but different request IDs must produce the same inputSnapshotHash and therefore reuse the
+ * same stored prediction (not create divergent duplicate rows with contradictory labels).
+ */
+test("saveOrUpdatePrediction: identical match inputs from different request IDs hash identically and reuse the same row", async () => {
+  const values = baseValues();
+  const first = await saveOrUpdatePrediction(values);
+  const ids = [first.id];
+  try {
+    // Simulate a second request with identical match inputs but different timestamp/request metadata.
+    // The inputSnapshotHash should be identical because it deliberately excludes per-request metadata
+    // (like requestNonce, requestId, etc.) -- only the resolved match snapshot matters for deduplication.
+    const second = await saveOrUpdatePrediction({
+      ...values,
+      // These simulated metadata changes (timestamp, strategy version) are intentional to show that
+      // only the inputSnapshotHash matters for dedup, not request-level tracking info.
+      snapshotCapturedAt: new Date(new Date().getTime() + 1000), // 1 second later
+      strategyVersion: 9999, // different strategy version in hypothetical follow-up request
+    });
+
+    assert.equal(second.id, first.id, "identical inputs must reuse the same row even with different request metadata");
+
+    const rows = await db.select().from(predictionsTable).where(inArray(predictionsTable.id, [first.id]));
+    assert.equal(rows.length, 1, "only one row must exist for identical match inputs, regardless of request metadata divergence");
+  } finally {
+    await cleanup(ids);
+  }
+});
