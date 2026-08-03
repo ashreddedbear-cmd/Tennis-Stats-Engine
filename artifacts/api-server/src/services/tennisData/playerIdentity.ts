@@ -536,10 +536,11 @@ function minimalProfileFromSearchCandidate(
   };
 }
 
-async function resolvePlayerProfileByName(
+async function resolvePlayerProfileByNameInternal(
   provider: TennisDataProvider,
   submittedName: string,
-  requestedPlayerId: string,
+  requestedPlayerId: string | null = null,
+  options?: { onSearchError?: (err: unknown, query: string) => void },
 ): Promise<PlayerProfile | null> {
   const normalizedQuery = normalizePlayerName(submittedName);
   const queryWords = normalizedQuery.split(" ").filter(Boolean);
@@ -551,7 +552,12 @@ async function resolvePlayerProfileByName(
   let candidates: Awaited<ReturnType<typeof provider.searchPlayers>>;
   try {
     candidates = await provider.searchPlayers(submittedName);
-  } catch {
+  } catch (err) {
+    logger.warn(
+      { submittedName, requestedPlayerId, err },
+      "resolvePlayerProfileByName: provider.searchPlayers failed during primary name lookup",
+    );
+    options?.onSearchError?.(err, submittedName);
     candidates = [];
   }
 
@@ -600,7 +606,17 @@ async function resolvePlayerProfileByName(
     for (const alias of wikidataAliases) {
       const aliasNorm = normalizePlayerName(alias);
       if (aliasNorm === normalizedQuery) continue; // same as original, already tried above
-      const aliasCandidates = await provider.searchPlayers(alias);
+      let aliasCandidates: Awaited<ReturnType<typeof provider.searchPlayers>>;
+      try {
+        aliasCandidates = await provider.searchPlayers(alias);
+      } catch (err) {
+        logger.warn(
+          { submittedName, alias, requestedPlayerId, err },
+          "resolvePlayerProfileByName: provider.searchPlayers failed during alias lookup",
+        );
+        options?.onSearchError?.(err, alias);
+        continue;
+      }
       for (const c of aliasCandidates) {
         if (/\s\/\s|\//.test(c.name ?? "")) continue;
         const cn = normalizePlayerName(c.name);
@@ -670,7 +686,7 @@ export async function resolvePlayerProfileForPrediction(
     // players whose MatchStat fixture ID collides with an API-Tennis doubles-team record but who
     // also lack any historical_matches rows (e.g. newly-active players).
     if (submittedName) {
-      const nameProfile = await resolvePlayerProfileByName(provider, submittedName, requestedPlayerId);
+      const nameProfile = await resolvePlayerProfileByNameInternal(provider, submittedName, requestedPlayerId);
       if (nameProfile) {
         logger.info(
           { requestedPlayerId, submittedName, resolvedId: nameProfile.id },
@@ -891,6 +907,20 @@ export async function resolvePlayerProfile(provider: TennisDataProvider, playerI
 
   logger.info({ playerId, tour: sighting.tour }, "Resolved player tour from historical match record (not in current live standings)");
   return { ...player, tour: sighting.tour, source: "historical-match" };
+}
+
+/**
+ * Shared name-only resolver used by callers that start from a player name rather than a provider id.
+ * Prediction routes use this when recovering from provider-namespace collisions; parlay builder uses
+ * it directly so it does not need its own duplicate search/filter logic.
+ */
+export async function resolvePlayerProfileByName(
+  provider: TennisDataProvider,
+  submittedName: string,
+  requestedPlayerId: string | null = null,
+  options?: { onSearchError?: (err: unknown, query: string) => void },
+): Promise<PlayerProfile | null> {
+  return resolvePlayerProfileByNameInternal(provider, submittedName, requestedPlayerId, options);
 }
 
 /**

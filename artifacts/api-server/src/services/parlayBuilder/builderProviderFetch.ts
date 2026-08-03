@@ -36,10 +36,12 @@ import { ApiTennisProvider } from "../tennisData/apiTennisProvider.js";
 import { MatchStatProvider } from "../tennisData/matchStatProvider.js";
 import {
   ProviderUnavailableError,
+  type TennisDataProvider,
   type MatchRecord,
   type PlayerSummary,
 } from "../tennisData/index.js";
 import { logger } from "../../lib/logger.js";
+import { resolvePlayerProfileByName } from "../tennisData/playerIdentity.js";
 import { fetchFromSofascore } from "./sofascoreProvider.js";
 import { fetchMarketOdds } from "../oddsData/index.js";
 
@@ -125,114 +127,6 @@ function getBuilderApiTennisProvider(): ApiTennisProvider | null {
   const key = process.env.API_TENNIS_KEY;
   _builderApiTennisProvider = key ? new ApiTennisProvider(key) : null;
   return _builderApiTennisProvider;
-}
-
-// ─── Name-matching helpers ───────────────────────────────────────────────────
-
-function extractSurname(name: string): string {
-  const parts = name.trim().split(/\s+/);
-  return (parts[parts.length - 1] ?? name).toLowerCase();
-}
-
-function extractFirstInitial(name: string): string {
-  const first = name.trim().split(/\s+/)[0] ?? "";
-  return first.replace(/\./g, "").charAt(0).toUpperCase();
-}
-
-/**
- * Normalise a name string for comparison: NFD decompose, strip combining diacritics,
- * and lower-case. Applied to both queried and candidate names so "Nădal"/"Nadal",
- * "Đoković"/"Djokovic" etc. compare equal.
- */
-function normaliseName(s: string): string {
-  return s
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    // Characters that do NOT decompose via NFD and must be mapped explicitly.
-    // Đ (U+0110, Latin D with stroke) ≠ Ð (U+00D0, Eth) — both need entries.
-    .replace(/[ŁłÐðØøÆæĐđ]/g, (c) =>
-      ({ Ł: "L", ł: "l", Ð: "D", ð: "d", Ø: "O", ø: "o", Æ: "AE", æ: "ae", Đ: "D", đ: "d" }[c] ?? c),
-    )
-    .toLowerCase();
-}
-
-/**
- * Normalise a provider candidate name that may arrive in "Lastname, F." or
- * "Lastname, Firstname" reversed format into the standard "F. Lastname" order.
- * When no comma is present the name is returned unchanged.
- */
-function normaliseCandidateName(name: string): string {
-  const commaIdx = name.indexOf(",");
-  if (commaIdx === -1) return name;
-  const last = name.slice(0, commaIdx).trim();
-  const first = name.slice(commaIdx + 1).trim();
-  return first ? `${first} ${last}` : last;
-}
-
-/**
- * Confidence check: does a provider candidate match the queried player?
- *
- * Requires both a surname match AND a first-initial match to prevent false
- * positives in common-surname collisions (e.g. "A. Singh" vs "D. Singh").
- * Both sides are NFD-normalised before comparison so diacritics in either
- * the query ("Nădal") or the candidate ("Ĉoric") never block a real match.
- */
-function isConfidentSearchMatch(candidateName: string, queriedName: string): boolean {
-  const normalised = normaliseCandidateName(candidateName);
-  const cNorm = normaliseName(normalised);
-  const qSurname = normaliseName(extractSurname(queriedName));
-  const qInitial = extractFirstInitial(queriedName).toLowerCase();
-
-  if (!cNorm.includes(qSurname)) return false;
-  if (qInitial) {
-    const cInitial = extractFirstInitial(normalised).toLowerCase();
-    if (cInitial !== qInitial) return false;
-  }
-  return true;
-}
-
-/**
- * Build a prioritised list of search queries for a player name, covering:
- * full name · surname · NFD-stripped name · without leading initial.
- */
-function buildSearchQueries(playerName: string): string[] {
-  const queries = new Set<string>();
-  const trimmed = playerName.trim();
-
-  // 1. Full name as given ("D. Singh", "Devvrat Singh")
-  queries.add(trimmed);
-
-  // 2. Surname only — broadest, filtered by initial in result check
-  const surname = trimmed.split(/\s+/).pop() ?? trimmed;
-  if (surname.length >= 3) queries.add(surname);
-
-  // 3. NFD-normalised — strips combining diacritics (é→e, ö→o, ń→n) and maps
-  //    non-NFD special letters that normalize() doesn't decompose (Đ, Ł, Ø …).
-  //    Must mirror the same replacement map used in normaliseName() above.
-  const nfd = trimmed
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[ŁłÐðØøÆæĐđ]/g, (c) =>
-      ({ Ł: "L", ł: "l", Ð: "D", ð: "d", Ø: "O", ø: "o", Æ: "AE", æ: "ae", Đ: "D", đ: "d" }[c] ?? c)
-    );
-  if (nfd !== trimmed) queries.add(nfd);
-  const nfdSurname = nfd.split(/\s+/).pop() ?? nfd;
-  if (nfdSurname !== surname && nfdSurname.length >= 3) queries.add(nfdSurname);
-
-  // 4. Strip leading initial abbreviation: "D. Singh" → "Singh"
-  const withoutInitial = trimmed.replace(/^[A-Z]\.\s*/, "");
-  if (withoutInitial !== trimmed && withoutInitial.length >= 2) queries.add(withoutInitial);
-
-  return [...queries].filter((q) => q.length >= 2);
-}
-
-/** Human-readable description of which search query led to a match. */
-function classifySearchMethod(query: string, originalName: string): string {
-  const t = originalName.trim();
-  if (query === t) return "full-name";
-  if (!query.includes(" ") && query.length < 15) return "surname";
-  if (query !== t && query.replace(/\s/g, "") === t.replace(/\s/g, "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")) return "nfd-normalized";
-  return "name-variant";
 }
 
 function describeProviderError(err: unknown): string {
@@ -333,27 +227,41 @@ async function attemptRapidApi(
   };
   diag.sourcesAttempted.push("rapidapi");
 
-  const searchQueries = buildSearchQueries(playerName);
   let foundPlayer: PlayerSummary | null = null;
-
-  for (const query of searchQueries) {
-    try {
-      const results = await provider.searchPlayers(query);
-      const match = results.find((r) => isConfidentSearchMatch(r.name, playerName));
-      if (match) {
-        foundPlayer = match;
-        break;
-      }
-    } catch (err) {
-      const reason = describeProviderError(err);
-      logger.warn({ source: "rapidapi", query, err, reason }, "builderProviderFetch: rapidapi search failed");
-      sourceDiag.failureReason = reason;
-      diag.sourcesFailed.push("rapidapi");
-      diag.failureReasons.push(`rapidapi search(${query}): ${reason}`);
-      diag.outcome = "SOURCE_UNAVAILABLE";
-      diag.sources.push(sourceDiag);
-      return null;
+  let searchErrorReason: string | null = null;
+  try {
+    const resolved = await resolvePlayerProfileByName(
+      provider as TennisDataProvider,
+      playerName,
+      playerName,
+      {
+        onSearchError: (err, query) => {
+          searchErrorReason = describeProviderError(err);
+          logger.warn({ source: "rapidapi", query, err, reason: searchErrorReason }, "builderProviderFetch: rapidapi shared resolver search failed");
+        },
+      },
+    );
+    if (resolved) {
+      foundPlayer = resolved;
     }
+  } catch (err) {
+    const reason = describeProviderError(err);
+    logger.warn({ source: "rapidapi", err, reason }, "builderProviderFetch: rapidapi shared resolver failed");
+    sourceDiag.failureReason = reason;
+    diag.sourcesFailed.push("rapidapi");
+    diag.failureReasons.push(`rapidapi resolve: ${reason}`);
+    diag.outcome = "SOURCE_UNAVAILABLE";
+    diag.sources.push(sourceDiag);
+    return null;
+  }
+
+  if (searchErrorReason && !foundPlayer) {
+    sourceDiag.failureReason = searchErrorReason;
+    diag.sourcesFailed.push("rapidapi");
+    diag.failureReasons.push(`rapidapi resolve: ${searchErrorReason}`);
+    diag.outcome = "SOURCE_UNAVAILABLE";
+    diag.sources.push(sourceDiag);
+    return null;
   }
 
   if (foundPlayer) {
@@ -366,7 +274,7 @@ async function attemptRapidApi(
     diag.providerIdsFound["rapidapi"] = foundPlayer.id;
     diag.recordsPerSource["rapidapi"] = 0;
     if (diag.playerResolutionMethod === "none") {
-      diag.playerResolutionMethod = "rapidapi-search";
+      diag.playerResolutionMethod = "shared-player-identity";
     }
   } else {
     sourceDiag.failureReason = "Player not found in RapidAPI rankings";
@@ -406,30 +314,42 @@ async function attemptMatchstat(
   };
   diag.sourcesAttempted.push("api-tennis");
 
-  // ── Step 1: Search for the player ────────────────────────────────────────
-  const searchQueries = buildSearchQueries(playerName);
+  // ── Step 1: Resolve the player through the shared identity service ──────
   let foundPlayer: PlayerSummary | null = null;
-  let searchMethod = "none";
-
-  for (const query of searchQueries) {
-    try {
-      const results = await provider.searchPlayers(query);
-      const match = results.find((r) => isConfidentSearchMatch(r.name, playerName));
-      if (match) {
-        foundPlayer = match;
-        searchMethod = classifySearchMethod(query, playerName);
-        break;
-      }
-    } catch (err) {
-      const reason = describeProviderError(err);
-      logger.warn({ source: "api-tennis", query, err, reason }, "builderProviderFetch: api-tennis search failed");
-      sourceDiag.failureReason = reason;
-      diag.sourcesFailed.push("api-tennis");
-      diag.failureReasons.push(`api-tennis search(${query}): ${reason}`);
-      diag.outcome = "SOURCE_UNAVAILABLE";
-      diag.sources.push(sourceDiag);
-      return null;
+  let searchErrorReason: string | null = null;
+  try {
+    const resolved = await resolvePlayerProfileByName(
+      provider as TennisDataProvider,
+      playerName,
+      playerName,
+      {
+        onSearchError: (err, query) => {
+          searchErrorReason = describeProviderError(err);
+          logger.warn({ source: "api-tennis", query, err, reason: searchErrorReason }, "builderProviderFetch: api-tennis shared resolver search failed");
+        },
+      },
+    );
+    if (resolved) {
+      foundPlayer = resolved;
     }
+  } catch (err) {
+    const reason = describeProviderError(err);
+    logger.warn({ source: "api-tennis", err, reason }, "builderProviderFetch: api-tennis shared resolver failed");
+    sourceDiag.failureReason = reason;
+    diag.sourcesFailed.push("api-tennis");
+    diag.failureReasons.push(`api-tennis resolve: ${reason}`);
+    diag.outcome = "SOURCE_UNAVAILABLE";
+    diag.sources.push(sourceDiag);
+    return null;
+  }
+
+  if (searchErrorReason && !foundPlayer) {
+    sourceDiag.failureReason = searchErrorReason;
+    diag.sourcesFailed.push("api-tennis");
+    diag.failureReasons.push(`api-tennis resolve: ${searchErrorReason}`);
+    diag.outcome = "SOURCE_UNAVAILABLE";
+    diag.sources.push(sourceDiag);
+    return null;
   }
 
   if (!foundPlayer) {
@@ -443,7 +363,7 @@ async function attemptMatchstat(
   sourceDiag.providerPlayerId = foundPlayer.id;
   diag.providerIdsFound["api-tennis"] = foundPlayer.id;
   if (diag.playerResolutionMethod === "none" || diag.playerResolutionMethod === "rapidapi-search") {
-    diag.playerResolutionMethod = searchMethod;
+    diag.playerResolutionMethod = "shared-player-identity";
   }
 
   // ── Step 2: Fetch match history ───────────────────────────────────────────
@@ -625,10 +545,6 @@ export async function attemptOddsApi(
     return null; // non-fatal — market odds are supplemental
   }
 }
-
-// ─── Exported helpers (for unit tests) ────────────────────────────────────────
-
-export { normaliseName, normaliseCandidateName, isConfidentSearchMatch, buildSearchQueries };
 
 // ─── Provider injection interface (tests override; production uses env-key singletons) ──
 

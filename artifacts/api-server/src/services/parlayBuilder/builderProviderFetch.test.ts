@@ -11,15 +11,12 @@ import assert from "node:assert/strict";
 
 import {
   fetchPlayerMatchesFromProviders,
-  normaliseName,
-  normaliseCandidateName,
-  isConfidentSearchMatch,
-  buildSearchQueries,
   type BuilderProviders,
 } from "./builderProviderFetch.js";
 import { ProviderUnavailableError } from "../tennisData/index.js";
 import type { MatchRecord, PlayerSummary } from "../tennisData/index.js";
 import type { SofascoreFetchResult } from "./sofascoreProvider.js";
+import { isConfidentSofascoreMatch } from "./sofascoreProvider.js";
 
 // ─── Test doubles ─────────────────────────────────────────────────────────────
 
@@ -92,123 +89,54 @@ function makeProviderError(message: string, status?: number): Error & { status?:
   return err;
 }
 
-// ─── normaliseName ────────────────────────────────────────────────────────────
+describe("shared playerIdentity resolver path", () => {
+  it("resolves the six target players through the builder using the shared name resolver", async () => {
+    const cases = [
+      { playerName: "Taylor Fritz", providerName: "Fritz, Taylor", providerId: "p-fritz" },
+      { playerName: "Matteo Berrettini", providerName: "Berrettini, Matteo", providerId: "p-berrettini" },
+      { playerName: "Zheng Qinwen", providerName: "Qinwen Zheng", providerId: "p-zheng" },
+      { playerName: "Miomir Kecmanovic", providerName: "Kecmanovic, Miomir", providerId: "p-kecmanovic" },
+      { playerName: "James Duckworth", providerName: "James Duckworth", providerId: "p-duckworth" },
+      { playerName: "Christopher O'Connell", providerName: "O’Connell, Christopher", providerId: "p-oconnell" },
+    ] as const;
 
-describe("normaliseName", () => {
-  it("strips combining diacritics", () => {
-    assert.equal(normaliseName("Nadal"), "nadal");
-    assert.equal(normaliseName("Nădal"), "nadal"); // NFD combining char
-    assert.equal(normaliseName("Đoković"), "dokovic");
+    for (const testCase of cases) {
+      const providers: BuilderProviders = {
+        rapidApi: null,
+        apiTennis: makeApiTennisStub({
+          searchPlayers: async () => [makePlayer(testCase.providerId, testCase.providerName)],
+          getPlayerMatches: async () => [makeRecord(`${testCase.providerId}-m1`)],
+        }),
+        sofascore: makeSofascoreStub({ player: null, records: [] }),
+      };
+
+      const result = await fetchPlayerMatchesFromProviders(testCase.playerName, undefined, providers);
+
+      assert.equal(result.diagnostics.outcome, "DATA_FOUND", `${testCase.playerName} should resolve through the builder`);
+      assert.equal(result.resolvedPlayerName, testCase.providerName);
+      assert.equal(result.resolvedPlayerId, testCase.providerId);
+      assert.equal(result.records.length, 1);
+      assert.ok(result.diagnostics.sourcesSuccessful.includes("api-tennis"));
+      assert.equal(result.diagnostics.playerResolutionMethod, "shared-player-identity");
+    }
   });
 
-  it("maps non-NFD special letters", () => {
-    assert.equal(normaliseName("Ł"), "l");
-    assert.equal(normaliseName("Ø"), "o");
-    assert.equal(normaliseName("Æ"), "ae");
-  });
+  it("accepts the same six names in Sofascore candidate formatting", () => {
+    const cases = [
+      { playerName: "Taylor Fritz", candidateName: "Fritz, Taylor" },
+      { playerName: "Matteo Berrettini", candidateName: "Berrettini, Matteo" },
+      { playerName: "Zheng Qinwen", candidateName: "Qinwen Zheng" },
+      { playerName: "Miomir Kecmanovic", candidateName: "Kecmanovic, Miomir" },
+      { playerName: "James Duckworth", candidateName: "James Duckworth" },
+      { playerName: "Christopher O'Connell", candidateName: "O’Connell, Christopher" },
+    ] as const;
 
-  it("lowercases", () => {
-    assert.equal(normaliseName("ALCARAZ"), "alcaraz");
-  });
-});
-
-// ─── normaliseCandidateName ───────────────────────────────────────────────────
-
-describe("normaliseCandidateName", () => {
-  it("returns unchanged name when no comma", () => {
-    assert.equal(normaliseCandidateName("Carlos Alcaraz"), "Carlos Alcaraz");
-  });
-
-  it("flips 'Lastname, F.' to 'F. Lastname'", () => {
-    assert.equal(normaliseCandidateName("Kokkinakis, T."), "T. Kokkinakis");
-  });
-
-  it("flips 'Lastname, Firstname' to 'Firstname Lastname'", () => {
-    assert.equal(normaliseCandidateName("Djokovic, Novak"), "Novak Djokovic");
-  });
-
-  it("handles name with only lastname (no first part)", () => {
-    assert.equal(normaliseCandidateName("Smith,"), "Smith");
-  });
-});
-
-// ─── isConfidentSearchMatch ───────────────────────────────────────────────────
-
-describe("isConfidentSearchMatch", () => {
-  it("matches full name", () => {
-    assert.ok(isConfidentSearchMatch("Carlos Alcaraz", "Carlos Alcaraz"));
-  });
-
-  it("matches abbreviated query 'C. Alcaraz' against full provider name", () => {
-    assert.ok(isConfidentSearchMatch("Carlos Alcaraz", "C. Alcaraz"));
-  });
-
-  it("rejects initial mismatch (A. Singh vs D. Singh)", () => {
-    assert.ok(!isConfidentSearchMatch("Davinder Singh", "A. Singh"));
-  });
-
-  // Diacritic normalisation — é/à/ö etc. decompose via NFD; Đ→D handled explicitly
-  it("matches diacritic query surname against ASCII provider result (NFD decomposable)", () => {
-    // é = e + combining acute → after NFD + strip → e
-    assert.ok(isConfidentSearchMatch("Arnaud Clement", "Arnaud Clément"));
-  });
-
-  it("matches query with Đ against provider returning D equivalent", () => {
-    // Đ (U+0110) does not decompose via NFD — mapped explicitly in normaliseName
-    // Provider here also uses Đ — both sides normalize identically
-    assert.ok(isConfidentSearchMatch("Novak Đoković", "Novak Đoković"));
-  });
-
-  it("matches ASCII query against provider result with diacritics", () => {
-    assert.ok(isConfidentSearchMatch("David Nalbandián", "David Nalbandian"));
-  });
-
-  it("matches when provider uses ø/Ø and query is ASCII", () => {
-    assert.ok(isConfidentSearchMatch("Frederik Løchte Nielsen", "Frederik Lochte Nielsen"));
-  });
-
-  // Reversed name format
-  it("matches 'Lastname, F.' reversed provider format", () => {
-    assert.ok(isConfidentSearchMatch("Kokkinakis, T.", "Thanasi Kokkinakis"));
-  });
-
-  it("matches 'Lastname, Firstname' reversed provider format", () => {
-    assert.ok(isConfidentSearchMatch("Djokovic, Novak", "Novak Djokovic"));
-  });
-
-  // Edge cases
-  it("returns false when surnames don't match", () => {
-    assert.ok(!isConfidentSearchMatch("Rafael Nadal", "Carlos Alcaraz"));
-  });
-});
-
-// ─── buildSearchQueries ───────────────────────────────────────────────────────
-
-describe("buildSearchQueries", () => {
-  it("includes the full name", () => {
-    const q = buildSearchQueries("Carlos Alcaraz");
-    assert.ok(q.includes("Carlos Alcaraz"));
-  });
-
-  it("includes the surname", () => {
-    const q = buildSearchQueries("Carlos Alcaraz");
-    assert.ok(q.includes("Alcaraz"));
-  });
-
-  it("includes diacritic-stripped variant when original has diacritics", () => {
-    const q = buildSearchQueries("Đoković");
-    // After NFD + Đ→D + strip combiners, "Đoković" → "Dokovic"
-    assert.ok(q.some((s) => s.toLowerCase() === "dokovic"), `variants: ${q}`);
-  });
-
-  it("includes name without leading initial", () => {
-    const q = buildSearchQueries("T. Kokkinakis");
-    assert.ok(q.includes("Kokkinakis"));
-  });
-
-  it("returns only strings of length >= 2", () => {
-    const q = buildSearchQueries("Jo");
-    assert.ok(q.every((s) => s.length >= 2));
+    for (const testCase of cases) {
+      assert.ok(
+        isConfidentSofascoreMatch(testCase.candidateName, testCase.playerName),
+        `${testCase.playerName} should match candidate ${testCase.candidateName}`,
+      );
+    }
   });
 });
 
