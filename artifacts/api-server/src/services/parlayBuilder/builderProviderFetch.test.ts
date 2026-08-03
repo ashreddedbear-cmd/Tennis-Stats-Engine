@@ -86,6 +86,12 @@ function makePlayer(id = "at-1", name = "Test Player", tour = "ATP"): PlayerSumm
   return { id, name, tour, currentRank: 50, countryCode: "XX" };
 }
 
+function makeProviderError(message: string, status?: number): Error & { status?: number } {
+  const err = new Error(message) as Error & { status?: number };
+  if (status !== undefined) err.status = status;
+  return err;
+}
+
 // ─── normaliseName ────────────────────────────────────────────────────────────
 
 describe("normaliseName", () => {
@@ -365,6 +371,56 @@ describe("fetchPlayerMatchesFromProviders — provider chain", () => {
     assert.ok(result.diagnostics.sourcesSuccessful.includes("api-tennis"));
   });
 
+  it("surfaces RapidAPI 401 as SOURCE_UNAVAILABLE instead of PLAYER_NOT_FOUND", async () => {
+    const providers: BuilderProviders = {
+      rapidApi: makeRapidApiStub({
+        searchPlayers: async () => { throw makeProviderError("Unauthorized", 401); },
+      }),
+      apiTennis: makeApiTennisStub(),
+      sofascore: makeSofascoreStub({ player: null, records: [] }),
+    };
+
+    const result = await fetchPlayerMatchesFromProviders("Test Player", undefined, providers);
+
+    assert.equal(result.diagnostics.outcome, "SOURCE_UNAVAILABLE");
+    assert.ok(result.diagnostics.sourcesFailed.includes("rapidapi"));
+    assert.ok(result.diagnostics.failureReasons.some((reason) => reason.includes("401")));
+    assert.ok(result.diagnostics.failureReasons.some((reason) => reason.includes("rapidapi search")));
+  });
+
+  it("surfaces API-Tennis 429 as SOURCE_UNAVAILABLE instead of PLAYER_NOT_FOUND", async () => {
+    const providers: BuilderProviders = {
+      rapidApi: null,
+      apiTennis: makeApiTennisStub({
+        searchPlayers: async () => { throw makeProviderError("Too Many Requests", 429); },
+      }),
+      sofascore: makeSofascoreStub({ player: null, records: [] }),
+    };
+
+    const result = await fetchPlayerMatchesFromProviders("Test Player", undefined, providers);
+
+    assert.equal(result.diagnostics.outcome, "SOURCE_UNAVAILABLE");
+    assert.ok(result.diagnostics.sourcesFailed.includes("api-tennis"));
+    assert.ok(result.diagnostics.failureReasons.some((reason) => reason.includes("429")));
+    assert.ok(result.diagnostics.failureReasons.some((reason) => reason.includes("api-tennis search")));
+  });
+
+  it("surfaces Sofascore timeout as SOURCE_UNAVAILABLE instead of PLAYER_NOT_FOUND", async () => {
+    const providers: BuilderProviders = {
+      rapidApi: null,
+      apiTennis: null,
+      sofascore: async () => {
+        throw makeProviderError("timeout while reading response");
+      },
+    };
+
+    const result = await fetchPlayerMatchesFromProviders("Test Player", undefined, providers);
+
+    assert.equal(result.diagnostics.outcome, "SOURCE_UNAVAILABLE");
+    assert.ok(result.diagnostics.sourcesFailed.includes("sofascore"));
+    assert.ok(result.diagnostics.failureReasons.some((reason) => reason.toLowerCase().includes("timeout")));
+  });
+
   it("falls through to Sofascore when API-Tennis search throws ProviderUnavailableError", async () => {
     const providers: BuilderProviders = {
       rapidApi: null,
@@ -510,8 +566,8 @@ describe("fetchPlayerMatchesFromProviders — provider chain", () => {
     );
     assert.equal(
       result.diagnostics.outcome,
-      "PLAYER_NOT_FOUND",
-      "outcome must be PLAYER_NOT_FOUND (not DATA_FOUND) when Sofascore rate-limits",
+      "SOURCE_UNAVAILABLE",
+      "outcome must be SOURCE_UNAVAILABLE when Sofascore rate-limits",
     );
   });
 

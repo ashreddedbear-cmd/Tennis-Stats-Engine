@@ -253,10 +253,14 @@ export async function fetchFromSofascore(playerName: string): Promise<SofascoreF
       const url = `https://api.sofascore.com/api/v1/search/all?q=${encodeURIComponent(query)}`;
       const res = await sfFetch(url);
       if (!res.ok) {
+        const body = await res.text().catch(() => "");
         if (res.status === 429) {
+          logger.warn({ query, status: res.status }, "sofascoreProvider: search rate-limited");
           return { player: null, records: [], error: "Sofascore rate-limited (429)" };
         }
-        continue;
+        const error = `Sofascore search HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ""}`;
+        logger.warn({ query, status: res.status, bodySnippet: body.slice(0, 200) }, "sofascoreProvider: search returned non-OK");
+        return { player: null, records: [], error };
       }
       const data = (await res.json()) as { results?: SofascoreSearchResult[] };
       const players = (data.results ?? []).filter(
@@ -275,7 +279,8 @@ export async function fetchFromSofascore(playerName: string): Promise<SofascoreF
       if (msg.includes("abort") || msg.includes("timeout")) {
         return { player: null, records: [], error: "Sofascore search timed out" };
       }
-      logger.warn({ err, query }, "sofascoreProvider: search error (non-fatal)");
+      logger.warn({ err, query }, "sofascoreProvider: search error");
+      return { player: null, records: [], error: `Sofascore search failed: ${msg}` };
     }
   }
 
@@ -298,7 +303,15 @@ export async function fetchFromSofascore(playerName: string): Promise<SofascoreF
     try {
       const url = `https://api.sofascore.com/api/v1/player/${foundId}/events/last/${page}`;
       const res = await sfFetch(url);
-      if (!res.ok) break;
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        logger.warn({ page, foundId, status: res.status, bodySnippet: body.slice(0, 200) }, "sofascoreProvider: events page returned non-OK");
+        return {
+          player,
+          records,
+          error: `Sofascore events HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ""}`,
+        };
+      }
       const data = (await res.json()) as { events?: SofascoreEvent[]; hasNextPage?: boolean };
       const events = data.events ?? [];
       for (const ev of events) {
@@ -308,9 +321,11 @@ export async function fetchFromSofascore(playerName: string): Promise<SofascoreF
       if (!data.hasNextPage) break;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("abort") || msg.includes("timeout")) break;
-      logger.warn({ err, page, foundId }, "sofascoreProvider: events page error (non-fatal)");
-      break;
+      if (msg.includes("abort") || msg.includes("timeout")) {
+        return { player, records, error: "Sofascore events timed out" };
+      }
+      logger.warn({ err, page, foundId }, "sofascoreProvider: events page error");
+      return { player, records, error: `Sofascore events failed: ${msg}` };
     }
   }
 

@@ -39,6 +39,7 @@ import {
   type MatchRecord,
   type PlayerSummary,
 } from "../tennisData/index.js";
+import { logger } from "../../lib/logger.js";
 import { fetchFromSofascore } from "./sofascoreProvider.js";
 import { fetchMarketOdds } from "../oddsData/index.js";
 
@@ -234,6 +235,21 @@ function classifySearchMethod(query: string, originalName: string): string {
   return "name-variant";
 }
 
+function describeProviderError(err: unknown): string {
+  if (err instanceof ProviderUnavailableError) return err.message;
+  if (err instanceof Error) {
+    const maybeError = err as Error & {
+      status?: number;
+      statusCode?: number;
+      response?: { status?: number };
+    };
+    const status = maybeError.status ?? maybeError.statusCode ?? maybeError.response?.status;
+    const statusPrefix = typeof status === "number" ? `HTTP ${status}: ` : "";
+    return `${statusPrefix}${err.message || err.name || "Unknown provider error"}`;
+  }
+  return String(err);
+}
+
 // ─── DB cache write (non-blocking best-effort) ───────────────────────────────
 
 async function saveMatchesToDb(
@@ -329,15 +345,14 @@ async function attemptRapidApi(
         break;
       }
     } catch (err) {
-      if (err instanceof ProviderUnavailableError) {
-        const reason = err.message;
-        sourceDiag.failureReason = reason;
-        diag.sourcesFailed.push("rapidapi");
-        diag.failureReasons.push(`rapidapi search: ${reason}`);
-        diag.sources.push(sourceDiag);
-        return null;
-      }
-      // Non-fatal — try next variant
+      const reason = describeProviderError(err);
+      logger.warn({ source: "rapidapi", query, err, reason }, "builderProviderFetch: rapidapi search failed");
+      sourceDiag.failureReason = reason;
+      diag.sourcesFailed.push("rapidapi");
+      diag.failureReasons.push(`rapidapi search(${query}): ${reason}`);
+      diag.outcome = "SOURCE_UNAVAILABLE";
+      diag.sources.push(sourceDiag);
+      return null;
     }
   }
 
@@ -406,15 +421,14 @@ async function attemptMatchstat(
         break;
       }
     } catch (err) {
-      if (err instanceof ProviderUnavailableError) {
-        const reason = err.message;
-        sourceDiag.failureReason = reason;
-        diag.sourcesFailed.push("api-tennis");
-        diag.failureReasons.push(`api-tennis search: ${reason}`);
-        diag.sources.push(sourceDiag);
-        return null;
-      }
-      // Non-fatal — try next variant
+      const reason = describeProviderError(err);
+      logger.warn({ source: "api-tennis", query, err, reason }, "builderProviderFetch: api-tennis search failed");
+      sourceDiag.failureReason = reason;
+      diag.sourcesFailed.push("api-tennis");
+      diag.failureReasons.push(`api-tennis search(${query}): ${reason}`);
+      diag.outcome = "SOURCE_UNAVAILABLE";
+      diag.sources.push(sourceDiag);
+      return null;
     }
   }
 
@@ -503,10 +517,11 @@ async function attemptSofascore(
   try {
     const sfResult = await sfFetch(playerName);
 
-    if (sfResult.error?.includes("rate-limit")) {
+    if (sfResult.error) {
       sfDiag.failureReason = sfResult.error;
       diag.sourcesFailed.push("sofascore");
       diag.failureReasons.push(`sofascore: ${sfResult.error}`);
+      diag.outcome = "SOURCE_UNAVAILABLE";
       diag.sources.push(sfDiag);
       return null;
     }
@@ -553,15 +568,17 @@ async function attemptSofascore(
       diag.providerIdsFound["sofascore"] = sfResult.player.id;
       diag.outcome = "NO_MATCH_HISTORY";
     } else {
-      sfDiag.failureReason = sfResult.error ?? "Player not found in Sofascore";
+      sfDiag.failureReason = "Player not found in Sofascore";
       diag.sourcesFailed.push("sofascore");
       // PLAYER_NOT_FOUND outcome stays as-is when all providers say not found
     }
   } catch (err) {
-    const reason = err instanceof Error ? err.message : String(err);
+    const reason = describeProviderError(err);
+    logger.warn({ source: "sofascore", err, reason }, "builderProviderFetch: sofascore fetch failed");
     sfDiag.failureReason = reason;
     diag.sourcesFailed.push("sofascore");
     diag.failureReasons.push(`sofascore: ${reason}`);
+    diag.outcome = "SOURCE_UNAVAILABLE";
   }
 
   diag.sources.push(sfDiag);
@@ -695,10 +712,14 @@ export async function fetchPlayerMatchesFromProviders(
 
   // ── All providers exhausted ───────────────────────────────────────────────
   if (diag.outcome === "CACHE_MISS") {
-    // No provider was attempted at all (no keys configured) or all returned
-    // PLAYER_NOT_FOUND — pick the most accurate terminal outcome.
     const anyAttempted = diag.sourcesAttempted.length > 0;
-    diag.outcome = anyAttempted ? "PLAYER_NOT_FOUND" : "DATA_UNAVAILABLE";
+    if (!anyAttempted) {
+      diag.outcome = "DATA_UNAVAILABLE";
+    } else if (diag.sourcesFailed.length > 0) {
+      diag.outcome = "SOURCE_UNAVAILABLE";
+    } else {
+      diag.outcome = "PLAYER_NOT_FOUND";
+    }
   }
 
   return {
