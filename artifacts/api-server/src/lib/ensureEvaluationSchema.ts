@@ -1,5 +1,6 @@
 import { pool } from "@workspace/db";
 import { logger } from "./logger";
+import { extractFallbackInstrumentation } from "../services/evaluation/fallbackInstrumentation";
 
 const STATEMENTS: string[] = [
   // Ledger table used by /api/predictions (Run Model, Paste, Bulk).
@@ -67,6 +68,7 @@ const STATEMENTS: string[] = [
     scheduled_start_at TIMESTAMPTZ NOT NULL,
     cutoff_at TIMESTAMPTZ NOT NULL,
     model_version TEXT NOT NULL,
+    data_segment TEXT NOT NULL DEFAULT 'live',
     status TEXT NOT NULL DEFAULT 'pending',
     locked_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )
@@ -351,6 +353,7 @@ const STATEMENTS: string[] = [
   `ALTER TABLE evaluation_predictions ADD COLUMN IF NOT EXISTS evidence_reliability_version TEXT`,
   `ALTER TABLE evaluation_predictions ADD COLUMN IF NOT EXISTS fold_id INTEGER`,
   `ALTER TABLE evaluation_predictions ADD COLUMN IF NOT EXISTS segment TEXT`,
+  `ALTER TABLE evaluation_predictions ADD COLUMN IF NOT EXISTS data_segment TEXT NOT NULL DEFAULT 'live'`,
   `ALTER TABLE evaluation_predictions ADD COLUMN IF NOT EXISTS shadow_batch_label TEXT`,
   `ALTER TABLE evaluation_predictions ADD COLUMN IF NOT EXISTS historical_match_id INTEGER`,
   `ALTER TABLE evaluation_predictions ADD COLUMN IF NOT EXISTS provider TEXT`,
@@ -366,6 +369,8 @@ const STATEMENTS: string[] = [
   `ALTER TABLE evaluation_predictions ADD COLUMN IF NOT EXISTS predicted_winner_name TEXT`,
   `ALTER TABLE evaluation_predictions ADD COLUMN IF NOT EXISTS model_agreement TEXT`,
   `ALTER TABLE evaluation_predictions ADD COLUMN IF NOT EXISTS upset_risk_tier TEXT`,
+  `ALTER TABLE evaluation_predictions ADD COLUMN IF NOT EXISTS used_fallback BOOLEAN`,
+  `ALTER TABLE evaluation_predictions ADD COLUMN IF NOT EXISTS fallback_sources JSONB`,
   `ALTER TABLE evaluation_predictions ADD COLUMN IF NOT EXISTS actual_winner_id TEXT`,
   `ALTER TABLE evaluation_predictions ADD COLUMN IF NOT EXISTS actual_winner_name TEXT`,
   `ALTER TABLE evaluation_predictions ADD COLUMN IF NOT EXISTS result_type TEXT`,
@@ -377,6 +382,7 @@ const STATEMENTS: string[] = [
   `ALTER TABLE evaluation_predictions ADD COLUMN IF NOT EXISTS odds_fetched_at TIMESTAMPTZ`,
   `ALTER TABLE evaluation_predictions ADD COLUMN IF NOT EXISTS implied_probability REAL`,
   `ALTER TABLE evaluation_predictions ADD COLUMN IF NOT EXISTS market_edge REAL`,
+  `UPDATE evaluation_predictions SET data_segment = CASE WHEN run_kind = 'historical_test' THEN COALESCE(segment, 'live') ELSE 'live' END WHERE data_segment IS DISTINCT FROM CASE WHEN run_kind = 'historical_test' THEN COALESCE(segment, 'live') ELSE 'live' END`,
   `ALTER TABLE calibration_models ADD COLUMN IF NOT EXISTS validation_date_range_start TIMESTAMPTZ`,
   `ALTER TABLE calibration_models ADD COLUMN IF NOT EXISTS validation_date_range_end TIMESTAMPTZ`,
   `ALTER TABLE calibration_models ADD COLUMN IF NOT EXISTS isotonic_holdout_log_loss REAL`,
@@ -454,12 +460,17 @@ const STATEMENTS: string[] = [
   `ALTER TABLE predictions ADD COLUMN IF NOT EXISTS match_identity_key TEXT`,
   `ALTER TABLE predictions ADD COLUMN IF NOT EXISTS input_snapshot_hash TEXT`,
   `ALTER TABLE predictions ADD COLUMN IF NOT EXISTS decision_trace JSONB`,
+  `ALTER TABLE predictions ADD COLUMN IF NOT EXISTS data_segment TEXT NOT NULL DEFAULT 'live'`,
+  `ALTER TABLE predictions ADD COLUMN IF NOT EXISTS used_fallback BOOLEAN`,
+  `ALTER TABLE predictions ADD COLUMN IF NOT EXISTS fallback_sources JSONB`,
   `ALTER TABLE predictions ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ`,
   // Backfill defaults for columns introduced after early ledger versions.
   `UPDATE predictions SET predicted_winner_probability = calibrated_probability WHERE predicted_winner_probability IS NULL`,
   `UPDATE predictions SET data_quality_label = 'Unknown' WHERE data_quality_label IS NULL`,
+  `UPDATE predictions SET data_segment = 'live' WHERE data_segment IS NULL`,
   `UPDATE predictions SET match_identity_key = concat_ws('::', concat_ws('|', least(player1_id, player2_id), greatest(player1_id, player2_id)), coalesce(nullif(lower(trim(tournament_name)), ''), '__no_tournament__'), surface, match_format) WHERE match_identity_key IS NULL`,
   `UPDATE predictions SET input_snapshot_hash = md5(concat_ws('|', coalesce(player1_id,''), coalesce(player2_id,''), coalesce(created_at::text,''), coalesce(id::text,''))) WHERE input_snapshot_hash IS NULL`,
+  `UPDATE evaluation_predictions SET segment = 'live' WHERE segment IS NULL AND run_kind IN ('paper_trade', 'live', 'paper_trade_shadow')`,
   `CREATE INDEX IF NOT EXISTS predictions_created_at_idx ON predictions (created_at)`,
   `CREATE INDEX IF NOT EXISTS predictions_recommendation_idx ON predictions (recommendation)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS predictions_identity_input_snapshot_idx ON predictions (match_identity_key, input_snapshot_hash)`,
@@ -577,6 +588,7 @@ export async function ensureEvaluationSchema(): Promise<void> {
     for (const statement of STATEMENTS) {
       await client.query(statement);
     }
+    await backfillPersistedInstrumentation(client);
     await client.query("COMMIT");
     ensured = true;
     logger.info("Evaluation/optimizer schema check completed");
@@ -585,5 +597,54 @@ export async function ensureEvaluationSchema(): Promise<void> {
     throw error;
   } finally {
     client.release();
+  }
+}
+
+async function backfillPersistedInstrumentation(client: {
+  query: (text: string, params?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }>;
+}): Promise<void> {
+  const predictionRows = await client.query(
+    `SELECT id, engine, decision_trace, used_fallback, fallback_sources
+       FROM predictions
+      WHERE used_fallback IS NULL OR fallback_sources IS NULL`,
+  );
+
+  for (const row of predictionRows.rows) {
+    const fallback = extractFallbackInstrumentation({
+      engine: row.engine,
+      decisionTrace: row.decision_trace,
+    });
+
+    if (fallback.usedFallback === null && fallback.fallbackSources === null) continue;
+
+    await client.query(
+      `UPDATE predictions
+          SET used_fallback = COALESCE(used_fallback, $2),
+              fallback_sources = COALESCE(fallback_sources, $3)
+        WHERE id = $1`,
+      [row.id, fallback.usedFallback, fallback.fallbackSources],
+    );
+  }
+
+  const evaluationRows = await client.query(
+    `SELECT id, feature_snapshot, used_fallback, fallback_sources
+       FROM evaluation_predictions
+      WHERE data_segment IS NULL OR used_fallback IS NULL OR fallback_sources IS NULL`,
+  );
+
+  for (const row of evaluationRows.rows) {
+    const featureSnapshot = row.feature_snapshot as { engine?: unknown } | null;
+    const fallback = extractFallbackInstrumentation({
+      engine: featureSnapshot?.engine,
+    });
+
+    await client.query(
+      `UPDATE evaluation_predictions
+          SET data_segment = COALESCE(data_segment, COALESCE(segment, 'live')),
+              used_fallback = COALESCE(used_fallback, $2),
+              fallback_sources = COALESCE(fallback_sources, $3)
+        WHERE id = $1`,
+      [row.id, fallback.usedFallback, fallback.fallbackSources],
+    );
   }
 }

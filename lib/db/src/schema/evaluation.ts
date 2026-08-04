@@ -129,8 +129,10 @@ export const evaluationPredictionsTable = pgTable(
     // simulated evidence everywhere it's shown.
     runKind: text("run_kind").notNull(),
     foldId: integer("fold_id").references(() => evaluationRunsTable.id),
-    // 'validation' | 'test', only set for historical_test rows.
+    // 'validation' | 'test' | 'live'.
     segment: text("segment"),
+    // Instrumentation-only classification of the underlying data slice used to produce this row.
+    dataSegment: text("data_segment").notNull().default("live"),
     // Only set for paper_trade_shadow rows: identifies which replay invocation produced this row,
     // so a specific batch's rows can be listed or deleted without touching any other batch, real
     // paper-trading, or historical_test rows.
@@ -182,6 +184,9 @@ export const evaluationPredictionsTable = pgTable(
     // prediction engine itself, so backfilling or leaving old rows null cannot affect scoring.
     modelAgreement: text("model_agreement"),
     upsetRiskTier: text("upset_risk_tier"),
+    // Instrumentation-only metadata (does not affect prediction logic).
+    usedFallback: boolean("used_fallback"),
+    fallbackSources: jsonb("fallback_sources").$type<string[]>(),
 
     // 'pending' -> exactly one of 'graded' | 'void' | 'missed'. Never reverts.
     status: text("status").notNull().default("pending"),

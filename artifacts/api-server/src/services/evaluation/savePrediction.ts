@@ -1,5 +1,6 @@
 import { db, predictionsTable, type InsertPrediction, type PredictionRow } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
+import { extractFallbackInstrumentation } from "./fallbackInstrumentation";
 
 function normalizePredictionInsert(values: InsertPrediction): InsertPrediction {
   const requiredTextFields: Array<keyof InsertPrediction> = [
@@ -25,6 +26,11 @@ function normalizePredictionInsert(values: InsertPrediction): InsertPrediction {
     }
   }
 
+  const fallback = extractFallbackInstrumentation({
+    engine: values.engine,
+    decisionTrace: values.decisionTrace,
+  });
+
   return {
     ...values,
     tournamentLevel: values.tournamentLevel ?? null,
@@ -37,6 +43,9 @@ function normalizePredictionInsert(values: InsertPrediction): InsertPrediction {
     actualWinnerId: values.actualWinnerId ?? null,
     actualWinnerName: values.actualWinnerName ?? null,
     decisionTrace: values.decisionTrace ?? null,
+    dataSegment: values.dataSegment ?? "live",
+    usedFallback: values.usedFallback ?? fallback.usedFallback,
+    fallbackSources: values.fallbackSources ?? fallback.fallbackSources,
     resolvedAt: values.resolvedAt ?? null,
     clerkUserId: values.clerkUserId ?? null,
   };

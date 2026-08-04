@@ -23,7 +23,7 @@ export const HISTORICAL_MODEL_VERSION = "phase8-historical-live-engine-v1";
 export const LIVE_MODEL_VERSION = "phase9-fixed-ensemble-v2";
 
 export type RunKind = "historical_test" | "paper_trade" | "live" | "paper_trade_shadow";
-export type Segment = "validation" | "test";
+export type Segment = "validation" | "test" | "live";
 export type PredictionStatus = "pending" | "graded" | "void" | "missed";
 export type ResultType = "normal" | "retired" | "walkover" | "cancelled";
 export type RetirementRule = "excluded" | "included";

@@ -6,6 +6,7 @@ import { resolveSegmentSpecialistInputSync } from "./specialistWeights";
 import { LIVE_MODEL_VERSION, type LiveFeatureSnapshot, type CalibrationKnot } from "./types";
 import type { MatchFormat, PlayerProfile, Surface } from "../tennisData/types";
 import type { PlayerIdentityIndex } from "../tennisData/playerIdentity";
+import { extractFallbackInstrumentation, type FallbackSource } from "./fallbackInstrumentation";
 
 /**
  * Everything `scoreHistoricalMatch` needs that's shared across every match in a walk-forward
@@ -99,7 +100,15 @@ export function scoreHistoricalMatch(
   match: HistoricalMatchRow,
   context: HistoricalScoringContext,
   activeCalibrationOverride?: CalibrationKnot[] | null,
-): { rawProbability: number; calibratedProbability: number; snapshot: LiveFeatureSnapshot; modelAgreement: string; upsetRiskTier: string } | null {
+): {
+  rawProbability: number;
+  calibratedProbability: number;
+  snapshot: LiveFeatureSnapshot;
+  modelAgreement: string;
+  upsetRiskTier: string;
+  usedFallback: boolean | null;
+  fallbackSources: FallbackSource[] | null;
+} | null {
   if (!match.surface || !match.matchFormat) return null;
   const surface = match.surface as Surface;
   const matchFormat = match.matchFormat as MatchFormat;
@@ -161,6 +170,10 @@ export function scoreHistoricalMatch(
     dataQuality: output.dataQuality,
     isEliteTier: output.engine.isEliteTier,
   };
+  const fallback = extractFallbackInstrumentation({
+    engine: output.engine,
+    decisionTrace: output.decisionTrace,
+  });
 
   return {
     rawProbability: output.rawEnsembleProbability / 100,
@@ -170,5 +183,7 @@ export function scoreHistoricalMatch(
     snapshot,
     modelAgreement: output.engine.modelAgreement,
     upsetRiskTier: output.upsetRisk,
+    usedFallback: fallback.usedFallback,
+    fallbackSources: fallback.fallbackSources,
   };
 }

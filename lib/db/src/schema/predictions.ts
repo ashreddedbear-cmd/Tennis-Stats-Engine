@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, real, jsonb, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, real, boolean, jsonb, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -37,6 +37,11 @@ export const predictionsTable = pgTable(
     upsetRisk: text("upset_risk").notNull(),
     recommendation: text("recommendation").notNull(),
     predictedSetScore: text("predicted_set_score").notNull(),
+
+    // Instrumentation-only metadata (does not affect prediction logic).
+    dataSegment: text("data_segment").notNull().default("live"),
+    usedFallback: boolean("used_fallback"),
+    fallbackSources: jsonb("fallback_sources").$type<string[]>(),
 
     // Full module-by-module engine output (EngineBreakdown shape), stored as-is for the detail view.
     engine: jsonb("engine").notNull(),

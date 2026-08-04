@@ -8,6 +8,7 @@ import { computeVigAdjustedImpliedProbability } from "../oddsData/impliedProbabi
 import { logger } from "../../lib/logger";
 import { defaultPredictionMode, derivePredictionStrategyIdentity, getCurrentProductionStrategyIdentity } from "./strategyIdentity";
 import { predictFromSnapshot } from "./predictionSnapshot";
+import { extractFallbackInstrumentation } from "./fallbackInstrumentation";
 
 /**
  * How long after a fixture's cutoff instant the cycle will still lock a fresh prediction for it.
@@ -117,6 +118,8 @@ export async function runPaperTradingCycle(providerOverride?: TennisDataProvider
         competitiveBalanceVersion: null,
         evidenceReliabilityVersion: null,
         runKind: "paper_trade",
+        segment: "live",
+        dataSegment: "live",
         provider: provider.name,
         externalFixtureId: fixture.id,
         player1Id: fixture.player1Id,
@@ -134,6 +137,8 @@ export async function runPaperTradingCycle(providerOverride?: TennisDataProvider
         featureSnapshot: null,
         rawProbability: null,
         calibratedProbability: null,
+        usedFallback: null,
+        fallbackSources: null,
         predictedWinnerId: null,
         predictedWinnerName: null,
         status: "missed",
@@ -168,6 +173,10 @@ export async function runPaperTradingCycle(providerOverride?: TennisDataProvider
       const rawProbability = output.rawEnsembleProbability; // pre-calibration, kept for transparency/future refitting
 
       const favorsPlayer1 = calibratedProbability >= 50;
+      const fallback = extractFallbackInstrumentation({
+        engine: output.engine,
+        decisionTrace: output.decisionTrace,
+      });
       const snapshot: LiveFeatureSnapshot = {
         modelVersion: LIVE_MODEL_VERSION,
         engine: output.engine,
@@ -204,6 +213,8 @@ export async function runPaperTradingCycle(providerOverride?: TennisDataProvider
         competitiveBalanceVersion: null,
         evidenceReliabilityVersion: null,
         runKind: "paper_trade",
+        segment: "live",
+        dataSegment: "live",
         provider: provider.name,
         externalFixtureId: fixture.id,
         player1Id: player1.id,
@@ -221,6 +232,8 @@ export async function runPaperTradingCycle(providerOverride?: TennisDataProvider
         featureSnapshot: snapshot,
         modelAgreement: output.engine.modelAgreement,
         upsetRiskTier: output.upsetRisk,
+        usedFallback: fallback.usedFallback,
+        fallbackSources: fallback.fallbackSources,
         rawProbability,
         calibratedProbability,
         predictedWinnerId: favorsPlayer1 ? player1.id : player2.id,

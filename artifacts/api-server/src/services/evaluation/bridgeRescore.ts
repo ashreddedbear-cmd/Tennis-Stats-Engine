@@ -210,6 +210,7 @@ export async function runBridgeRescore(
         runKind: "historical_test",
         foldId: null as number | null,
         segment: "test",
+        dataSegment: "test",
         historicalMatchId: typeof match.id === "number" ? match.id : null,
         player1Id,
         player1Name,
@@ -238,6 +239,8 @@ export async function runBridgeRescore(
           typeof scoredResult?.upsetRiskTier === "string"
             ? scoredResult.upsetRiskTier
             : null,
+        usedFallback: scoredResult?.usedFallback ?? null,
+        fallbackSources: scoredResult?.fallbackSources ?? null,
         rawProbability:
           rawProbability !== null && Number.isFinite(rawProbability)
             ? rawProbability * 100
