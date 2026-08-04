@@ -137,7 +137,7 @@ test("applyTieBreaker: outside TIE_BAND — applied is false and probability pas
 test("display invariant: when applied=true, adjustedProbability is always within TIE_BAND of 50 (safe for banner display)", () => {
   const withinBand = [50.0, 49.0, 51.0, 50 + TIE_BAND - 0.01, 50 - TIE_BAND + 0.01];
   for (const raw of withinBand) {
-    const result = applyTieBreaker(raw, IGNORED_INPUTS);
+    const result = applyTieBreaker(raw, BASE_INPUTS);
     assert.ok(result.applied, `Expected applied=true for raw=${raw}`);
     assert.ok(
       Math.abs(result.adjustedProbability - 50) < TIE_BAND,
@@ -149,7 +149,7 @@ test("display invariant: when applied=true, adjustedProbability is always within
 test("display invariant: when applied=false, adjustedProbability is outside TIE_BAND (calibratedProbability is appropriate for display)", () => {
   const outsideBand = [50 + TIE_BAND, 50 - TIE_BAND, 65, 35, 80, 20];
   for (const raw of outsideBand) {
-    const result = applyTieBreaker(raw, IGNORED_INPUTS);
+    const result = applyTieBreaker(raw, BASE_INPUTS);
     assert.ok(!result.applied, `Expected applied=false for raw=${raw}`);
     assert.ok(
       Math.abs(result.adjustedProbability - 50) >= TIE_BAND,
