@@ -1,0 +1,1 @@
+psql $DATABASE_URL -c "SELECT id, feature_snapshot FROM evaluation_predictions WHERE feature_snapshot::text LIKE '%recentForm%' LIMIT 5;"

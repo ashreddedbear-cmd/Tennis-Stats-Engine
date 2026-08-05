@@ -1,0 +1,1 @@
+sed -n '1,30p' artifacts/api-server/src/index.ts
