@@ -622,7 +622,7 @@ async function backfillPersistedInstrumentation(client: {
           SET used_fallback = COALESCE(used_fallback, $2),
               fallback_sources = COALESCE(fallback_sources, $3)
         WHERE id = $1`,
-      [row.id, fallback.usedFallback, fallback.fallbackSources],
+      [row.id, fallback.usedFallback, JSON.stringify(fallback.fallbackSources)],
     );
   }
 
@@ -644,7 +644,7 @@ async function backfillPersistedInstrumentation(client: {
               used_fallback = COALESCE(used_fallback, $2),
               fallback_sources = COALESCE(fallback_sources, $3)
         WHERE id = $1`,
-      [row.id, fallback.usedFallback, fallback.fallbackSources],
+      [row.id, fallback.usedFallback, JSON.stringify(fallback.fallbackSources)],
     );
   }
 }
