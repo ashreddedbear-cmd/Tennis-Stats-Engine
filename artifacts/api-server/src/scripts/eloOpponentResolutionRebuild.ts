@@ -17,8 +17,9 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
-import { db, historicalMatchesTable, matchFeatureSnapshotsTable, type HistoricalMatchRow } from "@workspace/db";
-import { asc } from "drizzle-orm";
+import { pathToFileURL } from "node:url";
+import { db, historicalMatchesTable, matchFeatureSnapshotsTable, type HistoricalMatchRow, type MatchFeatureSnapshotRow } from "@workspace/db";
+import { asc, gt } from "drizzle-orm";
 import { runPredictionEngine } from "../services/predictionEngine";
 import { computeSurfaceEloModule } from "../services/predictionEngine/surfaceElo";
 import { buildEloHistoryIndex, resolveOpponentStrengthFromIndex, type EloHistoryIndex } from "../services/predictionEngine/opponentStrength";
@@ -29,8 +30,68 @@ import { brierScore, logLoss } from "../services/evaluation/calibration";
 import { computeECE } from "../services/evaluation/metrics";
 import type { MatchFormat, PlayerProfile, Surface, TournamentLevel } from "../services/tennisData/types";
 
-const EMPTY_IDENTITY: PlayerIdentityIndex = { canonicalIdByName: new Map(), canonicalIdById: new Map(), aliasIdsByCanonicalId: new Map() };
 const CAP = 4000;
+const SNAPSHOT_BACKUP_BATCH_SIZE = 1_000;
+
+export interface SnapshotBackupResult {
+  backupPath: string;
+  totalRows: number;
+  batchesCompleted: number;
+  finalSizeBytes: number;
+  lastExportedRowId: number | null;
+}
+
+interface SnapshotBackupFile {
+  writeFile(data: string): Promise<void>;
+  close(): Promise<void>;
+}
+
+interface SnapshotBackupFiles {
+  mkdir(path: string, options: { recursive: boolean }): Promise<void>;
+  open(path: string, flags: string): Promise<SnapshotBackupFile>;
+  rename(source: string, destination: string): Promise<void>;
+  stat(path: string): Promise<{ size: number }>;
+}
+
+export async function backupMatchFeatureSnapshots(options: {
+  backupDir: string;
+  fetchBatch: (lastId: number) => Promise<MatchFeatureSnapshotRow[]>;
+  files?: SnapshotBackupFiles;
+  batchSize?: number;
+  finalFilename?: string;
+}): Promise<SnapshotBackupResult> {
+  const files = options.files ?? fs;
+  const batchSize = options.batchSize ?? SNAPSHOT_BACKUP_BATCH_SIZE;
+  const backupPath = path.join(options.backupDir, options.finalFilename ?? "match_feature_snapshots_backup_2026-07-13.jsonl");
+  const partialPath = `${backupPath}.partial`;
+  await files.mkdir(options.backupDir, { recursive: true });
+
+  let output: SnapshotBackupFile | null = null;
+  let totalRows = 0;
+  let batchesCompleted = 0;
+  let lastExportedRowId = 0;
+  try {
+    output = await files.open(partialPath, "w");
+    while (true) {
+      const rows = await options.fetchBatch(lastExportedRowId);
+      if (rows.length === 0) break;
+      for (const row of rows) {
+        await output.writeFile(`${JSON.stringify(row)}\n`);
+        totalRows += 1;
+        lastExportedRowId = row.id;
+      }
+      batchesCompleted += 1;
+    }
+    await output.close();
+    output = null;
+    await files.rename(partialPath, backupPath);
+    const stats = await files.stat(backupPath);
+    return { backupPath, totalRows, batchesCompleted, finalSizeBytes: stats.size, lastExportedRowId: totalRows > 0 ? lastExportedRowId : null };
+  } catch (error) {
+    await output?.close().catch(() => undefined);
+    throw new Error(`Snapshot backup failed; partial file preserved at ${partialPath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 
 function minimalProfile(id: string, name: string): PlayerProfile {
   return { id, name, countryCode: null, currentRank: null, tour: null, age: null, plays: null, fullName: null };
@@ -112,12 +173,21 @@ async function main() {
   const startedAt = Date.now();
   console.log("[eloRebuild] Backing up match_feature_snapshots before rebuild...");
 
-  const snapshotRows = await db.select().from(matchFeatureSnapshotsTable);
   const backupDir = path.resolve(process.cwd(), "backups");
-  await fs.mkdir(backupDir, { recursive: true });
-  const backupPath = path.join(backupDir, `match_feature_snapshots_backup_2026-07-13.json`);
-  await fs.writeFile(backupPath, JSON.stringify(snapshotRows, null, 2));
-  console.log(`[eloRebuild] Backed up ${snapshotRows.length} feature-snapshot rows to ${backupPath}`);
+  const snapshotBackup = await backupMatchFeatureSnapshots({
+    backupDir,
+    fetchBatch: (lastId) => db
+      .select()
+      .from(matchFeatureSnapshotsTable)
+      .where(gt(matchFeatureSnapshotsTable.id, lastId))
+      .orderBy(asc(matchFeatureSnapshotsTable.id))
+      .limit(SNAPSHOT_BACKUP_BATCH_SIZE),
+  });
+  console.log(
+    `[eloRebuild] Backed up ${snapshotBackup.totalRows} feature-snapshot rows in ${snapshotBackup.batchesCompleted} batch(es) ` +
+    `to ${snapshotBackup.backupPath} (${snapshotBackup.finalSizeBytes} bytes), last row ID ${snapshotBackup.lastExportedRowId ?? "none"}`,
+  );
+  const backupPath = snapshotBackup.backupPath;
 
   console.log("[eloRebuild] Loading full historical corpus...");
   const allMatches = await db.select().from(historicalMatchesTable).orderBy(asc(historicalMatchesTable.scheduledStartAt), asc(historicalMatchesTable.id));
@@ -130,8 +200,8 @@ async function main() {
     `[eloRebuild] Identity index: ${identityIndex.canonicalIdByName.size} distinct normalized names, ${identityIndex.canonicalIdById.size} id->canonical mappings (${identityIndex.canonicalIdById.size - identityIndex.canonicalIdByName.size} extra aliases beyond the 1-per-name baseline).`,
   );
 
-  const eloHistoryBefore = await buildEloHistoryIndex(); // no identity => exact-id-match-only (pre-#77 behavior)
-  const eloHistoryAfter = await buildEloHistoryIndex(identityIndex);
+  const eloHistoryBefore = await buildEloHistoryIndex(identityIndex);
+  const eloHistoryAfter = eloHistoryBefore;
 
   // --- Full-corpus rebuild (Task #77 step 4): re-score EVERY eligible match with the improved
   // resolution, tracking the fallback rate across the entire corpus, not just a sample. ---
@@ -199,7 +269,7 @@ async function main() {
   const afterByLevel = new Map<string, Array<{ match: HistoricalMatchRow; result: ScoreResult }>>();
   for (const match of sample) {
     const level = match.tournamentLevel ?? "Unknown";
-    const before = scoreMatch(match, matchHistory, eloHistoryBefore, EMPTY_IDENTITY);
+    const before = scoreMatch(match, matchHistory, eloHistoryBefore, identityIndex);
     const after = scoreMatch(match, matchHistory, eloHistoryAfter, identityIndex);
     if (before) (beforeByLevel.get(level) ?? beforeByLevel.set(level, []).get(level)!).push({ match, result: before });
     if (after) (afterByLevel.get(level) ?? afterByLevel.set(level, []).get(level)!).push({ match, result: after });
@@ -232,7 +302,7 @@ async function main() {
       cancelled: false,
       winnerId: null,
     } as unknown as HistoricalMatchRow;
-    const before = scoreMatch(syntheticRow, matchHistory, eloHistoryBefore, EMPTY_IDENTITY);
+    const before = scoreMatch(syntheticRow, matchHistory, eloHistoryBefore, identityIndex);
     const after = scoreMatch(syntheticRow, matchHistory, eloHistoryAfter, identityIndex);
     sixResults.push({
       label: m.label,
@@ -281,9 +351,11 @@ async function main() {
   console.log(JSON.stringify(report, null, 2));
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((err) => {
-    console.error(err);
-    process.exit(1);
-  });
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main()
+    .then(() => process.exit(0))
+    .catch((err) => {
+      console.error(err);
+      process.exit(1);
+    });
+}
