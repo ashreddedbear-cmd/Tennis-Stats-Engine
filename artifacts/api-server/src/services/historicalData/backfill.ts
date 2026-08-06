@@ -6,6 +6,7 @@ import { combineDateTimeUtc } from "../tennisData/apiTennisProvider";
 import { resolveTournamentTimezone } from "../tennisData/timezoneMap";
 import { applyMatchResult, computeFeatures, createPlayerState, type PlayerState } from "./features";
 import { CUTOFF_MINUTES, DEFAULT_CUTOFF, type BackfillOptions, type BackfillSummary, type CutoffOption } from "./types";
+import { createDatabaseCanonicalIngestionResolver } from "../identity/canonicalIngestionResolver.js";
 
 type GameMargins = Array<{ player1Games: number; player2Games: number }>;
 
@@ -210,6 +211,8 @@ export async function runHistoricalBackfill(
     durationMs: 0,
   };
 
+  const identityResolver = await createDatabaseCanonicalIngestionResolver(`historical-backfill:${provider.name}`);
+
   // Hydrate from everything already stored strictly before this run's window -- this is what
   // makes running the pipeline across multiple separate process invocations safe: a run started
   // fresh never cold-starts a continuing player's Elo/form history.
@@ -236,6 +239,20 @@ export async function runHistoricalBackfill(
     });
 
     for (const { fixture, schedule } of sorted) {
+      await Promise.all([
+        identityResolver.resolve({
+          provider: fixture.provider,
+          externalPlayerId: fixture.player1Id,
+          externalPlayerName: fixture.player1Name,
+          metadata: { tour: fixture.tour, tournamentNames: fixture.tournamentName ? [fixture.tournamentName] : [] },
+        }),
+        identityResolver.resolve({
+          provider: fixture.provider,
+          externalPlayerId: fixture.player2Id,
+          externalPlayerName: fixture.player2Name,
+          metadata: { tour: fixture.tour, tournamentNames: fixture.tournamentName ? [fixture.tournamentName] : [] },
+        }),
+      ]);
       if (!fixture.cancelled && fixture.winnerId === null) {
         summary.matchesSkippedNoTerminalResult += 1;
         continue;

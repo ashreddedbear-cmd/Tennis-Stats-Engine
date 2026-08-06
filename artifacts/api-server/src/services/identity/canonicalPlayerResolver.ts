@@ -76,6 +76,10 @@ function variants(name: string): string[] {
 function surnameAndInitial(name: string): { surname: string; initial: string } {
   const words = normalizeCanonicalPlayerName(name).split(" ").filter(Boolean);
   if (words.length < 2) return { surname: words[0] ?? "", initial: "" };
+  const lastIsInitial = words[words.length - 1].length === 1;
+  if (lastIsInitial) {
+    return { surname: words.slice(0, -1).join(" "), initial: words[words.length - 1] };
+  }
   const firstIsInitial = words[0].length === 1;
   return firstIsInitial
     ? { surname: words.slice(1).join(" "), initial: words[0] }

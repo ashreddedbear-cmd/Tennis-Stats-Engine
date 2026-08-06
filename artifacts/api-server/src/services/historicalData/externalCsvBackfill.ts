@@ -18,17 +18,14 @@
  *   home_break_points_won_perc, away_break_points_won_perc,
  *   home_break_points_saved_perc, away_break_points_saved_perc
  *
- * Player ID resolution strategy:
- *   1. Build a surname → [{id, name}] index from all existing historical_matches rows.
- *   2. For each CSV player, extract the surname from the abbreviated name ("Djokovic N." → "djokovic").
- *   3. If exactly one existing player shares that surname, reuse their stored ID so Elo chains
- *      correctly through the new year without a cold-start break.
- *   4. Fall back to "ext-{csvId}" when no unique match is found (new players, name ambiguity).
+ * Player identity is resolved by the shared canonical ingestion resolver in runHistoricalBackfill.
+ * This parser preserves the source IDs and names exactly so the resolver can persist aliases and
+ * route ambiguous or unresolved records to review without a second identity map.
  */
 
 import * as fs from "fs";
 import { runHistoricalBackfill } from "./backfill";
-import { runExternalCsvBridge, type ExtCsvBridgeResult } from "./externalCsvBridge";
+import type { ExtCsvBridgeResult } from "./externalCsvBridge";
 import type { BackfillSummary } from "./types";
 import { ProviderUnavailableError } from "../tennisData/types";
 import type {
@@ -46,8 +43,6 @@ import type {
   ProviderStatusInfo,
 } from "../tennisData/types";
 import { inferSurfaceAndLevel } from "../tennisData/surfaceMap";
-import { db } from "@workspace/db";
-import { sql } from "drizzle-orm";
 import { logger } from "../../lib/logger";
 
 export const EXT_CSV_PROVIDER = "ext-csv";
@@ -105,135 +100,6 @@ function mapSurface(raw: string): Surface | null {
   }
 }
 
-// ── Player ID resolution ──────────────────────────────────────────────────────
-
-/**
- * Extract surname key + first initial from a DB-stored player name (format: "First [Middle] Last").
- * "Novak Djokovic"              → { surname: "djokovic",          initial: "n" }
- * "Alejandro Davidovich Fokina" → { surname: "davidovich fokina", initial: "a" }
- * Falls back gracefully for single-word names.
- */
-function dbNameParts(name: string): { surname: string; initial: string } {
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return { surname: "", initial: "" };
-  if (words.length === 1) {
-    return { surname: words[0].toLowerCase(), initial: words[0][0]?.toLowerCase() ?? "" };
-  }
-  return {
-    initial: words[0][0]?.toLowerCase() ?? "",
-    surname: words.slice(1).join(" ").toLowerCase(),
-  };
-}
-
-/**
- * Extract surname key + first initial from a CSV abbreviated name (format: "Last F." or "Compound Last F.").
- * "Djokovic N."          → { surname: "djokovic",          initial: "n" }
- * "Davidovich Fokina A." → { surname: "davidovich fokina", initial: "a" }
- * "De Minaur A."         → { surname: "de minaur",         initial: "a" }
- * "Osaka"                → { surname: "osaka",             initial: null }
- */
-function csvNameParts(name: string): { surname: string; initial: string | null } {
-  const words = name.trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return { surname: "", initial: null };
-  if (words.length === 1) return { surname: words[0].toLowerCase(), initial: null };
-  const lastToken = words[words.length - 1];
-  if (/^[A-Za-z]\.?$/.test(lastToken)) {
-    return {
-      surname: words.slice(0, -1).join(" ").toLowerCase(),
-      initial: lastToken.replace(".", "").toLowerCase(),
-    };
-  }
-  return { surname: name.trim().toLowerCase(), initial: null };
-}
-
-type PlayerEntry = { id: string; name: string };
-
-type PlayerIdMap = {
-  /** "surname|initial" → players. Unique = unambiguous. */
-  byInitial: Map<string, PlayerEntry[]>;
-  /** surname → players. Fallback when initial absent or initial-key is ambiguous. */
-  bySurname: Map<string, PlayerEntry[]>;
-};
-
-/**
- * Query historical_matches to build an enhanced surname+initial player lookup.
- * Only one DB round-trip; all subsequent lookups are in-process.
- *
- * Uses surname + first-initial keys so "Murray A." (Andy) and "Murray J." (Jamie)
- * are disambiguated instead of both falling through to ext-{id}.
- */
-async function buildPlayerIdMap(): Promise<PlayerIdMap> {
-  const byInitial = new Map<string, PlayerEntry[]>();
-  const bySurname = new Map<string, PlayerEntry[]>();
-
-  const result = await db.execute(sql`
-    SELECT player_id, player_name FROM (
-      SELECT DISTINCT player1_id AS player_id, player1_name AS player_name
-        FROM historical_matches WHERE player1_name IS NOT NULL AND player1_name != ''
-      UNION
-      SELECT DISTINCT player2_id AS player_id, player2_name AS player_name
-        FROM historical_matches WHERE player2_name IS NOT NULL AND player2_name != ''
-    ) sub
-  `);
-
-  function addEntry(map: Map<string, PlayerEntry[]>, key: string, entry: PlayerEntry): void {
-    if (!map.has(key)) map.set(key, []);
-    const bucket = map.get(key)!;
-    if (!bucket.some(e => e.id === entry.id)) bucket.push(entry);
-  }
-
-  for (const r of result.rows as Array<{ player_id: string; player_name: string }>) {
-    if (!r.player_id || !r.player_name) continue;
-    const entry: PlayerEntry = { id: r.player_id, name: r.player_name };
-    const { surname, initial } = dbNameParts(r.player_name);
-    if (!surname) continue;
-    addEntry(bySurname, surname, entry);
-    if (initial) addEntry(byInitial, `${surname}|${initial}`, entry);
-  }
-
-  return { byInitial, bySurname };
-}
-
-/**
- * Resolve a CSV player's name to an existing DB player ID.
- *
- * Resolution order:
- *   1. Surname + first-initial → unambiguous match (handles "Murray A." vs "Murray J.")
- *   2. Surname-only            → only when globally unique in the DB
- *   3. Fall back to "ext-{tour}-{extId}" — tour-scoped so ATP and WTA numeric player-ID
- *      namespaces never collide (both CSVs share the same numeric home_id / away_id space).
- */
-function resolvePlayerId(
-  csvName: string,
-  extId: string,
-  tour: "ATP" | "WTA",
-  map: PlayerIdMap,
-  tally: { matched: number; unmatched: number },
-): string {
-  const { surname, initial } = csvNameParts(csvName);
-
-  // 1. Surname + initial (most specific)
-  if (initial) {
-    const candidates = map.byInitial.get(`${surname}|${initial}`);
-    if (candidates && candidates.length === 1) {
-      tally.matched++;
-      return candidates[0].id;
-    }
-  }
-
-  // 2. Surname-only when globally unambiguous
-  const surnameCandidates = map.bySurname.get(surname);
-  if (surnameCandidates && surnameCandidates.length === 1) {
-    tally.matched++;
-    return surnameCandidates[0].id;
-  }
-
-  tally.unmatched++;
-  // Tour-prefix prevents ATP player "ext-atp-12345" from ever colliding with WTA player
-  // "ext-wta-12345" when both CSVs happen to assign the same numeric home_id / away_id.
-  return `ext-${tour.toLowerCase()}-${extId || csvName.replace(/\s+/g, "-")}`;
-}
-
 // ── Tournament level inference ────────────────────────────────────────────────
 
 function inferLevel(tournamentName: string | null, tourTypeHuman: string): TournamentLevel | null {
@@ -278,8 +144,6 @@ function buildSetMargins(row: Record<string, string>): Array<{ player1Games: num
 
 function rowToFixture(
   row: Record<string, string>,
-  playerIdMap: PlayerIdMap,
-  tally: { matched: number; unmatched: number },
 ): HistoricalFixture | null {
   // Skip exhibitions and non-finished rows
   const tourHuman = row.tour_type_human?.trim() ?? "";
@@ -310,12 +174,10 @@ function rowToFixture(
   const homeName = row.home_name?.trim() ?? "";
   const awayName = row.away_name?.trim() ?? "";
 
-  // Resolve player IDs against existing DB history.
-  // tour is passed so the ext-{tour}-{id} fallback is always tour-scoped — ATP and WTA
-  // CSVs share the same numeric home_id / away_id namespace, so an un-namespaced fallback
-  // would create collisions that corrupt Elo chains across tours.
-  const p1Id = resolvePlayerId(homeName, homeId, tour, playerIdMap, tally);
-  const p2Id = resolvePlayerId(awayName, awayId, tour, playerIdMap, tally);
+  // Preserve the provider's identifiers exactly. Canonical matching and alias persistence are
+  // handled centrally by runHistoricalBackfill; this parser must not maintain a second identity map.
+  const p1Id = homeId;
+  const p2Id = awayId;
 
   const tournamentName = row.tournament?.trim() || null;
   const level     = inferLevel(tournamentName, tourHuman);
@@ -406,14 +268,14 @@ export interface ExternalCsvBackfillResult {
   playersMatched:    number;
   playersUnmatched:  number;
   backfill:          BackfillSummary;
-  /** Bridge result: ext-{…} player IDs re-resolved inline after the import. */
+  /** Legacy bridge-shaped response retained for API compatibility; no rows are rewritten. */
   bridge:            ExtCsvBridgeResult;
 }
 
 /**
  * Main entry point.  Reads each CSV from disk, maps rows to HistoricalFixture[], resolves
- * player IDs against existing historical_matches by surname, then calls runHistoricalBackfill
- * so all Elo / feature-snapshot / idempotency logic runs identically to the Sackmann path.
+ * player IDs through the shared canonical resolver in runHistoricalBackfill, then uses the same
+ * Elo / feature-snapshot / idempotency infrastructure as the other historical providers.
  */
 export async function runExternalCsvBackfill(
   options: ExternalCsvBackfillOptions,
@@ -421,17 +283,8 @@ export async function runExternalCsvBackfill(
   const { files } = options;
   if (files.length === 0) throw new Error("externalCsvBackfill: no files specified");
 
-  // Build player ID map from existing historical_matches (one DB round-trip)
-  logger.info({ fileCount: files.length }, "externalCsvBackfill: building player ID map");
-  const playerIdMap = await buildPlayerIdMap();
-  logger.info(
-    { bySurnameKeys: playerIdMap.bySurname.size, byInitialKeys: playerIdMap.byInitial.size },
-    "externalCsvBackfill: player ID map ready",
-  );
-
   const allFixtures: HistoricalFixture[] = [];
   let filesLoaded = 0;
-  const tally = { matched: 0, unmatched: 0 };
 
   for (const filePath of files) {
     if (!fs.existsSync(filePath)) {
@@ -442,7 +295,7 @@ export async function runExternalCsvBackfill(
     const rows   = parseCsv(text);
     const before = allFixtures.length;
     for (const row of rows) {
-      const f = rowToFixture(row, playerIdMap, tally);
+      const f = rowToFixture(row);
       if (f) allFixtures.push(f);
     }
     logger.info(
@@ -465,9 +318,6 @@ export async function runExternalCsvBackfill(
   logger.info({
     filesLoaded,
     fixturesParsed:   allFixtures.length,
-    playersMatched:   tally.matched,
-    playersUnmatched: tally.unmatched,
-    matchRate:        `${Math.round((tally.matched / (tally.matched + tally.unmatched || 1)) * 100)}%`,
     dateStart,
     dateStop,
   }, "externalCsvBackfill: all CSVs loaded, starting historical backfill");
@@ -482,27 +332,24 @@ export async function runExternalCsvBackfill(
     matchesInserted:         backfill.matchesInserted,
     matchesSkippedDuplicate: backfill.matchesSkippedDuplicate,
     featureRowsInserted:     backfill.featureRowsInserted,
-  }, "externalCsvBackfill: historical backfill complete, running inline bridge");
+  }, "externalCsvBackfill: historical backfill complete");
 
-  // Run the ID bridge inline so callers get corrected Elo chains without a
-  // separate manual POST to /evaluation/external-csv-backfill/bridge.
-  // The bridge is idempotent: re-running on already-resolved rows is a no-op.
-  const bridge = await runExternalCsvBridge();
-
-  logger.info({
-    extPlayerSlotsFound: bridge.extPlayerSlotsFound,
-    resolved:            bridge.resolved,
-    unresolved:          bridge.unresolved,
-    matchRowsUpdated:    bridge.matchRowsUpdated,
-    atpMatchRate:        bridge.atpMatchRate,
-    wtaMatchRate:        bridge.wtaMatchRate,
-  }, "externalCsvBackfill: completed (backfill + inline bridge)");
+  const bridge: ExtCsvBridgeResult = {
+    extPlayerSlotsFound: 0,
+    resolved: 0,
+    unresolved: 0,
+    matchRowsUpdated: 0,
+    featureRowsUpdated: 0,
+    atpMatchRate: null,
+    wtaMatchRate: null,
+    affectedMatchIds: [],
+  };
 
   return {
     filesLoaded,
     fixturesParsed:   allFixtures.length,
-    playersMatched:   tally.matched,
-    playersUnmatched: tally.unmatched,
+    playersMatched: 0,
+    playersUnmatched: allFixtures.length * 2,
     backfill,
     bridge,
   };

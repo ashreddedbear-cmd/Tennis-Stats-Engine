@@ -37,6 +37,7 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../../lib/logger";
+import { createDatabaseCanonicalIngestionResolver } from "../identity/canonicalIngestionResolver.js";
 
 // ── Name-parsing helpers ──────────────────────────────────────────────────────
 
@@ -537,12 +538,7 @@ export async function runBridgeMigration(
  * (subsequent runs find no matching rows and the transaction is a no-op).
  */
 export async function runExternalCsvBridge(): Promise<ExtCsvBridgeResult> {
-  logger.info("ext-csv-bridge: building enhanced player ID map");
-  const map = await buildEnhancedPlayerIdMap();
-  logger.info(
-    { bySurnameKeys: map.bySurname.size, byInitialKeys: map.byInitial.size },
-    "ext-csv-bridge: player ID map ready",
-  );
+  const identityResolver = await createDatabaseCanonicalIngestionResolver("external-csv-bridge");
 
   // ── Step 1: Collect unique (ext_id, tour) player slots ────────────────────
   const slotsResult = await db.execute(sql`
@@ -590,9 +586,14 @@ export async function runExternalCsvBridge(): Promise<ExtCsvBridgeResult> {
     if (isAtp) atpTotal++;
     else if (isWta) wtaTotal++;
 
-    const realId = resolveCsvPlayerToRealId(slot.slot_name, map, slot.tour ?? "");
-    if (realId) {
-      resolutionEntries.push({ extId: slot.slot_id, tour: slot.tour ?? "", realId });
+    const resolution = await identityResolver.resolve({
+      provider: "ext-csv",
+      externalPlayerId: slot.slot_id,
+      externalPlayerName: slot.slot_name,
+      metadata: { tour: slot.tour ?? undefined },
+    });
+    if (resolution.canonicalPlayerId) {
+      resolutionEntries.push({ extId: slot.slot_id, tour: slot.tour ?? "", realId: resolution.canonicalPlayerId });
       if (isAtp) atpResolved++;
       else if (isWta) wtaResolved++;
     }
