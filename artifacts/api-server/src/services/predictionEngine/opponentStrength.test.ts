@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { db, historicalMatchesTable, matchFeatureSnapshotsTable } from "@workspace/db";
 import { inArray } from "drizzle-orm";
-import { resolveOpponentStrength, resolveOpponentStrengthFromIndex, type EloHistoryIndex } from "./opponentStrength";
-import { invalidatePlayerIdentityCacheForTests, type PlayerIdentityIndex } from "../tennisData/playerIdentity";
+import { buildEloHistoryIndex, resolveOpponentStrength, resolveOpponentStrengthFromIndex, type EloHistoryIndex } from "./opponentStrength";
+import { buildPlayerIdentityIndex, invalidatePlayerIdentityCacheForTests, type PlayerIdentityIndex } from "../tennisData/playerIdentity";
 import type { MatchRecord } from "../tennisData/types";
 
 /** Every `PlayerIdentityIndex` fixture below deliberately has no aliases beyond what's spelled
@@ -109,6 +109,29 @@ test("resolveOpponentStrengthFromIndex still resolves the common, non-aliased ca
   const identity: PlayerIdentityIndex = { canonicalIdByName: new Map(), canonicalIdById: new Map(), aliasIdsByCanonicalId: emptyAliasMap() };
   const withIdentity = resolveOpponentStrengthFromIndex([match], index, identity);
   assert.equal(withIdentity.lookup.get(match.id), 1500);
+});
+
+test("buildEloHistoryIndex uses the full chronological corpus and shared canonical/raw/alias timelines", async (t) => {
+  let identity: PlayerIdentityIndex;
+  try {
+    identity = await buildPlayerIdentityIndex();
+  } catch (err) {
+    const code = (err as { cause?: { code?: string } })?.cause?.code;
+    if (code === "ENOTFOUND" || code === "ECONNREFUSED") {
+      t.skip(`DB unavailable for full-corpus Elo index test (${code})`);
+      return;
+    }
+    throw err;
+  }
+
+  const index = await buildEloHistoryIndex(identity);
+  assert.ok(index.size > 0, "full historical corpus should produce an Elo lookup");
+  for (const [canonicalId, aliases] of identity.aliasIdsByCanonicalId) {
+    const timeline = index.get(canonicalId);
+    if (!timeline) continue;
+    for (const aliasId of aliases) assert.strictEqual(index.get(aliasId), timeline);
+    for (let i = 1; i < timeline.length; i++) assert.ok(timeline[i - 1].t <= timeline[i].t);
+  }
 });
 
 // Integration test against the real DB: proves `resolveOpponentStrength` (the LIVE, per-fixture

@@ -14,8 +14,6 @@ import { or, eq, and, isNotNull, desc, notLike, inArray } from "drizzle-orm";
 import { logger } from "../../lib/logger.js";
 import type { MatchFormat, MatchRecord, Surface, TournamentLevel } from "./types.js";
 
-const MAX_HISTORY_ROWS = 200;
-
 /**
  * Tours that represent singles play in api-tennis's `tour` column.
  * Mixed Doubles, Teams Men/Mix/Women are excluded so doubles rows never
@@ -63,8 +61,7 @@ export async function getPlayerMatchesFromDb(playerIdOrIds: string | string[]): 
           notLike(historicalMatchesTable.player2Name, "%/%"),
         ),
       )
-      .orderBy(desc(historicalMatchesTable.scheduledStartAt))
-      .limit(MAX_HISTORY_ROWS);
+      .orderBy(desc(historicalMatchesTable.scheduledStartAt));
 
     const records: MatchRecord[] = rows.map((row) => {
       // When alias IDs are supplied (Sackmann bridge), the row's player1Id/player2Id may be any

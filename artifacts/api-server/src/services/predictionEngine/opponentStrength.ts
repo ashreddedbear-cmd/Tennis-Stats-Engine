@@ -1,7 +1,9 @@
-import { db, matchFeatureSnapshotsTable } from "@workspace/db";
-import { and, eq, inArray } from "drizzle-orm";
+import { db, historicalMatchesTable, matchFeatureSnapshotsTable } from "@workspace/db";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import type { MatchRecord } from "../tennisData/types";
-import { canonicalizePlayerId, getAliasIds, getCachedPlayerIdentityIndex, type PlayerIdentityIndex } from "../tennisData/playerIdentity";
+import { buildPlayerIdentityIndex, canonicalizePlayerId, getAliasIds, getCachedPlayerIdentityIndex, type PlayerIdentityIndex } from "../tennisData/playerIdentity";
+import { logger } from "../../lib/logger";
+import { eloFallbackTracker } from "./fallbackTracking";
 
 /**
  * Opponent-strength lookup for a set of live match records, keyed by `MatchRecord.id`. Value is
@@ -83,12 +85,43 @@ export function resolveOpponentStrengthFromIndex(matches: MatchRecord[], index: 
  * timeline under their canonical id -- computed once here and reused for the rest of the run,
  * never re-replayed per opponent lookup.
  *
- * `playerIds`, when supplied, scopes the query to only those players' rows instead of the whole
- * corpus (Task #159's shadow-replay path only ever needs a bounded batch's own players plus their
- * direct past opponents, never the whole system's Elo history). Walk-forward omits it and keeps
- * loading everyone, since it genuinely scores the full corpus every run.
+ * The index always loads the complete historical corpus. Callers may provide a run-scoped identity
+ * index; when omitted, one is built from the complete historical match store before indexing.
  */
-export async function buildEloHistoryIndex(identity?: PlayerIdentityIndex, playerIds?: string[]): Promise<EloHistoryIndex> {
+export async function buildEloHistoryIndex(identity?: PlayerIdentityIndex): Promise<EloHistoryIndex> {
+  const identityIndex = identity ?? await buildPlayerIdentityIndex();
+  const matches = await db
+    .select({
+      id: historicalMatchesTable.id,
+      player1Id: historicalMatchesTable.player1Id,
+      player1Name: historicalMatchesTable.player1Name,
+      player2Id: historicalMatchesTable.player2Id,
+      player2Name: historicalMatchesTable.player2Name,
+      winnerId: historicalMatchesTable.winnerId,
+      scheduledStartAt: historicalMatchesTable.scheduledStartAt,
+    })
+    .from(historicalMatchesTable)
+    .orderBy(asc(historicalMatchesTable.scheduledStartAt), asc(historicalMatchesTable.id));
+
+  const rawToCanonical = new Map<string, string>();
+  const rawIds = new Set<string>();
+  let unresolvedIds = 0;
+  let aliasCollisions = 0;
+  const registerRawId = (rawId: string, canonicalId: string): void => {
+    rawIds.add(rawId);
+    const previous = rawToCanonical.get(rawId);
+    if (previous && previous !== canonicalId) aliasCollisions += 1;
+    rawToCanonical.set(rawId, canonicalId);
+    if (previous === undefined && previous !== canonicalId && !identityIndex.canonicalIdById.has(rawId) && rawId === canonicalId) {
+      unresolvedIds += 1;
+    }
+  };
+  for (const match of matches) {
+    registerRawId(match.player1Id, canonicalizePlayerId(identityIndex, match.player1Id, match.player1Name));
+    registerRawId(match.player2Id, canonicalizePlayerId(identityIndex, match.player2Id, match.player2Name));
+    if (match.winnerId) registerRawId(match.winnerId, canonicalizePlayerId(identityIndex, match.winnerId));
+  }
+
   const rows = await db
     .select({
       playerId: matchFeatureSnapshotsTable.playerId,
@@ -96,16 +129,53 @@ export async function buildEloHistoryIndex(identity?: PlayerIdentityIndex, playe
       sourceTimestamp: matchFeatureSnapshotsTable.sourceTimestamp,
     })
     .from(matchFeatureSnapshotsTable)
-    .where(playerIds ? and(eq(matchFeatureSnapshotsTable.featureName, "eloOverall"), inArray(matchFeatureSnapshotsTable.playerId, playerIds)) : eq(matchFeatureSnapshotsTable.featureName, "eloOverall"));
+    .where(eq(matchFeatureSnapshotsTable.featureName, "eloOverall"));
 
   const index: EloHistoryIndex = new Map();
   for (const row of rows) {
-    const key = identity ? canonicalizePlayerId(identity, row.playerId, null) : row.playerId;
+    const key = canonicalizePlayerId(identityIndex, row.playerId, null);
     const list = index.get(key) ?? [];
     list.push({ t: row.sourceTimestamp.getTime(), elo: row.featureValue });
     index.set(key, list);
   }
-  for (const list of index.values()) list.sort((a, b) => a.t - b.t);
+
+  // Ensure every participant observed in the complete historical corpus has an explicit
+  // canonical/raw lookup entry, even when no snapshot row exists for that participant yet.
+  for (const canonicalId of rawToCanonical.values()) {
+    if (!index.has(canonicalId)) index.set(canonicalId, []);
+  }
+  for (const [canonicalId, aliases] of identityIndex.aliasIdsByCanonicalId) {
+    const history = index.get(canonicalId) ?? [];
+    index.set(canonicalId, history);
+    for (const aliasId of aliases) index.set(aliasId, history);
+  }
+  for (const [rawId, canonicalId] of rawToCanonical) {
+    const history = index.get(canonicalId) ?? [];
+    index.set(canonicalId, history);
+    index.set(rawId, history);
+  }
+  for (const list of new Set(index.values())) list.sort((a, b) => a.t - b.t);
+  const canonicalPlayers = new Set<string>();
+  for (const [key, timeline] of index) {
+    if (key === canonicalizePlayerId(identityIndex, key)) canonicalPlayers.add(key);
+    if (timeline.length > 0) canonicalPlayers.add(canonicalizePlayerId(identityIndex, key));
+  }
+  const aliasesMapped = new Set<string>();
+  for (const [canonicalId, aliases] of identityIndex.aliasIdsByCanonicalId) {
+    canonicalPlayers.add(canonicalId);
+    for (const alias of aliases) if (alias !== canonicalId) aliasesMapped.add(alias);
+  }
+  logger.info({
+    historicalMatchesProcessed: matches.length,
+    eloSnapshotsProcessed: rows.length,
+    canonicalPlayers: canonicalPlayers.size,
+    rawIdsMapped: rawIds.size,
+    aliasesMapped: aliasesMapped.size,
+    unresolvedIds,
+    aliasCollisions,
+    timelinesCreated: new Set(index.values()).size,
+    baselineFallbackCount: eloFallbackTracker.getStats().fallbackCount,
+  }, "Elo history index built with canonical player identities");
   return index;
 }
 
