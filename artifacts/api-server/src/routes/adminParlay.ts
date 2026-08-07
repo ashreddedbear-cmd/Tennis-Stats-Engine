@@ -1037,4 +1037,43 @@ router.get("/admin/parlay/history", requireAdmin, async (req, res): Promise<void
   }
 });
 
+// Read-only bridge to the shared predictions store. This does not invoke the prediction engine
+// or parlay scoring logic; it only returns the latest stored engine winner for each requested leg.
+router.get("/admin/parlay/engine-agreement", requireAdmin, async (req, res): Promise<void> => {
+  const rawLegs = typeof req.query.legs === "string" ? req.query.legs : "[]";
+  let requestedLegs: Array<{ key: string; player1Id: string | null; player2Id: string | null }>;
+  try {
+    const parsed: unknown = JSON.parse(rawLegs);
+    if (!Array.isArray(parsed)) throw new Error("legs must be an array");
+    requestedLegs = parsed.filter((leg): leg is { key: string; player1Id: string | null; player2Id: string | null } =>
+      typeof leg === "object" && leg !== null &&
+      typeof (leg as { key?: unknown }).key === "string" &&
+      (typeof (leg as { player1Id?: unknown }).player1Id === "string" || (leg as { player1Id?: unknown }).player1Id == null) &&
+      (typeof (leg as { player2Id?: unknown }).player2Id === "string" || (leg as { player2Id?: unknown }).player2Id == null)
+    );
+  } catch {
+    res.status(400).json({ error: "Invalid legs query" });
+    return;
+  }
+
+  try {
+    const rows = await Promise.all(requestedLegs.map(async leg => {
+      if (!leg.player1Id || !leg.player2Id) return { key: leg.key, predictedWinnerId: null };
+      const { rows: matches } = await pool.query<{ predicted_winner_id: string }>(
+        `SELECT predicted_winner_id
+           FROM predictions
+          WHERE (player1_id = $1 AND player2_id = $2)
+             OR (player1_id = $2 AND player2_id = $1)
+          ORDER BY created_at DESC
+          LIMIT 1`,
+        [leg.player1Id, leg.player2Id]
+      );
+      return { key: leg.key, predictedWinnerId: matches[0]?.predicted_winner_id ?? null };
+    }));
+    res.json({ predictions: rows });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : "Failed to read engine predictions" });
+  }
+});
+
 export default router;

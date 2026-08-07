@@ -1579,6 +1579,8 @@ export default function AdminParlayBuilder() {
   const [analyzePhase, setAnalyzePhase] = useState<"predicting" | "evaluating" | null>(null)
   const [slipView, setSlipView] = useState<"all" | "KEEP" | "BORDERLINE" | "REMOVE">("all")
   const [agreementOnly, setAgreementOnly] = useState(false)
+  const [engineAgreementKeys, setEngineAgreementKeys] = useState<Set<string>>(new Set())
+  const [loadingAgreement, setLoadingAgreement] = useState(false)
   const [autoSelected, setAutoSelected] = useState<Set<number>>(new Set())
   // Maps result.legs[i] → the ParlayLeg key that produced it, so we can flip legs by result decision
   const [resultLegKeys, setResultLegKeys] = useState<string[]>([])
@@ -1984,9 +1986,37 @@ export default function AdminParlayBuilder() {
   // Applied at display layer only — does not mutate the underlying result.legs array.
   const filteredResultLegs: BuilderLegResult[] = (result?.legs.filter((l: BuilderLegResult, index: number) => {
     const key = resultLegKeys[index]
-    const selectedSide = legs.find(leg => leg.key === key)?.selectedSide
-    return (slipView === "all" || l.decision === slipView) && (!agreementOnly || legSignalsRef.current[key]?.predictedWinnerSide === selectedSide)
+    return (slipView === "all" || l.decision === slipView) && (!agreementOnly || engineAgreementKeys.has(key))
   }) ?? []).slice().sort((a, b) => b.validationScore - a.validationScore)
+
+  const toggleEngineAgreement = async () => {
+    if (agreementOnly) {
+      setAgreementOnly(false)
+      return
+    }
+    if (legs.length === 0) return
+    setLoadingAgreement(true)
+    try {
+      const query = encodeURIComponent(JSON.stringify(legs.map(leg => ({
+        key: leg.key, player1Id: leg.player1Id, player2Id: leg.player2Id,
+      }))))
+      const response = await fetch(api(`/api/admin/parlay/engine-agreement?legs=${query}`), { credentials: "include" })
+      const payload = await response.json()
+      if (!response.ok) throw new Error(payload.error ?? "Engine agreement lookup failed")
+      const agreeingKeys = new Set<string>()
+      for (const prediction of payload.predictions ?? []) {
+        const leg = legs.find(candidate => candidate.key === prediction.key)
+        const predictedSide = leg?.player1Id === prediction.predictedWinnerId ? "1" : leg?.player2Id === prediction.predictedWinnerId ? "2" : null
+        if (leg && predictedSide === leg.selectedSide) agreeingKeys.add(leg.key)
+      }
+      setEngineAgreementKeys(agreeingKeys)
+      setAgreementOnly(true)
+    } catch (e) {
+      toast({ title: "Engine agreement lookup failed", description: String(e), variant: "destructive" })
+    } finally {
+      setLoadingAgreement(false)
+    }
+  }
 
   // Auto Builder helpers — pick KEEP legs sorted by validationScore
   const autoPickLegs = (count: number | "all", sortBy: "validationScore" | "riskScore" = "validationScore") => {
@@ -2293,12 +2323,12 @@ export default function AdminParlayBuilder() {
                         </button>
                       ))}
                       <button
-                        onClick={() => setAgreementOnly(value => !value)}
-                        disabled={!result}
+                        onClick={() => { void toggleEngineAgreement() }}
+                        disabled={!result || loadingAgreement}
                         title="Show only legs where the engine and parlay builder select the same winner"
                         className={`text-[9px] font-mono px-2 py-0.5 rounded border transition-colors ${agreementOnly ? "border-primary text-primary bg-primary/10" : "border-border text-muted-foreground hover:border-primary/40"} disabled:opacity-40`}
                       >
-                        🤝 Engine Agreement
+                        {loadingAgreement ? "Loading agreement…" : "🤝 Engine Agreement"}
                       </button>
                       {/* Switch Borderline — flips all BORDERLINE legs to the opposing player and re-runs */}
                       {borderlineCount > 0 && (
