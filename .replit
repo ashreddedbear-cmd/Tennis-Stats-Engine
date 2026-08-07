@@ -61,3 +61,7 @@ ADMIN_ACCESS_KEY = "54321"
 
 [userenv.development]
 NODE_OPTIONS = "--max-old-space-size=6144"
+
+[[ports]]
+localPort = 3001
+externalPort = 80
