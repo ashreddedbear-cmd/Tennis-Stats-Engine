@@ -16,12 +16,12 @@ import { useState } from "react"
 import { UPSET_RISK_LABEL, UPSET_RISK_SHORT, UPSET_RISK_TEXT_CLASS, upsetRiskBadgeClasses } from "@/lib/upsetRiskColors"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@clerk/react"
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "")
 const api = (path: string) => `${BASE}${path}`
 
 const UPSET_RISK_SHORT_LABEL = UPSET_RISK_SHORT
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts"
 
 const AGREEMENT_STYLES: Record<string, string> = {
   Strong: "text-success",
@@ -78,15 +78,15 @@ function EdgeBar({ p1Value, p2Value, p1Name, p2Name, label }: { p1Value: number,
 
   return (
     <div className="space-y-2">
-      <div className="flex justify-between text-[11px] font-mono font-bold tracking-widest uppercase">
-        <span className="text-primary truncate max-w-[40%] flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-primary inline-block"></span>
-          {p1Name} <span className="text-primary/70 tabular-nums ml-1">({p1Value.toFixed(0)})</span>
+      <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 text-[11px] font-mono font-bold tracking-widest uppercase">
+        <span className="min-w-0 text-primary truncate flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 rounded-full bg-primary inline-block shrink-0"></span>
+          <span className="min-w-0 truncate">{p1Name}</span><span className="text-primary/70 tabular-nums shrink-0">({p1Value.toFixed(0)})</span>
         </span>
-        <span className="text-muted-foreground/60">{label}</span>
-        <span className="text-foreground truncate max-w-[40%] text-right flex items-center justify-end gap-1.5">
-          <span className="text-muted-foreground tabular-nums mr-1">({p2Value.toFixed(0)})</span> {p2Name}
-          <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground inline-block"></span>
+        <span className="text-muted-foreground/60 whitespace-nowrap">{label}</span>
+        <span className="min-w-0 text-foreground truncate text-right flex items-center justify-end gap-1.5">
+          <span className="text-muted-foreground tabular-nums shrink-0">({p2Value.toFixed(0)})</span><span className="min-w-0 truncate">{p2Name}</span>
+          <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground inline-block shrink-0"></span>
         </span>
       </div>
       <div className="h-4 w-full bg-background border border-border shadow-inner rounded-full overflow-hidden flex">
@@ -96,6 +96,33 @@ function EdgeBar({ p1Value, p2Value, p1Name, p2Name, label }: { p1Value: number,
         <div className="h-full bg-muted-foreground/20 transition-all duration-1000 ease-out" style={{ width: `${100 - p1Pct}%` }} />
       </div>
     </div>
+  )
+}
+
+function MethodologyDetails({ sections }: { sections: Array<{ title: string; text: string }> }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setOpen(true)} aria-label="Open methodology">
+        <Info className="w-4 h-4" />
+      </Button>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="max-w-xl p-5 sm:p-6">
+          <DialogHeader>
+            <DialogTitle className="font-display">Methodology</DialogTitle>
+            <DialogDescription>Full explanations and validation notes for this prediction.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-5 text-sm leading-relaxed">
+            {sections.map((section) => (
+              <section key={section.title} id={`methodology-${section.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}>
+                <h4 className="font-mono text-xs font-bold tracking-widest uppercase text-primary mb-1.5">{section.title}</h4>
+                <p className="text-muted-foreground">{section.text}</p>
+              </section>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   )
 }
 
@@ -226,6 +253,15 @@ export default function PredictionResultPage() {
     }
   }
 
+  const methodologySections = [
+    { title: "Elite Tier", text: engine.eliteTierReason ?? "Elite tier requires every strict model, data-quality, conflict, and risk gate to pass." },
+    { title: "Monte Carlo Simulation", text: engine.simulatorNote ?? "The simulator is computed for transparency and only contributes after validation earns it a vote." },
+    { title: "Serve & Return", text: engine.serveReturn.note ?? "Serve and return ratings use available provider statistics or real set/game margins." },
+    { title: "Model Votes", text: engine.segmentNote ?? "The segment specialist is applied only when its validation sample and calibration mapping meet the required threshold." },
+    { title: "Cross-Engine Agreement", text: prediction.crossEngineAgreement === true ? `The parlay builder independently validated ${prediction.predictedWinnerName} as the correct side. Both the prediction engine and builder's factor analysis (surface Elo, recent form, serve/return, head-to-head, fatigue, availability) are aligned. This does not change the underlying probability.` : prediction.crossEngineAgreement === false ? `The parlay builder found more evidence supporting the opponent when the engine's pick (${prediction.predictedWinnerName}) was validated against the factor analysis. The prediction engine's probability and grade are unchanged — this is a separate signal flag only. Consider reducing position size or treating this as higher-risk.` : "The parlay builder did not have enough data to validate this pick. This is not a disagreement — it means data coverage was insufficient for a builder decision. No adjustment to the probability or grade is made." },
+    { title: "Full Engine Breakdown", text: [...(engine.availabilityNote ? [engine.availabilityNote] : []), ...(engine.conditionsNote ? [engine.conditionsNote] : []), ...(engine.warnings ?? []), ...(engine.disclosures ?? [])].join(" ") || "No additional warnings or disclosures were recorded." },
+  ];
+
   return (
     <div className="space-y-12 animate-in fade-in duration-500 max-w-6xl mx-auto pb-24">
       <div className="pt-2">
@@ -246,6 +282,7 @@ export default function PredictionResultPage() {
             {isCorrect ? <><CheckCircle2 className="w-4 h-4 mr-1.5" /> PREDICTION CORRECT</> : <><XCircle className="w-4 h-4 mr-1.5" /> PREDICTION INCORRECT</>}
           </Badge>
         )}
+        <MethodologyDetails sections={methodologySections} />
       </div>
 
       {/* COMPACT SUMMARY HERO */}
@@ -715,7 +752,7 @@ export default function PredictionResultPage() {
                   return (
                     <div key={i} className="p-3 rounded-lg hover:bg-secondary/40 transition-colors border border-transparent hover:border-border/50 space-y-2">
                       <div className="md:flex md:items-center md:gap-3 md:text-sm">
-                        <span className="md:flex-1 font-medium truncate">{modelName}</span>
+                <span className="md:flex-1 font-medium truncate">{modelName}</span>
                         <span className="md:w-16 md:text-right font-mono font-bold text-primary tabular-nums">{vote.player1Probability.toFixed(1)}%</span>
                         <span className="hidden md:block md:w-28 md:text-right font-mono text-xs text-muted-foreground tabular-nums">{effectiveWeightPct.toFixed(1)}%</span>
                         <span className="hidden md:block md:w-28 md:text-right font-mono text-xs text-muted-foreground tabular-nums">{weightedContribution.toFixed(1)}</span>
@@ -723,7 +760,7 @@ export default function PredictionResultPage() {
                         <span className="hidden md:block md:w-24 md:text-right text-xs font-mono">{status}</span>
                       </div>
                       <div className="grid grid-cols-2 md:hidden gap-2 text-[11px] font-mono text-muted-foreground">
-                        <span>Favored: <span className="text-foreground">{favored}</span></span>
+                        <span>Favored: <span className="text-foreground min-w-0 truncate">{favored}</span></span>
                         <span>Effective Weight: <span className="text-foreground">{effectiveWeightPct.toFixed(1)}%</span></span>
                         <span>Weighted Contribution: <span className="text-foreground">{weightedContribution.toFixed(1)}</span></span>
                         <span>Reliability: <span className="text-foreground">{vote.reliability.toFixed(0)}</span></span>
@@ -830,26 +867,25 @@ export default function PredictionResultPage() {
               </Card>
 
               <ModuleCard title="SET SCORE DISTRIBUTION" reliability={asPercentage(engine.simulation.inputReliability)} icon={Dices} reliabilityLabel="COMP">
-                <div className="h-72 -ml-4 mt-2">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={engine.simulation.setScoreDistribution.slice(0, 8)} layout="vertical" margin={{ left: 8, right: 16 }}>
-                      <CartesianGrid strokeDasharray="3 3" horizontal={false} className="stroke-border/40" />
-                      <XAxis type="number" unit="%" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} />
-                      <YAxis type="category" dataKey="score" tick={{ fontSize: 11, fill: "hsl(var(--foreground))", fontWeight: "bold", fontFamily: "var(--font-mono)" }} width={45} tickLine={false} axisLine={false} />
-                      <Tooltip
-                        formatter={(value: number, _name: any, item: any) => [`${value.toFixed(1)}%`, item.payload.favors === "player1" ? prediction.player1Name : prediction.player2Name]}
-                        contentStyle={{ fontSize: 12, borderRadius: '8px', border: '1px solid hsl(var(--border))', backgroundColor: 'hsl(var(--background))', color: 'hsl(var(--foreground))', fontFamily: 'var(--font-mono)' }}
-                        cursor={{ fill: 'hsl(var(--secondary)/0.5)' }}
-                      />
-                      <Bar dataKey="probability" radius={[0, 6, 6, 0]} barSize={24}>
-                        {engine.simulation.setScoreDistribution.slice(0, 8).map((entry, i) => (
-                          <Cell key={i} fill={entry.favors === "player1" ? "hsl(var(--primary))" : "hsl(var(--muted-foreground)/0.5)"} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
+                <div className="space-y-3 mt-2">
+                  {engine.simulation.setScoreDistribution.slice(0, 8).map((entry, i) => {
+                    const total = entry.probability || 1;
+                    const p1Pct = entry.favors === "player1" ? entry.probability : 100 - entry.probability;
+                    const p2Pct = entry.favors === "player2" ? entry.probability : 100 - entry.probability;
+                    return (
+                      <div key={i} className="flex items-center gap-2 text-[11px] font-mono font-bold uppercase">
+                        <span className="w-12 text-right text-primary/70 tabular-nums shrink-0">{p1Pct.toFixed(0)}%</span>
+                        <div className="flex h-5 bg-border rounded-sm overflow-hidden flex-1 min-w-0">
+                          <div className="bg-primary shadow-sm" style={{ width: `${p1Pct}%` }} />
+                          <div className="bg-muted-foreground/50" style={{ width: `${p2Pct}%` }} />
+                        </div>
+                        <span className="w-20 text-center text-muted-foreground/60 tabular-nums shrink-0">{entry.score}</span>
+                        <span className="w-12 text-muted-foreground/70 tabular-nums shrink-0">{p2Pct.toFixed(0)}%</span>
+                      </div>
+                    );
+                  })}
                 </div>
-                <div className="text-[10px] font-mono font-bold text-muted-foreground tracking-widest uppercase flex items-center justify-center gap-6 mt-2 pt-4 border-t border-border/50">
+                <div className="text-[10px] font-mono font-bold text-muted-foreground tracking-widest uppercase flex items-center justify-center gap-6 mt-4 pt-3 border-t border-border/50">
                   <span className="flex items-center gap-2"><span className="inline-block w-2.5 h-2.5 rounded-full bg-primary shadow-sm" /> {prediction.player1Name}</span>
                   <span className="flex items-center gap-2"><span className="inline-block w-2.5 h-2.5 rounded-full bg-muted-foreground/50 shadow-sm" /> {prediction.player2Name}</span>
                 </div>
@@ -1001,7 +1037,6 @@ export default function PredictionResultPage() {
             )}
           </ModuleCard>
 
-          <ModuleCard title="FATIGUE INDEX" reliability={asPercentage(engine.fatigue.reliability)} icon={Activity}>
             <EdgeBar 
               p1Name={prediction.player1Name} 
               p2Name={prediction.player2Name} 
@@ -1011,11 +1046,11 @@ export default function PredictionResultPage() {
             />
             <div className="mt-2 text-xs text-muted-foreground space-y-1">
               <div className="flex justify-between">
-                <span>{prediction.player1Name} matches (7d):</span>
+                <span className="min-w-0 truncate">{prediction.player1Name} matches (7d):</span>
                 <span className="font-mono font-bold text-foreground">{engine.fatigue.player1MatchesLast7Days}</span>
               </div>
               <div className="flex justify-between">
-                <span>{prediction.player2Name} matches (7d):</span>
+                <span className="min-w-0 truncate">{prediction.player2Name} matches (7d):</span>
                 <span className="font-mono font-bold text-foreground">{engine.fatigue.player2MatchesLast7Days}</span>
               </div>
             </div>
@@ -1032,23 +1067,23 @@ export default function PredictionResultPage() {
               />
               <div className="mt-2 text-xs text-muted-foreground space-y-1">
                 <div className="flex justify-between">
-                  <span>{prediction.player1Name} last match went the distance:</span>
+                  <span className="min-w-0 truncate">{prediction.player1Name} last match went the distance:</span>
                   <span className="font-mono font-bold text-foreground">
                     {engine.matchLoadRecovery.player1RecentMatchWentDistance === null ? "—" : engine.matchLoadRecovery.player1RecentMatchWentDistance ? "Yes" : "No"}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span>{prediction.player2Name} last match went the distance:</span>
+                  <span className="min-w-0 truncate">{prediction.player2Name} last match went the distance:</span>
                   <span className="font-mono font-bold text-foreground">
                     {engine.matchLoadRecovery.player2RecentMatchWentDistance === null ? "—" : engine.matchLoadRecovery.player2RecentMatchWentDistance ? "Yes" : "No"}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span>{prediction.player1Name} rest days (informational only):</span>
+                  <span className="min-w-0 truncate">{prediction.player1Name} rest days (informational only):</span>
                   <span className="font-mono font-bold text-foreground">{engine.matchLoadRecovery.player1RestDays ?? "—"}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>{prediction.player2Name} rest days (informational only):</span>
+                  <span className="min-w-0 truncate">{prediction.player2Name} rest days (informational only):</span>
                   <span className="font-mono font-bold text-foreground">{engine.matchLoadRecovery.player2RestDays ?? "—"}</span>
                 </div>
               </div>
@@ -1062,38 +1097,38 @@ export default function PredictionResultPage() {
             <ModuleCard title="REST, TRAVEL & INJURY" reliability={asPercentage(engine.availability.reliability)} icon={Activity}>
               <div className="text-xs text-muted-foreground space-y-1">
                 <div className="flex justify-between">
-                  <span>{prediction.player1Name} rest days:</span>
+                  <span className="min-w-0 truncate">{prediction.player1Name} rest days:</span>
                   <span className="font-mono font-bold text-foreground">
                     {engine.availability.player1.daysSinceLastMatch ?? "—"}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span>{prediction.player2Name} rest days:</span>
+                  <span className="min-w-0 truncate">{prediction.player2Name} rest days:</span>
                   <span className="font-mono font-bold text-foreground">
                     {engine.availability.player2.daysSinceLastMatch ?? "—"}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span>{prediction.player1Name} travel since last match:</span>
+                  <span className="min-w-0 truncate">{prediction.player1Name} travel since last match:</span>
                   <span className="font-mono font-bold text-foreground">
                     {engine.availability.player1.travelDistanceKm !== null ? `${engine.availability.player1.travelDistanceKm} km` : "n/a"}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span>{prediction.player2Name} travel since last match:</span>
+                  <span className="min-w-0 truncate">{prediction.player2Name} travel since last match:</span>
                   <span className="font-mono font-bold text-foreground">
                     {engine.availability.player2.travelDistanceKm !== null ? `${engine.availability.player2.travelDistanceKm} km` : "n/a"}
                   </span>
                 </div>
                 {engine.availability.player1.recentRetirementOrWithdrawal && (
                   <p className="text-warning">
-                    {prediction.player1Name} retired mid-match recently
+                    <span className="min-w-0 truncate">{prediction.player1Name}</span> retired mid-match recently
                     {engine.availability.player1.recentRetirementTournament ? ` (${engine.availability.player1.recentRetirementTournament})` : ""}.
                   </p>
                 )}
                 {engine.availability.player2.recentRetirementOrWithdrawal && (
                   <p className="text-warning">
-                    {prediction.player2Name} retired mid-match recently
+                    <span className="min-w-0 truncate">{prediction.player2Name}</span> retired mid-match recently
                     {engine.availability.player2.recentRetirementTournament ? ` (${engine.availability.player2.recentRetirementTournament})` : ""}.
                   </p>
                 )}
