@@ -142,6 +142,62 @@ function scoreMatch(
   return { rawProbability, predictedWinnerId: rawProbability >= 0.5 ? match.player1Id : match.player2Id };
 }
 
+export interface VerificationHistoryCache {
+  playerHistory: Map<string, ReturnType<typeof reconstructPlayerMatchHistory>>;
+  headToHead: Map<string, ReturnType<typeof reconstructHeadToHead>>;
+}
+
+export function createVerificationHistoryCache(): VerificationHistoryCache {
+  return { playerHistory: new Map(), headToHead: new Map() };
+}
+
+export function cachedPlayerHistory(cache: VerificationHistoryCache, matchHistory: MatchHistoryIndex, playerId: string, cutoffAt: Date): ReturnType<typeof reconstructPlayerMatchHistory> {
+  const key = `${playerId}\u0000${cutoffAt.getTime()}`;
+  const existing = cache.playerHistory.get(key);
+  if (existing) return existing;
+  const history = reconstructPlayerMatchHistory(matchHistory, playerId, cutoffAt);
+  cache.playerHistory.set(key, history);
+  return history;
+}
+
+export function cachedHeadToHead(cache: VerificationHistoryCache, matchHistory: MatchHistoryIndex, player1Id: string, player2Id: string, cutoffAt: Date): ReturnType<typeof reconstructHeadToHead> {
+  const key = `${player1Id}\u0000${player2Id}\u0000${cutoffAt.getTime()}`;
+  const existing = cache.headToHead.get(key);
+  if (existing) return existing;
+  const h2h = reconstructHeadToHead(matchHistory, player1Id, player2Id, cutoffAt);
+  cache.headToHead.set(key, h2h);
+  return h2h;
+}
+
+function scoreMatchWithVerificationCache(match: HistoricalMatchRow, matchHistory: MatchHistoryIndex, eloHistory: EloHistoryIndex, identity: PlayerIdentityIndex | undefined, cache: VerificationHistoryCache): ScoreResult | null {
+  if (!match.surface || !match.matchFormat) return null;
+  const player1Matches = cachedPlayerHistory(cache, matchHistory, match.player1Id, match.cutoffAt);
+  const player2Matches = cachedPlayerHistory(cache, matchHistory, match.player2Id, match.cutoffAt);
+  if (player1Matches.length === 0 || player2Matches.length === 0) return null;
+
+  const player1OpponentStrength = resolveOpponentStrengthFromIndex(player1Matches, eloHistory, identity);
+  const player2OpponentStrength = resolveOpponentStrengthFromIndex(player2Matches, eloHistory, identity);
+  const headToHead = cachedHeadToHead(cache, matchHistory, match.player1Id, match.player2Id, match.cutoffAt);
+  const output = runPredictionEngine({
+    player1: minimalProfile(match.player1Id, match.player1Name),
+    player2: minimalProfile(match.player2Id, match.player2Name),
+    player1Matches,
+    player2Matches,
+    headToHead,
+    surface: match.surface as Surface,
+    matchFormat: match.matchFormat as MatchFormat,
+    player1OpponentElo: player1OpponentStrength.lookup,
+    player2OpponentElo: player2OpponentStrength.lookup,
+    tournamentName: match.tournamentName,
+    weather: null,
+    segment: null,
+    simulatorAdoption: null,
+    activeCalibration: null,
+  });
+  const rawProbability = output.rawEnsembleProbability / 100;
+  return { rawProbability, predictedWinnerId: rawProbability >= 0.5 ? match.player1Id : match.player2Id };
+}
+
 interface TierMetrics {
   level: string;
   n: number;
@@ -287,6 +343,9 @@ async function main() {
   ];
   const cutoffAt = new Date(); // "now" -- mirrors scoring these as live/current-standing fixtures against the real historical corpus.
   const sixResults: Array<Record<string, unknown>> = [];
+  const verificationStartedAt = Date.now();
+  const verificationCache = createVerificationHistoryCache();
+  console.log(`[eloRebuild] Six-matchup verification cache initialized in ${Date.now() - verificationStartedAt}ms`);
   for (const m of sixMatchups) {
     const syntheticRow = {
       id: -1,
@@ -302,8 +361,12 @@ async function main() {
       cancelled: false,
       winnerId: null,
     } as unknown as HistoricalMatchRow;
-    const before = scoreMatch(syntheticRow, matchHistory, eloHistoryBefore, identityIndex);
-    const after = scoreMatch(syntheticRow, matchHistory, eloHistoryAfter, identityIndex);
+    const beforeStartedAt = Date.now();
+    const before = scoreMatchWithVerificationCache(syntheticRow, matchHistory, eloHistoryBefore, identityIndex, verificationCache);
+    console.log(`[eloRebuild] Six-matchup before score: ${m.label} completed in ${Date.now() - beforeStartedAt}ms`);
+    const afterStartedAt = Date.now();
+    const after = scoreMatchWithVerificationCache(syntheticRow, matchHistory, eloHistoryAfter, identityIndex, verificationCache);
+    console.log(`[eloRebuild] Six-matchup after score: ${m.label} completed in ${Date.now() - afterStartedAt}ms`);
     sixResults.push({
       label: m.label,
       before: before ? { player1WinProb: Math.round(before.rawProbability * 1000) / 10, predictedWinnerId: before.predictedWinnerId } : "insufficient data (no prior recorded matches for one player)",
@@ -312,6 +375,7 @@ async function main() {
       player2: m.p2Name,
     });
   }
+  console.log(`[eloRebuild] Six-matchup verification completed in ${Date.now() - verificationStartedAt}ms`);
 
   const unfindable = [
     "Feldbausch/Kecmanović",
