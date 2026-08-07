@@ -530,6 +530,7 @@ const STATEMENTS: string[] = [
     decision             TEXT NOT NULL,
     data_coverage        INTEGER NOT NULL,
     source_agreement     INTEGER NOT NULL,
+    removal_probability  INTEGER NOT NULL DEFAULT 0,
     factor_scores        JSONB NOT NULL,
     market_odds          NUMERIC,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -545,6 +546,7 @@ const STATEMENTS: string[] = [
   `ALTER TABLE parlay_leg_outcomes ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'live'`,
   `ALTER TABLE parlay_leg_outcomes ADD COLUMN IF NOT EXISTS backfill_match_id INTEGER`,
   `ALTER TABLE parlay_leg_outcomes ADD COLUMN IF NOT EXISTS matchup_closeness INTEGER`,
+  `ALTER TABLE parlay_leg_outcomes ADD COLUMN IF NOT EXISTS removal_probability INTEGER NOT NULL DEFAULT 0`,
   // Backfill dedup: one row per graded match (prevents re-running from doubling data)
   `CREATE UNIQUE INDEX IF NOT EXISTS parlay_leg_outcomes_backfill_match_idx ON parlay_leg_outcomes (backfill_match_id) WHERE backfill_match_id IS NOT NULL`,
   // Resolution job: scan for unresolved rows ordered by age

@@ -509,6 +509,8 @@ interface HistoryLeg {
   parlay_grade: string
   decision: string
   data_coverage: number
+  removal_probability: number
+  matchup_closeness: number | null
   source: string
   actual_winner_id: string | null
   selected_player_id: string
@@ -523,6 +525,7 @@ function HistoryMode() {
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(false)
   const [offset, setOffset] = useState(0)
+  const [outcomeFilter, setOutcomeFilter] = useState<"all" | "wins" | "losses">("all")
   const limit = 100
 
   const fetchHistory = useCallback(async (newOffset = 0) => {
@@ -548,6 +551,11 @@ function HistoryMode() {
     return leg.actual_winner_id === leg.selected_player_id
   }
 
+  const visibleLegs = legs.filter(leg => {
+    const won = outcomeFor(leg)
+    return outcomeFilter === "all" || (outcomeFilter === "wins" ? won === true : won === false)
+  })
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2">
@@ -567,11 +575,19 @@ function HistoryMode() {
         </button>
       </div>
 
+      <div className="flex gap-1 flex-wrap">
+        {(["all", "wins", "losses"] as const).map(filter => (
+          <button key={filter} onClick={() => setOutcomeFilter(filter)} className={`text-[10px] font-mono px-2.5 py-1 rounded border transition-colors ${outcomeFilter === filter ? "border-primary text-primary bg-primary/10" : "border-border text-muted-foreground hover:border-primary/40"}`}>
+            {filter === "all" ? "All legs" : filter === "wins" ? "Wins" : "Losses"}
+          </button>
+        ))}
+      </div>
+
       {loading && legs.length === 0 ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground font-mono py-12 justify-center">
           <RefreshCw className="w-4 h-4 animate-spin" /> Loading history…
         </div>
-      ) : legs.length === 0 ? (
+      ) : visibleLegs.length === 0 ? (
         <Card className="border-dashed bg-secondary/20">
           <CardContent className="py-12 text-center space-y-2">
             <History className="w-10 h-10 text-muted-foreground/30 mx-auto" />
@@ -581,64 +597,8 @@ function HistoryMode() {
         </Card>
       ) : (
         <>
-          <div className="rounded-lg border border-border/40 overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs font-mono">
-                <thead>
-                  <tr className="border-b border-border/40 bg-secondary/30">
-                    <th className="text-left px-3 py-2 text-[10px] text-muted-foreground tracking-wider">PLAYERS</th>
-                    <th className="text-left px-3 py-2 text-[10px] text-muted-foreground tracking-wider hidden sm:table-cell">EVENT</th>
-                    <th className="text-left px-3 py-2 text-[10px] text-muted-foreground tracking-wider">DECISION</th>
-                    <th className="text-right px-3 py-2 text-[10px] text-muted-foreground tracking-wider">VAL</th>
-                    <th className="text-right px-3 py-2 text-[10px] text-muted-foreground tracking-wider hidden sm:table-cell">RISK</th>
-                    <th className="text-left px-3 py-2 text-[10px] text-muted-foreground tracking-wider">OUTCOME</th>
-                    <th className="text-left px-3 py-2 text-[10px] text-muted-foreground tracking-wider hidden md:table-cell">DATE</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {legs.map((leg, i) => {
-                    const won = outcomeFor(leg)
-                    return (
-                      <tr key={leg.id} className={`border-t border-border/20 ${i % 2 === 0 ? "bg-transparent" : "bg-secondary/10"}`}>
-                        <td className="px-3 py-2">
-                          <p className="font-semibold truncate max-w-[140px]">{leg.selected_player_name}</p>
-                          <p className="text-muted-foreground truncate max-w-[140px]">vs {leg.opponent_name}</p>
-                        </td>
-                        <td className="px-3 py-2 hidden sm:table-cell">
-                          <p className="truncate max-w-[110px] text-muted-foreground">{leg.tournament_name ?? "—"}</p>
-                          <p className="text-muted-foreground/60">{leg.surface ?? "—"} · {leg.parlay_grade}</p>
-                        </td>
-                        <td className="px-3 py-2">
-                          {decisionBadge(leg.decision)}
-                        </td>
-                        <td className="px-3 py-2 text-right tabular-nums">
-                          <span className={leg.validation_score >= 65 ? "text-success" : leg.validation_score >= 45 ? "text-warning" : "text-destructive"}>
-                            {leg.validation_score}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2 text-right tabular-nums hidden sm:table-cell">
-                          <span className={leg.risk_score <= 35 ? "text-success" : leg.risk_score <= 55 ? "text-warning" : "text-destructive"}>
-                            {leg.risk_score}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2">
-                          {won === null ? (
-                            <span className="text-muted-foreground/50">—</span>
-                          ) : won ? (
-                            <span className="text-success font-bold">WON ✓</span>
-                          ) : (
-                            <span className="text-destructive font-bold">LOST ✗</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2 text-muted-foreground hidden md:table-cell">
-                          {new Date(leg.created_at).toLocaleDateString()}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+          <div className="max-h-[min(70vh,900px)] overflow-y-auto space-y-2 pr-1">
+            {visibleLegs.map(leg => <HistoryMiniCard key={leg.id} leg={leg} outcome={outcomeFor(leg)} />)}
           </div>
 
           {/* Pagination */}
@@ -660,6 +620,36 @@ function HistoryMode() {
         </>
       )}
     </div>
+  )
+}
+
+function HistoryMiniCard({ leg, outcome }: { leg: HistoryLeg; outcome: boolean | null }) {
+  const scoreColor = (score: number) => score >= 65 ? "bg-success" : score >= 45 ? "bg-warning" : "bg-destructive"
+  const riskColor = (score: number) => score <= 35 ? "bg-success" : score <= 55 ? "bg-warning" : "bg-destructive"
+
+  return (
+    <Card className={`border ${leg.decision === "KEEP" ? "border-success/30 bg-success/5" : leg.decision === "REMOVE" ? "border-destructive/40 bg-destructive/5" : "border-warning/30 bg-warning/5"}`}>
+      <CardContent className="p-3 space-y-2">
+        <div className="flex items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {decisionBadge(leg.decision)}
+              {parlayGradeBadge(leg.parlay_grade)}
+              <Badge variant="outline" className="text-[9px] font-mono px-1.5">Grade {leg.reliability_grade}</Badge>
+              <span className="text-[10px] font-mono text-muted-foreground truncate">{leg.tournament_name ?? "—"}</span>
+            </div>
+            <p className="text-sm font-medium leading-snug mt-1"><span className="text-primary font-bold">{leg.selected_player_name}</span><span className="text-muted-foreground mx-1.5 font-mono text-xs">vs</span><span className="text-muted-foreground">{leg.opponent_name}</span></p>
+          </div>
+          <div className="shrink-0 text-right"><p className="text-xl font-display font-bold tabular-nums leading-none">{leg.validation_score}</p><p className="text-[9px] font-mono text-muted-foreground">/ 100</p></div>
+        </div>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2"><span className="text-[10px] font-mono text-muted-foreground w-20 shrink-0">Validation</span><div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden"><div className={`h-full ${scoreColor(leg.validation_score)}`} style={{ width: `${leg.validation_score}%` }} /></div><span className="text-[10px] font-mono tabular-nums w-8 text-right">{leg.validation_score}%</span></div>
+          <div className="flex items-center gap-2"><span className="text-[10px] font-mono text-muted-foreground w-20 shrink-0">Risk</span><div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden"><div className={`h-full ${riskColor(leg.risk_score)}`} style={{ width: `${leg.risk_score}%` }} /></div><span className="text-[10px] font-mono tabular-nums w-8 text-right">{leg.risk_score}%</span></div>
+        </div>
+        <div className="flex gap-3 text-[10px] font-mono flex-wrap"><span className="text-muted-foreground">Removal: <b className="text-foreground">{leg.removal_probability}%</b></span><span className="text-muted-foreground">Coverage: <b className="text-foreground">{leg.data_coverage}%</b></span><span className="text-muted-foreground">Agreement: <b className="text-foreground">{leg.source_agreement}%</b></span><span className="text-muted-foreground">Closeness: <b className="text-foreground">{leg.matchup_closeness ?? "—"}</b></span><span className="text-muted-foreground">Surface: <b className="text-foreground">{leg.surface ?? "—"}</b></span></div>
+        <div className={`text-[10px] font-mono font-bold ${outcome === true ? "text-success" : outcome === false ? "text-destructive" : "text-muted-foreground"}`}>{outcome === true ? "WON ✓" : outcome === false ? "LOST ✗" : "PENDING"}</div>
+      </CardContent>
+    </Card>
   )
 }
 
@@ -1012,7 +1002,7 @@ function ValidationLegCard({ leg, isAutoSelected, isSaved, onToggleSave }: {
               title={isSaved ? "Remove from Saved Parlays" : "Save to Saved Parlays"}
               className={`ml-auto flex items-center gap-1 text-[10px] font-mono transition-colors ${isSaved ? "text-primary" : "text-muted-foreground hover:text-primary"}`}
             >
-              {isSaved ? <BookmarkCheck className="w-3.5 h-3.5" /> : <Bookmark className="w-3.5 h-3.5" />}
+              {isSaved ? <BookmarkCheck className="w-3.5 h-3.5" fill="currentColor" /> : <Bookmark className="w-3.5 h-3.5" />}
               {isSaved ? "Saved" : "Save"}
             </button>
           )}
@@ -1588,6 +1578,7 @@ export default function AdminParlayBuilder() {
   const [evaluating, setEvaluating] = useState(false)
   const [analyzePhase, setAnalyzePhase] = useState<"predicting" | "evaluating" | null>(null)
   const [slipView, setSlipView] = useState<"all" | "KEEP" | "BORDERLINE" | "REMOVE">("all")
+  const [agreementOnly, setAgreementOnly] = useState(false)
   const [autoSelected, setAutoSelected] = useState<Set<number>>(new Set())
   // Maps result.legs[i] → the ParlayLeg key that produced it, so we can flip legs by result decision
   const [resultLegKeys, setResultLegKeys] = useState<string[]>([])
@@ -1991,9 +1982,11 @@ export default function AdminParlayBuilder() {
 
   // Auto-sort: higher validationScore (the authoritative "better pick" signal) appears first.
   // Applied at display layer only — does not mutate the underlying result.legs array.
-  const filteredResultLegs: BuilderLegResult[] = (result?.legs.filter((l: BuilderLegResult) =>
-    slipView === "all" ? true : l.decision === slipView
-  ) ?? []).slice().sort((a, b) => b.validationScore - a.validationScore)
+  const filteredResultLegs: BuilderLegResult[] = (result?.legs.filter((l: BuilderLegResult, index: number) => {
+    const key = resultLegKeys[index]
+    const selectedSide = legs.find(leg => leg.key === key)?.selectedSide
+    return (slipView === "all" || l.decision === slipView) && (!agreementOnly || legSignalsRef.current[key]?.predictedWinnerSide === selectedSide)
+  }) ?? []).slice().sort((a, b) => b.validationScore - a.validationScore)
 
   // Auto Builder helpers — pick KEEP legs sorted by validationScore
   const autoPickLegs = (count: number | "all", sortBy: "validationScore" | "riskScore" = "validationScore") => {
@@ -2038,6 +2031,27 @@ export default function AdminParlayBuilder() {
       title: `Switched ${borderlineKeySet.size} BORDERLINE leg${borderlineKeySet.size === 1 ? "" : "s"}`,
       description: "Re-running analysis with the opposing players selected.",
     })
+  }
+
+  const removeDecisionLegs = (decision: "BORDERLINE" | "REMOVE") => {
+    if (!result || resultLegKeys.length === 0) return
+    const keys = new Set(result.legs.map((leg, index) => leg.decision === decision ? resultLegKeys[index] : null).filter((key): key is string => key != null))
+    if (keys.size === 0) return
+    setLegs(legs.filter(leg => !keys.has(leg.key)))
+    setResult(null)
+    setAutoSelected(new Set())
+    setSlipView("all")
+    toast({ title: `Removed ${keys.size} ${decision} leg${keys.size === 1 ? "" : "s"}` })
+  }
+
+  const switchRemoveLegs = () => {
+    if (!result || resultLegKeys.length === 0) return
+    const keys = new Set(result.legs.map((leg, index) => leg.decision === "REMOVE" ? resultLegKeys[index] : null).filter((key): key is string => key != null))
+    if (keys.size === 0) return
+    const flipped = legs.map(leg => keys.has(leg.key) ? { ...leg, selectedSide: (leg.selectedSide === "1" ? "2" : "1") as "1" | "2" } : leg)
+    setLegs(flipped)
+    analyzeParlay(flipped)
+    toast({ title: `Switched ${keys.size} REMOVE leg${keys.size === 1 ? "" : "s"}`, description: "Re-running analysis with the opposing players selected." })
   }
 
   // ── Best of Best ────────────────────────────────────────────────────────────
@@ -2278,6 +2292,14 @@ export default function AdminParlayBuilder() {
                           {v}
                         </button>
                       ))}
+                      <button
+                        onClick={() => setAgreementOnly(value => !value)}
+                        disabled={!result}
+                        title="Show only legs where the engine and parlay builder select the same winner"
+                        className={`text-[9px] font-mono px-2 py-0.5 rounded border transition-colors ${agreementOnly ? "border-primary text-primary bg-primary/10" : "border-border text-muted-foreground hover:border-primary/40"} disabled:opacity-40`}
+                      >
+                        🤝 Engine Agreement
+                      </button>
                       {/* Switch Borderline — flips all BORDERLINE legs to the opposing player and re-runs */}
                       {borderlineCount > 0 && (
                         <button
@@ -2289,6 +2311,33 @@ export default function AdminParlayBuilder() {
                           <ArrowLeftRight className="w-2.5 h-2.5" />
                           Switch {borderlineCount} Borderline
                         </button>
+                      )}
+                      {borderlineCount > 0 && (
+                        <button
+                          onClick={() => removeDecisionLegs("BORDERLINE")}
+                          disabled={evaluating}
+                          className="text-[9px] font-mono px-2 py-0.5 rounded border border-warning/50 text-warning hover:bg-warning/20 disabled:opacity-40"
+                        >
+                          Remove Borderline
+                        </button>
+                      )}
+                      {result.summary.removeCount > 0 && (
+                        <>
+                          <button
+                            onClick={() => removeDecisionLegs("REMOVE")}
+                            disabled={evaluating}
+                            className="text-[9px] font-mono px-2 py-0.5 rounded border border-destructive/50 text-destructive hover:bg-destructive/10 disabled:opacity-40"
+                          >
+                            Remove Removes
+                          </button>
+                          <button
+                            onClick={switchRemoveLegs}
+                            disabled={evaluating}
+                            className="text-[9px] font-mono px-2 py-0.5 rounded border border-destructive/50 text-destructive hover:bg-destructive/10 disabled:opacity-40 flex items-center gap-1"
+                          >
+                            <ArrowLeftRight className="w-2.5 h-2.5" /> Switch Removes
+                          </button>
+                        </>
                       )}
                       {/* Best of Best — flips every leg to the engine's predicted winner and re-runs */}
                       <button

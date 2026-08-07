@@ -472,8 +472,8 @@ router.post("/admin/parlay/validate", requireAdmin, async (req, res): Promise<vo
              (session_id, selected_player_id, opponent_id, selected_player_name, opponent_name,
               tournament_name, surface, validation_score, risk_score, reliability_grade,
               parlay_grade, decision, data_coverage, source_agreement, factor_scores, market_odds,
-              matchup_closeness)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17)`,
+                matchup_closeness, removal_probability)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16, $17, $18)`,
           [
             sessionId,
             leg.selectedPlayerId,
@@ -492,6 +492,7 @@ router.post("/admin/parlay/validate", requireAdmin, async (req, res): Promise<vo
             JSON.stringify(result.factorScores),
             leg.marketOdds ?? null,
             result.matchupCloseness ?? null,
+            result.removalProbability,
           ]
         );
       }
@@ -851,15 +852,15 @@ router.post("/admin/parlay/backfill", requireAdmin, (req, res): void => {
                 tournament_name, surface, validation_score, risk_score, reliability_grade,
                 parlay_grade, decision, data_coverage, source_agreement, factor_scores,
                 market_odds, actual_winner_id, resolved_at, source, backfill_match_id,
-                matchup_closeness)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,$17,$18,'backfill',$19,$20)`,
+                 matchup_closeness, removal_probability)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15::jsonb,$16,$17,$18,'backfill',$19,$20,$21)`,
             [null, selectedPlayerId, opponentId, selectedPlayerName, opponentName,
              match.tournament_name ?? null, match.surface ?? null,
              result.validationScore, result.riskScore, result.reliabilityGrade,
              result.parlayGrade, result.decision, result.dataCoverage, result.sourceAgreement,
              JSON.stringify(result.factorScores), marketOdds,
              match.actual_winner_id, asOfDate, match.id,
-             result.matchupCloseness ?? null]
+             result.matchupCloseness ?? null, result.removalProbability]
           );
           inserted++;
         } catch (err) {
@@ -1020,7 +1021,7 @@ router.get("/admin/parlay/history", requireAdmin, async (req, res): Promise<void
     const { rows } = await pool.query(`
       SELECT id, selected_player_name, opponent_name, tournament_name, surface,
              validation_score, risk_score, reliability_grade, parlay_grade, decision,
-             data_coverage, source_agreement, market_odds, source,
+             data_coverage, source_agreement, removal_probability, matchup_closeness, market_odds, source,
              actual_winner_id, selected_player_id,
              created_at, resolved_at
       FROM parlay_leg_outcomes
