@@ -1,0 +1,51 @@
+# Ticket — Walk-Forward Backfill (06/01/2024 – Present)
+
+**Priority:** P0
+**Type:** Data/pipeline run — read-only verification first, then execution
+**Owner target:** Whoever runs `walkForward.ts` / has DB + deploy access
+
+---
+
+## Objective
+
+Run `walkForward.ts` over the historical range **06/01/2024 through today (08/07/2026)** to generate a large batch of valid, gradable predictions — without waiting for real-time match completion.
+
+## Why
+
+Only 198 graded post-fix `paper_trade` rows currently exist, which isn't enough to verify the tie-break fix, the Recent Form gate, or several other pending findings. Walk-forward doesn't require future matches — it only requires that each prediction is generated using only the information that existed *before* that match's date. Matches from 06/01/2024 onward already have known outcomes, so this range can be scored today instead of waiting months for new matches to play out.
+
+## Step 1 — Read-only verification (do this before running anything)
+
+1. Confirm `walkForward.ts` accepts an arbitrary start/end date range as a parameter.
+2. Confirm point-in-time feature snapshots exist and are complete for matches from **06/01/2024 to present** — i.e., for any match in that window, the data needed to score it "as of" its date is available and does not include anything derived from after that match happened.
+3. Report snapshot coverage: full range covered / partial / gaps (with dates).
+4. **Stop and report back if snapshot coverage is materially incomplete for this range** — do not run with partial/leaky data and do not approximate.
+
+## Step 2 — Run (only after Step 1 confirms coverage)
+
+1. Execute `walkForward.ts` with:
+   - `start_date = 2024-06-01`
+   - `end_date = <today's run date>`
+2. Predictions must be generated match-by-match in chronological order, each blind to its own outcome at prediction time.
+3. Grade each resulting row against the actual (already known) historical outcome.
+
+## Step 3 — Report
+
+Provide:
+- Total new rows generated, and how many are gradable (i.e., `actual_winner_id IS NOT NULL`).
+- Date range actually covered (should match 06/01/2024–present unless Step 1 found gaps — if so, state the real covered range and why).
+- **Tie-break accuracy** on this new batch: accuracy where `tieBreakerApplied = true` vs. baseline, compared against the previously known 53.5% (tie-break) vs. 66.8% (baseline) figures.
+- Row counts by fold/segment if the pipeline supports it, so this isn't a single aggregate number.
+
+## Guardrails (non-negotiable, carried over from prior audit)
+
+- No feature may be computed using information from after the match it's predicting (no leakage) — this is the entire point of walk-forward vs. a plain backtest.
+- Do not backfill, edit, or overwrite any existing rows.
+- Do not generate synthetic or fake predictions to pad counts.
+- If snapshot data is missing or leaky for part of the range, narrow the range and say so — do not fill the gap with approximated data.
+
+## Acceptance criteria
+
+- Graded row count for this batch is substantially above 198 (target: enough for a meaningful tie-break-specific breakdown, ideally 1,000+ gradable rows).
+- Tie-break accuracy figure reported from real graded data in this range, not estimated.
+- Any snapshot gaps clearly documented rather than silently skipped.
