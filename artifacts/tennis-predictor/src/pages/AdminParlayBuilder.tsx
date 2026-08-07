@@ -509,6 +509,7 @@ interface HistoryLeg {
   parlay_grade: string
   decision: string
   data_coverage: number
+  source_agreement: number
   removal_probability: number
   matchup_closeness: number | null
   source: string
@@ -1997,10 +1998,15 @@ export default function AdminParlayBuilder() {
     if (legs.length === 0) return
     setLoadingAgreement(true)
     try {
-      const query = encodeURIComponent(JSON.stringify(legs.map(leg => ({
+      const lookupLegs = legs.map(leg => ({
         key: leg.key, player1Id: leg.player1Id, player2Id: leg.player2Id,
-      }))))
-      const response = await fetch(api(`/api/admin/parlay/engine-agreement?legs=${query}`), { credentials: "include" })
+      }))
+      const response = await fetch(api("/api/admin/parlay/engine-agreement"), {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ legs: lookupLegs }),
+      })
       const payload = await response.json()
       if (!response.ok) throw new Error(payload.error ?? "Engine agreement lookup failed")
       const agreeingKeys = new Set<string>()
