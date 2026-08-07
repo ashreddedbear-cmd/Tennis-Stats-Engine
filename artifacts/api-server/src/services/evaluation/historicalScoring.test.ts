@@ -200,16 +200,16 @@ test(
 
     // ── Step 2: build scoring context ─────────────────────────────────────────
     //
-    // buildEloHistoryIndex reads the eloOverall rows from match_feature_snapshots for the
-    // given player IDs. Our synthetic players have no eloOverall snapshot rows (they've never
-    // been run through the backfill). An empty EloHistoryIndex is fine — the engine's Elo
-    // module simply contributes null (absent data), and the other modules still produce a
-    // real raw probability from form/H2H/surface stats.
+    // buildEloHistoryIndex reads the eloOverall rows from match_feature_snapshots. Our
+    // synthetic players have no eloOverall snapshot rows (they've never been run through the
+    // backfill). An empty EloHistoryIndex is fine — the engine's Elo module simply contributes
+    // null (absent data), and the other modules still produce a real raw probability from
+    // form/H2H/surface stats.
     //
     // buildPlayerIdentityIndex() (which reads the full historical_matches corpus) is
     // intentionally skipped here — synthetic player IDs need no alias resolution.
     //
-    const eloHistory   = await buildEloHistoryIndex(undefined, [P0, P1, P2]);
+    const eloHistory   = await buildEloHistoryIndex();
     const matchHistory = buildMatchHistoryIndex(priorMatches);
 
     // Empty identity index: synthetic players have no aliases in the real corpus.

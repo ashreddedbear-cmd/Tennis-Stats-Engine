@@ -28,7 +28,7 @@ type Entry = {
   row: EvaluationPredictionRow;
   engine: EngineBreakdown;
   dataQuality: number;
-  historicalMatch: HistoricalMatchRow | null;
+  historicalMatch: Pick<HistoricalMatchRow, "id" | "player1Rank" | "player2Rank"> | null;
   signal: ReturnType<typeof computeMatchupDifficultySignal>;
 };
 

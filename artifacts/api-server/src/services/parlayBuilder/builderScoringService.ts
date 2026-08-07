@@ -1771,6 +1771,14 @@ export async function computeBuilderScore(snapshot: BuilderSnapshot): Promise<Bu
   };
 }
 
+export function computeCrossEngineAgreement(
+  builderDecision: BuilderResult["decision"],
+): boolean | null {
+  if (builderDecision === "KEEP" || builderDecision === "BORDERLINE") return true;
+  if (builderDecision === "REMOVE") return false;
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Test-only staleness helper export
 // ---------------------------------------------------------------------------

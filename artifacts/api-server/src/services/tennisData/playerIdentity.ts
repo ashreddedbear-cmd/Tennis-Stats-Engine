@@ -516,7 +516,7 @@ export interface PredictionPlayerResolution {
 function minimalProfileFromSearchCandidate(
   candidate: { id: string; name: string; tour?: string | null; countryCode?: string | null; currentRank?: number | null },
   submittedFullName: string,
-  requestedPlayerId: string,
+  requestedPlayerId: string | null,
   reason: string,
 ): PlayerProfile {
   logger.warn(
@@ -563,15 +563,16 @@ async function resolvePlayerProfileByNameInternal(
 
   // 1. Exact name match
   for (const c of candidates) {
-    if (/\s\/\s|\//.test(c.name ?? "")) continue;
-    const cn = normalizePlayerName(c.name);
+    const candidateName = c.name;
+    if (candidateName == null || /\s \/\s|\//.test(candidateName)) continue;
+    const cn = normalizePlayerName(candidateName);
     if (cn === normalizedQuery) {
       const profile = await resolvePlayerProfile(provider, c.id);
       if (profile && !/\s\/\s|\//.test(profile.name ?? "") && playerNamesMatch(submittedName, profile.name ?? "")) {
         return profile;
       }
       // getPlayer broken for this ID (returns wrong/doubles player) but search result is trusted
-      return minimalProfileFromSearchCandidate(c, submittedName, requestedPlayerId, "exact-match-getPlayer-broken");
+      return minimalProfileFromSearchCandidate({ ...c, name: candidateName }, submittedName, requestedPlayerId, "exact-match-getPlayer-broken");
     }
   }
 
@@ -589,12 +590,13 @@ async function resolvePlayerProfileByNameInternal(
         surnames.every((s, i) => cw[i + 1] === s)
       );
     });
-    if (abbreviated) {
+    const abbreviatedName = abbreviated?.name;
+    if (abbreviated && abbreviatedName) {
       const profile = await resolvePlayerProfile(provider, abbreviated.id);
       if (profile && !/\s\/\s|\//.test(profile.name ?? "") && playerNamesMatch(submittedName, profile.name ?? "")) {
         return profile;
       }
-      return minimalProfileFromSearchCandidate(abbreviated, submittedName, requestedPlayerId, "abbreviated-match-getPlayer-broken");
+      return minimalProfileFromSearchCandidate({ ...abbreviated, name: abbreviatedName }, submittedName, requestedPlayerId, "abbreviated-match-getPlayer-broken");
     }
   }
 

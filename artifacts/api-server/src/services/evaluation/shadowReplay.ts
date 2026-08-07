@@ -246,18 +246,9 @@ export async function runShadowPaperTradingReplay(options: ShadowReplayOptions):
         ),
       );
 
-    // Opponent-strength resolution (see `opponentStrength.ts`) needs each of today's players'
-    // PAST opponents' own Elo timelines too -- one level beyond the target players themselves --
-    // so the Elo index is scoped to target players UNION every opponent found in `directMatches`.
-    const eloPlayerIds = new Set(targetPlayerIds);
-    for (const m of directMatches) {
-      eloPlayerIds.add(m.player1Id);
-      eloPlayerIds.add(m.player2Id);
-    }
-
     const scoringContext: HistoricalScoringContext = {
       matchHistory: buildMatchHistoryIndex(directMatches),
-      eloHistory: await buildEloHistoryIndex(identityIndex, [...eloPlayerIds]),
+      eloHistory: await buildEloHistoryIndex(identityIndex),
       identityIndex,
       specialistRowsBySegmentKey,
       // Shadow replay is point-in-time historical evaluation: suppress the segment specialist

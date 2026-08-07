@@ -81,7 +81,7 @@ export function createCanonicalIngestionResolver(
           externalPlayerName: input.externalPlayerName,
           canonicalPlayerId: result.canonicalPlayerId,
           aliasType: result.resolutionMethod,
-          metadata: input.metadata ?? {},
+          metadata: input.metadata ? { ...input.metadata } : {},
         });
       } else {
         await enqueueReview({

@@ -206,7 +206,7 @@ test("saveOrUpdatePrediction: identical match inputs from different request IDs 
       // These simulated metadata changes (timestamp, strategy version) are intentional to show that
       // only the inputSnapshotHash matters for dedup, not request-level tracking info.
       snapshotCapturedAt: new Date(new Date().getTime() + 1000), // 1 second later
-      strategyVersion: 9999, // different strategy version in hypothetical follow-up request
+      strategyVersion: "9999", // different strategy version in hypothetical follow-up request
     });
 
     assert.equal(second.id, first.id, "identical inputs must reuse the same row even with different request metadata");

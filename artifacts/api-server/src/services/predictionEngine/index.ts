@@ -141,6 +141,8 @@ export interface EngineOutput {
   engine: EngineBreakdown;
   /** Task #32: full auditable trace of every intermediate pipeline stage and decision-chain rule. */
   decisionTrace: DecisionTrace;
+  /** Populated asynchronously by the cross-engine agreement enrichment worker. */
+  crossEngineAgreement: boolean | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1168,5 +1170,6 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     predictedSetScore,
     engine,
     decisionTrace,
+    crossEngineAgreement: null,
   };
 }

@@ -392,7 +392,7 @@ router.post("/predictions", requireClerkUser, predictionLimiter, async (req, res
       predictedSetScore: output.predictedSetScore,
       engine: output.engine,
       decisionTrace: output.decisionTrace,
-      crossEngineAgreement: output.crossEngineAgreement,
+      crossEngineAgreement: null,
       matchIdentityKey,
       inputSnapshotHash,
       // Stamp the requesting Clerk user ID so history is scoped per-user.

@@ -70,6 +70,9 @@ export const predictionsTable = pgTable(
      */
     decisionTrace: jsonb("decision_trace"),
 
+    // Computed asynchronously after prediction creation by the cross-engine agreement worker.
+    crossEngineAgreement: boolean("cross_engine_agreement"),
+
     /**
      * Clerk user ID of the authenticated user who created this prediction.
      * Nullable for rows inserted before this column was added (admin / pre-launch corpus).
