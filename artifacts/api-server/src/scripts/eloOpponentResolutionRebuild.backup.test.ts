@@ -1,6 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { backupMatchFeatureSnapshots } from "./eloOpponentResolutionRebuild.js";
+import { backupMatchFeatureSnapshots, cachedHeadToHead, cachedPlayerHistory, createVerificationHistoryCache } from "./eloOpponentResolutionRebuild.js";
+import { buildMatchHistoryIndex, reconstructHeadToHead, reconstructPlayerMatchHistory } from "../services/historicalData/matchRecordReconstruction.js";
+import type { HistoricalMatchRow } from "@workspace/db";
 import type { MatchFeatureSnapshotRow } from "@workspace/db";
 
 function row(id: number): MatchFeatureSnapshotRow {
@@ -116,4 +118,39 @@ describe("snapshot JSONL backup", () => {
     assert.equal(fake.files.has("/backups/write-failed.jsonl"), false);
     assert.equal(fake.files.has("/backups/write-failed.jsonl.partial"), true);
   });
+});
+
+function match(id: number, player1Id: string, player2Id: string, start: string, winnerId: string | null = player1Id): HistoricalMatchRow {
+  return {
+    id, externalId: `m-${id}`, provider: "test", tour: "ATP", tournamentName: "Cache Open",
+    tournamentLevel: "ATP250", surface: "Hard", round: "F", matchFormat: "BestOf3",
+    player1Id, player1Name: player1Id, player2Id, player2Name: player2Id, winnerId,
+    score: "6-4 6-4", retired: false, walkover: false, cancelled: false,
+    gameMarginsPlayer1: [], indoor: null, player1Rank: null, player2Rank: null,
+    scheduledStartAt: new Date(start), scheduledStartTimeConfirmed: true, cutoffMinutes: 30,
+    cutoffAt: new Date(new Date(start).getTime() - 30 * 60_000), rawSource: {}, importedAt: new Date(start),
+  };
+}
+
+it("verification cache returns the same history and H2H as scan reconstruction", () => {
+  const rows = [
+    match(1, "p1", "p2", "2025-01-01T10:00:00.000Z"),
+    match(2, "p2", "p3", "2025-01-02T10:00:00.000Z", "p3"),
+    match(3, "p1", "p3", "2025-01-03T10:00:00.000Z", "p1"),
+    match(4, "p1", "p2", "2025-01-04T10:00:00.000Z", "p2"),
+    match(5, "p1", "p2", "2025-01-05T10:00:00.000Z", null),
+  ];
+  const index = buildMatchHistoryIndex(rows);
+  const cutoff = new Date("2025-01-05T00:00:00.000Z");
+  const cache = createVerificationHistoryCache();
+  const scanHistory = reconstructPlayerMatchHistory(index, "p1", cutoff);
+  const cachedHistory = cachedPlayerHistory(cache, index, "p1", cutoff);
+  assert.deepEqual(cachedHistory, scanHistory);
+  assert.strictEqual(cachedPlayerHistory(cache, index, "p1", cutoff), cachedHistory);
+
+  const scanH2h = reconstructHeadToHead(index, "p1", "p2", cutoff);
+  const cachedH2h = cachedHeadToHead(cache, index, "p1", "p2", cutoff);
+  assert.deepEqual(cachedH2h, scanH2h);
+  assert.strictEqual(cachedHeadToHead(cache, index, "p1", "p2", cutoff), cachedH2h);
+  assert.equal(scanHistory.length, 3, "cancelled/undecided rows remain excluded by the shared index");
 });
