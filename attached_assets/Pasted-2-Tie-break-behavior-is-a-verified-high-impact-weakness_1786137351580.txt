@@ -1,0 +1,21 @@
+2 Tie-break behavior is a verified high-impact weakness
+
+Status: 🟡 Completed – Needs Live Verification
+Changed / finding: A live test-segment query found 66.8% accuracy when tieBreakerApplied=false (n=36,682) and 53.5% when tieBreakerApplied=true (n=15,737). A forward-only “soft no-play” fix was built and passed 82/82 unit tests, but was not yet proven active on a real new production prediction.
+Why: Forced selections in ambiguous matches were barely above coin-flip accuracy and materially reduced blended accuracy.
+Evidence: Direct live query over evaluation_predictions.feature_snapshot->engine->tieBreakerApplied; code scope and 82/82 unit-test result. Overall across false/true/null cohorts was calculated at roughly 62.8% over 52,456 rows, but this is a broad test slice and not comparable to the Strong-agreement-only 57.9%.
+Verified: Accuracy gap and unit behavior are verified; live activation and accuracy lift are not.
+Production-ready: Mechanically tested, but not outcome-verified.
+Additional testing: Inspect a new prediction row after deployment; then run a locked same-row-set A/B or shadow comparison.
+Undo later: Roll back if abstention is not correctly surfaced, silently breaks downstream consumers, or fails to improve a prospectively locked evaluation.
+
+1.3 Data Quality was inverted and its blend was incomplete
+
+Status: 🟡 Completed – Needs Live Verification
+Changed / finding: “Excellent” Data Quality historically performed worst at 54.7%, while “Limited” performed best at 61.4%. The DQ blend was changed in dataQuality.ts and index.ts to restore missing Availability, Fatigue, and Match Load Recovery inputs and address a tournament-level selection effect.
+Why: DQ was being presented as a reliability/truth signal despite almost no positive relationship with correctness and an inverted observed ordering.
+Evidence: audit-task111-dq-degradation-above-55.md; targeted prediction-engine testing reported 198 tests with 197 passing in one run; later consolidated tests reported 93 tests for the DQ area and 102/102 across DQ, fallback instrumentation, and frozen-backtest test groups.
+Verified: Code mechanics and root-cause implementation are tested; real predictive improvement is not verified.
+Production-ready: The label-correctness fix can operate in production, but should not be described as an accuracy improvement.
+Additional testing: Prospective DQ-tier calibration and accuracy on a locked cohort; confirm high-DQ no longer underperforms low-DQ.
+Undo later: Possible if restored inputs worsen calibration or the tournament-level correction introduces selection bias.

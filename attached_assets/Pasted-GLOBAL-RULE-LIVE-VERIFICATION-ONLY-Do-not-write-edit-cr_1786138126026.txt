@@ -1,0 +1,172 @@
+GLOBAL RULE: LIVE VERIFICATION ONLY.
+
+Do not write, edit, create, delete, install, migrate, backfill, commit, push, or change any code, database row, schema, configuration, or file.
+
+You may run read-only commands, SELECT queries, existing tests, inspect logs, and inspect existing code. Do not trigger a new optimizer run or regenerate historical predictions.
+
+If something cannot be verified without making a change, label it NOT VERIFIED and explain exactly what is missing. Do not estimate, fabricate, or treat code presence as proof that production is using it.
+
+Verify the following completed work:
+
+1. TIE-BREAK SOFT NO-PLAY FIX
+
+The fix was built and previously passed 82/82 unit tests, but it was never confirmed active on a real new prediction.
+
+Verify:
+
+* The deployed code contains the soft no-play behavior.
+* Identify the deployed commit SHA containing it.
+* Find at least one prediction created after deployment where feature_snapshot->engine->tieBreakerApplied = true.
+* Show the prediction’s winner/recommendation/no-play fields.
+* Confirm whether the engine abstained instead of forcing a winner.
+* Confirm the API, prediction card, history, Parlay Builder, and grading paths handle the no-play result correctly.
+* Do not generate a fake or test prediction just to produce evidence.
+
+Report: VERIFIED LIVE or NOT VERIFIED.
+
+2. DATA QUALITY FIX
+
+The Data Quality fix restored Availability, Fatigue, and Match Load Recovery to the DQ blend and addressed the tournament-level selection effect. Unit tests passed, but the live behavior and accuracy impact were not verified.
+
+Verify:
+
+* The deployed version includes the changes in dataQuality.ts and index.ts.
+* Show the deployed commit SHA.
+* Show at least one real prediction created after deployment with its Data Quality score, tier, and included module values.
+* Confirm Availability, Fatigue, and Match Load Recovery are actually included in the calculation.
+* Compare post-deployment DQ-tier counts with the earlier behavior if existing data allows.
+* If enough graded post-deployment rows exist, report accuracy by DQ tier with raw counts.
+* Do not claim the fix improved accuracy unless a valid graded post-deployment comparison exists.
+
+Report: VERIFIED LIVE, VERIFIED MECHANICALLY ONLY, or NOT VERIFIED.
+
+3. FALLBACK INSTRUMENTATION
+
+The migration added used_fallback and fallback_sources, and the code was wired into prediction/evaluation write paths. The schema was previously verified, but real row population and fallback accuracy were not fully verified.
+
+Verify with read-only queries:
+
+* Confirm used_fallback and fallback_sources currently exist on evaluation_predictions.
+* Confirm their exact data types.
+* Show the migration record proving 0002_add_evaluation_prediction_fallback_columns.sql was applied, if migration history exists.
+* Show at least five recent rows created after deployment containing:
+    * created_at or the correct timestamp
+    * run_kind
+    * segment
+    * used_fallback
+    * fallback_sources
+    * predicted_winner_id
+    * actual_winner_id
+* Confirm the fields contain real values and are not always null.
+* Report total new rows since instrumentation went live.
+* Report how many used a fallback and the fallback percentage.
+* Group fallback rows by fallback_sources.
+* If enough rows are graded, report fallback-affected versus clean accuracy with raw counts.
+* Do not backfill or alter old rows.
+
+Report: VERIFIED LIVE or NOT VERIFIED.
+
+4. SEGMENT PROVENANCE
+
+The project history contains conflicting evidence about segment and data_segment.
+
+Verify:
+
+* Whether both columns currently exist on evaluation_predictions.
+* Their exact data types.
+* Null counts and value distributions for each.
+* Whether recent rows populate both.
+* Whether the two fields ever disagree.
+* Which field the current evaluation/audit code treats as canonical.
+* Whether data_segment also exists and populates on the live predictions ledger table.
+* Do not modify or consolidate either column.
+
+Report: VERIFIED CONSISTENT, CONFLICT FOUND, or NOT VERIFIED.
+
+5. ALL INSTRUMENTED WRITE PATHS
+
+The following paths were reported as wired:
+
+* savePrediction.ts
+* walkForward.ts
+* paperTrading.ts
+* shadowReplay.ts
+* bridgeRescore.ts
+* historical-test insert paths
+
+For every path:
+
+* Show the exact existing code that writes segment and fallback metadata.
+* Find a real persisted row produced by that run type, if one exists after deployment.
+* Confirm the stored values match the write-path logic.
+* Clearly separate “code is wired” from “real persisted row verified.”
+* Do not create new rows.
+
+Report each path separately as VERIFIED LIVE, CODE ONLY, or NOT VERIFIED.
+
+6. DEPLOYMENT STATE
+
+Verify:
+
+* Current repository commit SHA.
+* Current deployed application commit SHA/version.
+* Whether the completed fixes are included in the deployed version.
+* Whether the deployed application currently starts successfully.
+* Whether it currently connects to the intended database.
+* Show a recent read-only database query or health-check timestamp.
+* Confirm whether the app and Shell point to the same database without displaying passwords or secrets.
+
+Report: DEPLOYED AND VERIFIED, COMMITTED BUT NOT DEPLOYED, or UNKNOWN.
+
+7. FROZEN-VS-DYNAMIC BACKTEST SCRIPT
+
+backtestFrozenVsDynamicWeights.ts was built and successfully executed, but previously found:
+
+* Frozen rows: 52,419
+* Dynamic rows: 0
+* Intersected matches: 0
+* Frozen accuracy: null
+* Dynamic accuracy: null
+* Delta: null
+
+Verify without creating data:
+
+* Confirm the script exists in the committed and deployed repository.
+* Confirm its exact path.
+* Confirm it filters:
+    * run_kind = 'historical_test'
+    * segment = 'test'
+    * included_in_accuracy = true
+    * actual_winner_id IS NOT NULL
+* Confirm it intersects cohorts by historical_match_id.
+* Run read-only queries to determine whether any rows now have a non-null optimizer_run_id.
+* If dynamic rows still equal zero, confirm the comparison remains impossible.
+* Do not trigger an optimizer/training run.
+
+Report: SCRIPT VERIFIED, COMPARISON AVAILABLE, or COMPARISON STILL BLOCKED.
+
+8. FINAL REPORT
+
+Return one table containing:
+
+* Item
+* Completed work
+* Live evidence
+* Current status
+* Production-ready: Yes/No
+* Additional testing required
+* Possible rollback: Yes/No
+* Exact blocker
+
+Use only these status labels:
+
+✅ Completed & Verified Live
+🟡 Completed – Needs More Live Data
+🔵 Built – Not Deployed
+⚠️ Conflict Found – Review Required
+❌ Not Verified
+🔄 Possible Rollback Candidate
+
+Include every SQL query, command, raw count, commit SHA, timestamp, and relevant file path used as evidence.
+
+Do not make any changes after the audit. Stop after presenting the report.
