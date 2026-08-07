@@ -111,7 +111,7 @@ function sanitizeResumedItems(items: BatchItem[]): BatchItem[] {
   })
 }
 
-const RESOLVE_CONCURRENCY = 4
+const RESOLVE_CONCURRENCY = 12
 
 async function runWithConcurrency<T>(items: T[], limit: number, worker: (item: T, index: number) => Promise<void>): Promise<void> {
   let nextIndex = 0
