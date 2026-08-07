@@ -171,6 +171,7 @@ function PredictionRow({
       case 'MODERATE_CONFIDENCE': return <Badge variant="secondary">{getShortRecommendationLabel("MODERATE_CONFIDENCE")}</Badge>
       case 'LOW_CONFIDENCE': return <Badge variant="warning">{getShortRecommendationLabel("LOW_CONFIDENCE")}</Badge>
       case 'INSUFFICIENT_EDGE': return <Badge variant="outline" className="gap-1 text-muted-foreground border-muted-foreground/30" title="Available evidence does not support a reliable directional edge."><Scale className="w-3 h-3" /> NO EDGE</Badge>
+      case 'DATA_INCOMPLETE': return <Badge variant="warning" className="gap-1 text-warning border-warning/40" title="One or more contributing inputs were unavailable and defaulted to neutral."><AlertTriangle className="w-3 h-3" /> DATA INCOMPLETE</Badge>
       // Legacy stored values
       case 'STRONG_RECOMMENDATION': return <Badge variant="success" title="Engine's highest-confidence tier -- validation is still limited and this tier hasn't yet been shown to beat other tiers.">{getShortRecommendationLabel("STRONG_RECOMMENDATION")}</Badge>
       case 'MODERATE_LEAN': return <Badge variant="secondary">{getShortRecommendationLabel("MODERATE_LEAN")}</Badge>

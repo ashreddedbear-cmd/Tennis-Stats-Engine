@@ -31,6 +31,8 @@ export interface ServeReturnResult {
   player1PointLevel: PointLevelStats;
   player2PointLevel: PointLevelStats;
   reliability: number;
+  /** True when one side had no usable score margins or provider stats for this module. */
+  defaulted: boolean;
   note: string | null;
   warnings: string[];
 }
@@ -289,6 +291,7 @@ export function computeServeReturnModule(
       player1PointLevel: p1PointLevel,
       player2PointLevel: p2PointLevel,
       reliability: Math.round(reliability),
+      defaulted: false,
       note: pointLevelApplied ? `${REAL_STATS_NOTE} Deepened with point-level inputs (first-serve win %, break points saved/converted, estimated service games held).` : REAL_STATS_NOTE,
       warnings,
     };
@@ -316,6 +319,7 @@ export function computeServeReturnModule(
     player1PointLevel: p1PointLevel,
     player2PointLevel: p2PointLevel,
     reliability: Math.round(reliability),
+    defaulted: p1.sample === 0 || p2.sample === 0,
     note: PROXY_NOTE,
     warnings,
   };

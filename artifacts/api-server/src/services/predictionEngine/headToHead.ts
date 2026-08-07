@@ -9,6 +9,8 @@ export interface HeadToHeadResult {
   /** Recency- and tournament-level-weighted edge toward player1 (-1..1), 0 when meetings are even/absent. */
   weightedEdge: number;
   reliability: number;
+  /** True when no direct meetings were available; weightedEdge is then neutral by construction. */
+  defaulted: boolean;
   warnings: string[];
 }
 
@@ -74,6 +76,7 @@ export function computeHeadToHeadModule(h2h: HeadToHeadRecord, surface: Surface)
     recentMeetings,
     weightedEdge: Math.round(weightedEdge * 1000) / 1000,
     reliability: Math.round(reliability),
+    defaulted: totalMeetings === 0,
     warnings,
   };
 }

@@ -23,6 +23,11 @@ test("INSUFFICIENT_EDGE: tieBreakerApplied=true → regardless of margin or agre
   assert.equal(computeRecommendation(85, 70, "Strong", "Strong", true), "INSUFFICIENT_EDGE");
 });
 
+test("DATA_INCOMPLETE: close-call gate with a defaulted input is distinct from a genuine no-edge result", () => {
+  assert.equal(computeRecommendation(50, 20, "Poor", "Strong", true, false, true), "DATA_INCOMPLETE");
+  assert.equal(computeRecommendation(50, 70, "Strong", "Strong", true, false, false), "INSUFFICIENT_EDGE");
+});
+
 test("INSUFFICIENT_EDGE: tieBreakerApplied=true with poor DQ → INSUFFICIENT_EDGE still (DQ check fires first, same result)", () => {
   assert.equal(computeRecommendation(52, 20, "Poor", "Strong", true), "INSUFFICIENT_EDGE");
 });

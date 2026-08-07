@@ -6,7 +6,8 @@ export type Recommendation =
   | "HIGH_CONFIDENCE"
   | "MODERATE_CONFIDENCE"
   | "LOW_CONFIDENCE"
-  | "INSUFFICIENT_EDGE";
+  | "INSUFFICIENT_EDGE"
+  | "DATA_INCOMPLETE";
 
 /**
  * Floor used by the "very high confidence" guardrail below.
@@ -66,6 +67,7 @@ export function computeRecommendation(
    * the same output they always did.
    */
   coreSignalsAlign = false,
+  dataIncomplete = false,
 ): Recommendation {
   const margin = Math.abs(calibratedProbability - 50);
 
@@ -73,6 +75,7 @@ export function computeRecommendation(
   // The evidence does not support a reliable directional pick.
 
   // 1. Data too thin / poor quality to trust any signal.
+  if (dataIncomplete && tieBreakerApplied) return "DATA_INCOMPLETE";
   if (dataQualityLabel === "Poor" || dataQuality < 25) return "INSUFFICIENT_EDGE";
   // 2. Raw ensemble within coin-flip range — no validated directional edge exists.
   if (tieBreakerApplied) return "INSUFFICIENT_EDGE";

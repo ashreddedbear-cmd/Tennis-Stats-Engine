@@ -96,6 +96,13 @@ test("applyTieBreaker: within TIE_BAND — note is non-null (honest disclosure a
   assert.ok(result.note !== null && result.note.length > 0, "Expected a non-empty disclosure note for a close match");
 });
 
+test("applyTieBreaker: defaulted input is reported as incomplete, not genuine close-call", () => {
+  const result = applyTieBreaker(50, { ...BASE_INPUTS, defaultedInputs: ["Recent Form"] });
+  assert.equal(result.applied, true);
+  assert.equal(result.dataIncomplete, true);
+  assert.match(result.note ?? "", /Data incomplete/);
+});
+
 // ── Boundary conditions ──────────────────────────────────────────────────────────────────────────
 
 test("applyTieBreaker: exactly at TIE_BAND boundary — not applied (ensemble already clear)", () => {

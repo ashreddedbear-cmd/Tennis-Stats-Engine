@@ -2,6 +2,7 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { runPaperTradingJob } from "./jobs/runPaperTradingJob";
 import { runHistoricalBackfillJob } from "./jobs/runHistoricalBackfillJob";
+import { runDegradedPredictionRecomputeJob } from "./jobs/runDegradedPredictionRecomputeJob";
 import { ensureEvaluationSchema } from "./lib/ensureEvaluationSchema";
 
 const rawPort = process.env["PORT"];
@@ -128,6 +129,18 @@ async function bootstrap(): Promise<void> {
   // Fire once shortly after startup too, offset from the paper-trading/calibration startup
   // triggers so they don't all hit the provider at once.
   setTimeout(triggerHistoricalBackfillCycle, 20_000);
+
+  const DEGRADED_RECOMPUTE_INTERVAL_MS = 6 * 60 * 60_000;
+  let degradedRecomputeInFlight = false;
+  const triggerDegradedRecompute = (): void => {
+    if (degradedRecomputeInFlight) return;
+    degradedRecomputeInFlight = true;
+    runDegradedPredictionRecomputeJob()
+      .catch((err) => logger.error({ err }, "degraded prediction recomputation threw unexpectedly"))
+      .finally(() => { degradedRecomputeInFlight = false; });
+  };
+  setInterval(triggerDegradedRecompute, DEGRADED_RECOMPUTE_INTERVAL_MS);
+  setTimeout(triggerDegradedRecompute, 30_000);
   });
 }
 

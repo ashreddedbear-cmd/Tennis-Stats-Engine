@@ -236,20 +236,24 @@ export class CompositeTennisProvider implements TennisDataProvider {
     // the prediction still runs rather than surfacing a 502 to the user.
     let records: MatchRecord[] = [];
     try {
-      records = await this.withFallback(
-        "getPlayerMatches",
-        () => this.primary.getPlayerMatches(playerId),
-        () => this.fallback.getPlayerMatches(playerId),
-      );
+      records = await this.primary.getPlayerMatches(playerId);
     } catch (err) {
-      if (err instanceof ProviderUnavailableError) {
-        logger.warn(
-          { playerId, err: err.message },
-          "Both providers unavailable for getPlayerMatches — attempting Sofascore tier-3 fallback",
-        );
-        // Fall through to Sofascore tier-3 below.
-      } else {
+      if (!(err instanceof ProviderUnavailableError)) {
         throw err;
+      }
+      logger.warn({ playerId, err: err.message }, "Primary provider unavailable for getPlayerMatches — trying fallback");
+    }
+
+    // Empty or sparse success is not proof that the fallback has no data. Provider coverage
+    // differs by tour and endpoint, so always query API-Tennis when the primary did not produce
+    // a complete history, then retain the richer result.
+    if (records.length < SOFASCORE_MIN_RECORDS_THRESHOLD) {
+      try {
+        const fallbackRecords = await this.fallback.getPlayerMatches(playerId);
+        if (fallbackRecords.length > records.length) records = fallbackRecords;
+      } catch (err) {
+        if (!(err instanceof ProviderUnavailableError)) throw err;
+        logger.warn({ playerId, err: err.message }, "Fallback provider unavailable for getPlayerMatches — continuing to tertiary tiers");
       }
     }
 

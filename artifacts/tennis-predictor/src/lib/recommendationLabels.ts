@@ -5,6 +5,7 @@ export const RECOMMENDATION_LABELS: Record<string, string> = {
   MODERATE_CONFIDENCE: "Moderate Confidence",
   LOW_CONFIDENCE: "Low Confidence",
   INSUFFICIENT_EDGE: "Insufficient Edge",
+  DATA_INCOMPLETE: "Data Incomplete",
   // Legacy labels — kept so stored rows from before the rename continue
   // rendering correctly in the ledger, history, and audit pages.
   STRONG_RECOMMENDATION: "Strong Recommendation",
@@ -21,6 +22,7 @@ export const RECOMMENDATION_SHORT_LABELS: Record<string, string> = {
   MODERATE_CONFIDENCE: "MODERATE",
   LOW_CONFIDENCE: "LOW CONF",
   INSUFFICIENT_EDGE: "NO EDGE",
+  DATA_INCOMPLETE: "DATA INCOMPLETE",
   // Legacy short labels
   STRONG_RECOMMENDATION: "HIGH CONF",
   MODERATE_LEAN: "LEAN",
@@ -35,6 +37,7 @@ export const RECOMMENDATION_DESCRIPTION: Record<string, string> = {
   MODERATE_CONFIDENCE: "Meaningful advantage, but some evidence is mixed.",
   LOW_CONFIDENCE: "Projected winner, but the advantage is fragile.",
   INSUFFICIENT_EDGE: "Available evidence does not support a reliable advantage.",
+  DATA_INCOMPLETE: "One or more contributing model inputs were unavailable and defaulted to neutral.",
 }
 
 export function getRecommendationLabel(recommendation: string): string {

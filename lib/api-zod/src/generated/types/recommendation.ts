@@ -10,6 +10,7 @@ export type Recommendation = typeof Recommendation[keyof typeof Recommendation];
 
 
 export const Recommendation = {
+  DATA_INCOMPLETE: 'DATA_INCOMPLETE',
   STRONG_RECOMMENDATION: 'STRONG_RECOMMENDATION',
   MODERATE_LEAN: 'MODERATE_LEAN',
   HIGH_RISK: 'HIGH_RISK',

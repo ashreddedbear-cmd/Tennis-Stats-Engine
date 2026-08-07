@@ -19,6 +19,8 @@ export interface RecentFormResult {
    * shrunk toward neutral (50) -- see `TOUR_CREDIBILITY_FLOOR`. */
   player1TourLevelShare: number;
   player2TourLevelShare: number;
+  /** True when a player's recent-form window had no matches and its neutral value was used. */
+  defaulted: boolean;
   warnings: string[];
 }
 
@@ -246,6 +248,7 @@ export function computeRecentFormModule(
     player2ServeReturnCoverage: Math.round(p2.serveReturnCoverage * 100),
     player1TourLevelShare: Math.round(p1.tourLevelShare * 1000) / 1000,
     player2TourLevelShare: Math.round(p2.tourLevelShare * 1000) / 1000,
+    defaulted: p1.sample === 0 || p2.sample === 0,
     warnings,
   };
 }

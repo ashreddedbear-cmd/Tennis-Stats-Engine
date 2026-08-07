@@ -98,6 +98,8 @@ export interface EngineBreakdown {
   tieBreakerDecidingStep: string | null;
   /** Always present when `tieBreakerApplied` is true -- explains that the match is genuinely close and no directional nudge was applied. Null otherwise. */
   tieBreakerNote: string | null;
+  /** Module inputs that used a neutral no-data value at prediction time. */
+  defaultedInputs: string[];
   /** True only when this prediction clears the Elite Prediction bar -- see `eliteTier.ts`. Not present on predictions made before this field existed. */
   isEliteTier: boolean;
   /** Always present -- explains why a prediction is or isn't elite tier. Never silent. */
@@ -542,6 +544,13 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
   // average -- always surface a real (if modest) lean when evidence supports one, never inflate
   // beyond a small fixed nudge, and only stay at exactly 50/50 when every tie-break step is also
   // silent (a genuine coin-flip matchup).
+  const defaultedInputs = [
+    surfaceElo.defaulted ? "Surface Elo" : null,
+    serveReturn.defaulted ? "Serve & Return" : null,
+    recentForm.defaulted ? "Recent Form" : null,
+    headToHead.defaulted ? "Head-to-Head" : null,
+  ].filter((value): value is string => value !== null);
+
   const tieBreaker = applyTieBreaker(rawEnsembleProbability, {
     surfaceElo,
     serveReturn,
@@ -553,6 +562,7 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     player1Matches: input.player1Matches,
     player2Matches: input.player2Matches,
     surface: input.surface,
+    defaultedInputs,
   });
   const ensembleProbability = tieBreaker.applied ? tieBreaker.adjustedProbability : rawEnsembleProbability;
 
@@ -846,7 +856,7 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
   const recentFormFavorsP1 = voteFavorsPlayer1(featureModels, "Recent Form");
   const coreSignalsAlign = surfaceEloFavorsP1 === serveReturnFavorsP1 && serveReturnFavorsP1 === recentFormFavorsP1;
 
-  const recommendation = computeRecommendation(calibratedProbability, dataQuality, dataQualityLabel, modelAgreement, tieBreaker.applied, coreSignalsAlign);
+  const recommendation = computeRecommendation(calibratedProbability, dataQuality, dataQualityLabel, modelAgreement, tieBreaker.applied, coreSignalsAlign, tieBreaker.dataIncomplete);
 
   const favorsPlayer1 = calibratedProbability >= 50;
   const predictedWinnerId = favorsPlayer1 ? input.player1.id : input.player2.id;
@@ -1043,7 +1053,8 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     modelConflictNote,
     tieBreakerApplied: tieBreaker.applied,
     tieBreakerDecidingStep: tieBreaker.decidingStep,
-    tieBreakerNote: tieBreaker.applied ? tieBreaker.note : null,
+    tieBreakerNote: tieBreaker.note,
+    defaultedInputs,
     isEliteTier,
     eliteTierReason,
     upsetRiskBreakdown,

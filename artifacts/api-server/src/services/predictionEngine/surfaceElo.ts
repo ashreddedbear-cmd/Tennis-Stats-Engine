@@ -42,6 +42,8 @@ export interface SurfaceEloResult {
    * means their rating leans on `tourLevelCredibility` shrink toward the corpus baseline. */
   player1TourLevelShare: Fraction;
   player2TourLevelShare: Fraction;
+  /** True when either player has no surface-specific history and the baseline Elo is used. */
+  defaulted: boolean;
   warnings: string[];
 }
 
@@ -413,6 +415,7 @@ export function computeSurfaceEloModule(
     player2BlendWeight: asFraction(Math.round(p2.blendWeight * 1000) / 1000),
     player1TourLevelShare: asFraction(Math.round(p1.tourLevelShare * 1000) / 1000),
     player2TourLevelShare: asFraction(Math.round(p2.tourLevelShare * 1000) / 1000),
+    defaulted: p1.sampleSize === 0 || p2.sampleSize === 0,
     warnings,
   };
 }

@@ -46,7 +46,7 @@ import { requireClerkUser } from "../middlewares/requireClerkUser";
 import { predictionLimiter } from "../middlewares/rateLimiter";
 import { getAuth } from "@clerk/express";
 import { openai } from "@workspace/integrations-openai-ai-server";
-import { searchKnownPlayers, normalizePlayerName } from "../services/tennisData/playerIdentity";
+import { searchKnownPlayers, normalizePlayerName, playerNamesMatch } from "../services/tennisData/playerIdentity";
 import { isDoublesLikeName } from "./predictionRequestIntegrity";
 import {
   canUsePredictionHistory,
@@ -87,7 +87,7 @@ async function resolveCanonicalPlayerIdFromName(
       const isHistorical = (c as { source?: string }).source === "historical-match";
 
       // Exact normalised match
-      const isExact = cn === normalizedQuery;
+      const isExact = cn === normalizedQuery || playerNamesMatch(submittedName, c.name);
       if (isExact) {
         if (!isHistorical && !liveExact) liveExact = c;
         else if (isHistorical && !histExact) histExact = c;
@@ -117,7 +117,7 @@ async function resolveCanonicalPlayerIdFromName(
       // Task #24: detect when multiple candidates tied at the winning level — silent disambiguation
       // risk. Count how many candidates share the same priority tier as `best`.
       const tiebreakerPool = liveExact
-        ? candidates.filter(c => !(c as { source?: string }).source?.startsWith("historical") && !isDoublesLikeName(c.name) && normalizePlayerName(c.name) === normalizedQuery)
+        ? candidates.filter(c => !(c as { source?: string }).source?.startsWith("historical") && !isDoublesLikeName(c.name) && playerNamesMatch(submittedName, c.name))
         : liveAbbrev
           ? candidates.filter(c => {
               if ((c as { source?: string }).source?.startsWith("historical") || isDoublesLikeName(c.name)) return false;

@@ -24,6 +24,7 @@
     "job:calibration-refit": "export CALIBRATION_REFIT_JOB_STANDALONE=1 && node --enable-source-maps ./dist/jobs/runCalibrationRefitJob.mjs",
     "job:calibration-refit:dev": "export CALIBRATION_REFIT_JOB_STANDALONE=1 && tsx src/jobs/runCalibrationRefitJob.ts",
     "job:historical-backfill": "export HISTORICAL_BACKFILL_JOB_STANDALONE=1 && node --enable-source-maps ./dist/jobs/runHistoricalBackfillJob.mjs",
+    "job:degraded-recompute": "export DEGRADED_PREDICTION_RECOMPUTE_STANDALONE=1 && node --enable-source-maps ./dist/jobs/runDegradedPredictionRecomputeJob.mjs",
     "job:historical-backfill:dev": "export HISTORICAL_BACKFILL_JOB_STANDALONE=1 && tsx src/jobs/runHistoricalBackfillJob.ts",
     "run:stage1-2": "tsx scripts/runStage1And2.ts"
   },

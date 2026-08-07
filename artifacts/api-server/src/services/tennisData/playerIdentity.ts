@@ -646,10 +646,11 @@ async function resolvePlayerProfileByNameInternal(
  * remapping when that id exists only in historical rows but no longer resolves in the provider.
  */
 /** Returns true if two player names are the same player (exact or initial-abbreviated). */
-function playerNamesMatch(a: string, b: string): boolean {
+export function playerNamesMatch(a: string, b: string): boolean {
   const aN = normalizePlayerName(a).split(" ").filter(Boolean);
   const bN = normalizePlayerName(b).split(" ").filter(Boolean);
   if (aN.join(" ") === bN.join(" ")) return true;
+  if (aN.length >= 2 && bN.length >= 2 && aN[0] === bN[0] && aN[aN.length - 1] === bN[bN.length - 1]) return true;
   if (aN.length !== bN.length || aN.length < 2) return false;
   const aSurnames = aN.slice(1);
   const bSurnames = bN.slice(1);

@@ -20,10 +20,12 @@ export interface TieBreakerInputs {
   player1Matches: MatchRecord[];
   player2Matches: MatchRecord[];
   surface: Surface;
+  defaultedInputs?: string[];
 }
 
 export interface TieBreakerResult {
   applied: boolean;
+  dataIncomplete: boolean;
   direction: 1 | -1 | 0;
   adjustedProbability: number;
   note: string | null;
@@ -99,8 +101,9 @@ function hasDecisiveCoreSignal(inputs: TieBreakerInputs): boolean {
  * never let that diagnostic decide the final winner.
  */
 export function applyTieBreaker(rawEnsembleProbability: number, inputs: TieBreakerInputs): TieBreakerResult {
+  const dataIncomplete = inputs.defaultedInputs?.length ? true : false;
   if (Math.abs(rawEnsembleProbability - 50) >= TIE_BAND) {
-    return { applied: false, direction: 0, adjustedProbability: rawEnsembleProbability, note: null, decidingStep: null };
+    return { applied: false, dataIncomplete, direction: 0, adjustedProbability: rawEnsembleProbability, note: dataIncomplete ? `Data incomplete: ${inputs.defaultedInputs!.join(", ")}.` : null, decidingStep: null };
   }
 
   const decidingStep = getDiagnosticDecidingStep(inputs);
@@ -114,9 +117,12 @@ export function applyTieBreaker(rawEnsembleProbability: number, inputs: TieBreak
 
   return {
     applied: true,
+    dataIncomplete,
     direction: 0,
     adjustedProbability: rawEnsembleProbability,
     decidingStep,
-    note: `Core signals are within ${TIE_BAND} points of a coin flip (raw ${rawEnsembleProbability.toFixed(1)}%). ${decisiveText} ${diagnosticText} The ensemble's natural probability is used as-is; no directional pick or nudge is applied.`,
+    note: dataIncomplete
+      ? `Data incomplete: ${inputs.defaultedInputs!.join(", ")}. The raw ensemble is within ${TIE_BAND} points of 50%, but missing inputs prevent a genuine close-call classification.`
+      : `Core signals are within ${TIE_BAND} points of a coin flip (raw ${rawEnsembleProbability.toFixed(1)}%). ${decisiveText} ${diagnosticText} The ensemble's natural probability is used as-is; no directional pick or nudge is applied.`,
   };
 }

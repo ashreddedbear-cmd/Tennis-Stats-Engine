@@ -293,7 +293,7 @@ export const ListPredictionsResponseItem = zod.object({
   "predictedWinnerProbability": zod.number().describe('The predicted winner\'s own win probability (always >= 50) -- see the field doc on Prediction. Use this for display instead of calibratedProbability.'),
   "dataQuality": zod.number(),
   "upsetRisk": zod.enum(['LOW', 'MODERATE', 'HIGH', 'EXTREME']),
-  "recommendation": zod.enum(['HIGHEST_CONFIDENCE', 'HIGH_CONFIDENCE', 'MODERATE_CONFIDENCE', 'LOW_CONFIDENCE', 'INSUFFICIENT_EDGE', 'STRONG_RECOMMENDATION', 'MODERATE_LEAN', 'HIGH_RISK', 'NO_STRONG_SIGNAL', 'DO_NOT_RECOMMEND']),
+  "recommendation": zod.enum(['HIGHEST_CONFIDENCE', 'HIGH_CONFIDENCE', 'MODERATE_CONFIDENCE', 'LOW_CONFIDENCE', 'INSUFFICIENT_EDGE', 'DATA_INCOMPLETE', 'STRONG_RECOMMENDATION', 'MODERATE_LEAN', 'HIGH_RISK', 'NO_STRONG_SIGNAL', 'DO_NOT_RECOMMEND']),
   "actualWinnerName": zod.string().nullish(),
   "createdAt": zod.coerce.date(),
   "usedHistoricalMatchFallback": zod.boolean().describe('Task #30: true when player1 and\/or player2 was resolved via the historical-match fallback (not in current live ATP\/WTA standings) rather than a live ranking, per the real `engine.warnings` recorded at prediction time -- never a new guess.')
@@ -332,7 +332,7 @@ export const CreatePredictionResponse = zod.object({
   "dataQuality": zod.number(),
   "dataQualityLabel": zod.enum(['Excellent', 'Strong', 'Acceptable', 'Limited', 'Poor']).optional(),
   "upsetRisk": zod.enum(['LOW', 'MODERATE', 'HIGH', 'EXTREME']),
-  "recommendation": zod.enum(['HIGHEST_CONFIDENCE', 'HIGH_CONFIDENCE', 'MODERATE_CONFIDENCE', 'LOW_CONFIDENCE', 'INSUFFICIENT_EDGE', 'STRONG_RECOMMENDATION', 'MODERATE_LEAN', 'HIGH_RISK', 'NO_STRONG_SIGNAL', 'DO_NOT_RECOMMEND']),
+  "recommendation": zod.enum(['HIGHEST_CONFIDENCE', 'HIGH_CONFIDENCE', 'MODERATE_CONFIDENCE', 'LOW_CONFIDENCE', 'INSUFFICIENT_EDGE', 'DATA_INCOMPLETE', 'STRONG_RECOMMENDATION', 'MODERATE_LEAN', 'HIGH_RISK', 'NO_STRONG_SIGNAL', 'DO_NOT_RECOMMEND']),
   "predictedSetScore": zod.string(),
   "engine": zod.object({
   "surfaceElo": zod.object({
@@ -526,7 +526,7 @@ export const GetPredictionStatsResponse = zod.object({
   "correctPredictions": zod.number(),
   "accuracy": zod.number().nullable().describe('correctPredictions \/ resolvedPredictions as a percentage, null if no resolved predictions yet'),
   "byRecommendation": zod.array(zod.object({
-  "recommendation": zod.enum(['HIGHEST_CONFIDENCE', 'HIGH_CONFIDENCE', 'MODERATE_CONFIDENCE', 'LOW_CONFIDENCE', 'INSUFFICIENT_EDGE', 'STRONG_RECOMMENDATION', 'MODERATE_LEAN', 'HIGH_RISK', 'NO_STRONG_SIGNAL', 'DO_NOT_RECOMMEND']),
+  "recommendation": zod.enum(['HIGHEST_CONFIDENCE', 'HIGH_CONFIDENCE', 'MODERATE_CONFIDENCE', 'LOW_CONFIDENCE', 'INSUFFICIENT_EDGE', 'DATA_INCOMPLETE', 'STRONG_RECOMMENDATION', 'MODERATE_LEAN', 'HIGH_RISK', 'NO_STRONG_SIGNAL', 'DO_NOT_RECOMMEND']),
   "count": zod.number()
 }))
 })
@@ -573,7 +573,7 @@ export const GetLedgerPlayerPredictionsResponseItem = zod.object({
   "predictedWinnerProbability": zod.number().describe('The predicted winner\'s own win probability (always >= 50) -- see the field doc on Prediction. Use this for display instead of calibratedProbability.'),
   "dataQuality": zod.number(),
   "upsetRisk": zod.enum(['LOW', 'MODERATE', 'HIGH', 'EXTREME']),
-  "recommendation": zod.enum(['HIGHEST_CONFIDENCE', 'HIGH_CONFIDENCE', 'MODERATE_CONFIDENCE', 'LOW_CONFIDENCE', 'INSUFFICIENT_EDGE', 'STRONG_RECOMMENDATION', 'MODERATE_LEAN', 'HIGH_RISK', 'NO_STRONG_SIGNAL', 'DO_NOT_RECOMMEND']),
+  "recommendation": zod.enum(['HIGHEST_CONFIDENCE', 'HIGH_CONFIDENCE', 'MODERATE_CONFIDENCE', 'LOW_CONFIDENCE', 'INSUFFICIENT_EDGE', 'DATA_INCOMPLETE', 'STRONG_RECOMMENDATION', 'MODERATE_LEAN', 'HIGH_RISK', 'NO_STRONG_SIGNAL', 'DO_NOT_RECOMMEND']),
   "actualWinnerName": zod.string().nullish(),
   "createdAt": zod.coerce.date(),
   "usedHistoricalMatchFallback": zod.boolean().describe('Task #30: true when player1 and\/or player2 was resolved via the historical-match fallback (not in current live ATP\/WTA standings) rather than a live ranking, per the real `engine.warnings` recorded at prediction time -- never a new guess.')
@@ -606,7 +606,7 @@ export const GetPredictionResponse = zod.object({
   "dataQuality": zod.number(),
   "dataQualityLabel": zod.enum(['Excellent', 'Strong', 'Acceptable', 'Limited', 'Poor']).optional(),
   "upsetRisk": zod.enum(['LOW', 'MODERATE', 'HIGH', 'EXTREME']),
-  "recommendation": zod.enum(['HIGHEST_CONFIDENCE', 'HIGH_CONFIDENCE', 'MODERATE_CONFIDENCE', 'LOW_CONFIDENCE', 'INSUFFICIENT_EDGE', 'STRONG_RECOMMENDATION', 'MODERATE_LEAN', 'HIGH_RISK', 'NO_STRONG_SIGNAL', 'DO_NOT_RECOMMEND']),
+  "recommendation": zod.enum(['HIGHEST_CONFIDENCE', 'HIGH_CONFIDENCE', 'MODERATE_CONFIDENCE', 'LOW_CONFIDENCE', 'INSUFFICIENT_EDGE', 'DATA_INCOMPLETE', 'STRONG_RECOMMENDATION', 'MODERATE_LEAN', 'HIGH_RISK', 'NO_STRONG_SIGNAL', 'DO_NOT_RECOMMEND']),
   "predictedSetScore": zod.string(),
   "engine": zod.object({
   "surfaceElo": zod.object({
@@ -887,7 +887,7 @@ export const RecordPredictionOutcomeResponse = zod.object({
   "dataQuality": zod.number(),
   "dataQualityLabel": zod.enum(['Excellent', 'Strong', 'Acceptable', 'Limited', 'Poor']).optional(),
   "upsetRisk": zod.enum(['LOW', 'MODERATE', 'HIGH', 'EXTREME']),
-  "recommendation": zod.enum(['HIGHEST_CONFIDENCE', 'HIGH_CONFIDENCE', 'MODERATE_CONFIDENCE', 'LOW_CONFIDENCE', 'INSUFFICIENT_EDGE', 'STRONG_RECOMMENDATION', 'MODERATE_LEAN', 'HIGH_RISK', 'NO_STRONG_SIGNAL', 'DO_NOT_RECOMMEND']),
+  "recommendation": zod.enum(['HIGHEST_CONFIDENCE', 'HIGH_CONFIDENCE', 'MODERATE_CONFIDENCE', 'LOW_CONFIDENCE', 'INSUFFICIENT_EDGE', 'DATA_INCOMPLETE', 'STRONG_RECOMMENDATION', 'MODERATE_LEAN', 'HIGH_RISK', 'NO_STRONG_SIGNAL', 'DO_NOT_RECOMMEND']),
   "predictedSetScore": zod.string(),
   "engine": zod.object({
   "surfaceElo": zod.object({
