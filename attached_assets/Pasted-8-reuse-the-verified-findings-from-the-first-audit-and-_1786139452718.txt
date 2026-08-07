@@ -1,0 +1,388 @@
+8. reuse the verified findings from the first audit and not repeat completed checks.
+9. COMPLETE PREDICTION-ACCURACY AUDIT
+
+This section must determine which existing parts of the prediction engine improve accuracy, reduce accuracy, or remain unverified.
+
+STRICT RULES:
+
+* Do not write, edit, create, delete, install, migrate, backfill, commit, push, or change any code, schema, configuration, database row, prediction, or file.
+* You may inspect existing code and audits, run read-only SELECT queries, and run an existing analysis command only if you first prove that it cannot insert, update, delete, backfill, regenerate, or modify anything.
+* Do not trigger new predictions, optimizer runs, training runs, walk-forward runs, shadow replays, or historical rescoring.
+* Never compare validation results with test results.
+* Never compare different folds, date ranges, or row sets as if they were before-and-after results.
+* Every accuracy result must include:
+    * Test or validation segment
+    * Sample size
+    * Correct and incorrect counts
+    * Accuracy percentage
+    * Date range
+    * Fold or cohort
+    * Strategy/model version when available
+    * Whether the result is held-out or in-sample
+    * Confidence interval when it can be calculated with a read-only query
+* If valid evidence does not exist, report UNVERIFIED. Do not estimate or substitute a different cohort.
+
+8A. TIE-BREAK ACCURACY
+
+Previously verified historical result:
+
+* No tie-break: 66.8% accuracy, n=36,682
+* Tie-break applied: 53.5% accuracy, n=15,737
+
+Audit:
+
+* Re-run the current read-only test-segment split using feature_snapshot->engine->tieBreakerApplied.
+* Show raw SQL and raw results.
+* Break the result down by fold, model version, and date range if those fields allow it.
+* Determine whether the 53.5% weakness remains consistent across time or is caused by only one period/fold.
+* Determine what percentage of all eligible predictions triggers the tie-break.
+* Check whether the completed soft no-play fix is active on new live predictions.
+* If enough graded post-deployment rows exist, compare pre-deployment and post-deployment results using matched definitions and clearly separated cohorts.
+* Do not claim an accuracy improvement unless a valid same-policy or prospective comparison exists.
+* Report both accuracy and coverage: removing weak picks may improve recommended-pick accuracy while reducing the number of available picks.
+
+Status options:
+
+✅ Accuracy improvement verified
+🟡 Promising but insufficient live data
+⚠️ Weak cohort confirmed, fix impact unverified
+❌ No valid evidence
+
+8B. FALLBACK ACCURACY
+
+Audit every fallback path, including:
+
+* serveReturn.ts
+* recentForm.ts
+* index.ts
+* Any additional module listed in fallback_sources
+
+Using used_fallback and fallback_sources:
+
+* Count all eligible new predictions since instrumentation became active.
+* Count fallback-affected and clean predictions.
+* Calculate fallback rate.
+* For graded rows, calculate:
+    * Fallback accuracy
+    * Clean accuracy
+    * Difference in percentage points
+    * Correct/incorrect counts
+    * Confidence intervals
+* Break fallback accuracy down by individual fallback source.
+* Break it down by ATP/WTA/Challenger/ITF, surface, confidence band, Data Quality tier, and sample-size category when enough rows exist.
+* Check whether fallback predictions are disproportionately producing 50/50 results, failed predictions, excessive confidence, or incorrect winners.
+* Determine whether evidence supports:
+    * Keeping the prediction unchanged
+    * Applying probability shrinkage
+    * Applying a low-confidence warning
+    * Applying soft no-play
+* Do not recommend deleting fallback logic without measuring how many predictions would stop working.
+
+Status options:
+
+✅ Fallback treatment supported by live evidence
+🟡 Not enough graded rows
+⚠️ Fallback accuracy materially worse
+❌ Instrumentation not populating or unverifiable
+
+8C. DATA QUALITY ACCURACY
+
+Historical finding:
+
+* Limited DQ: 61.4%
+* Excellent DQ: 54.7%
+
+The DQ blend was changed to restore Availability, Fatigue, and Match Load Recovery and address tournament-level selection effects.
+
+Audit:
+
+* Confirm the deployed calculation includes the restored modules.
+* Calculate current post-deployment accuracy for every DQ tier.
+* Include sample size, correct/incorrect counts, confidence intervals, and date range.
+* Compare DQ tiers only within the same segment and compatible time period.
+* Determine whether accuracy now increases, decreases, or remains unrelated as DQ improves.
+* Determine whether DQ predicts winner correctness or only input completeness.
+* Check calibration within each DQ tier.
+* Check whether high-DQ predictions are disproportionately above 70% confidence and therefore exposed to the known overconfidence problem.
+* Do not claim the DQ fix improved accuracy unless graded post-deployment evidence proves it.
+* If the fix only corrected labeling, state that clearly.
+
+Status options:
+
+✅ DQ accuracy relationship corrected
+🟡 Labeling fixed, accuracy unverified
+⚠️ DQ inversion still exists
+❌ Insufficient evidence
+
+8D. FROZEN VERSUS DYNAMIC WEIGHTS
+
+Previous verified result:
+
+* Frozen rows: 52,419
+* Dynamic rows: 0
+* Intersected matches: 0
+* Comparison unavailable
+
+Audit:
+
+* Confirm whether any rows now have non-null optimizer_run_id.
+* Confirm whether optimizer_run_id is still the correct discriminator.
+* Search existing rows, audits, result files, and logs for any completed dynamic-weight evaluation.
+* If matching frozen and dynamic rows now exist, compare only identical historical_match_id values.
+* Report:
+    * Frozen sample count
+    * Dynamic sample count
+    * Intersected sample count
+    * Frozen accuracy
+    * Dynamic accuracy
+    * Accuracy delta
+    * Log loss and Brier score if already available
+    * Date range, segment, fold, and model versions
+* If dynamic rows remain zero, state plainly that dynamic weighting remains unvalidated.
+* Do not trigger an optimizer or training run.
+
+Status options:
+
+✅ Dynamic weighting outperforms frozen
+🔄 Frozen weighting outperforms dynamic
+🟡 Comparison still blocked
+❌ Existing comparison is invalid
+
+8E. RECENT FORM 13× WEIGHT SWING
+
+The Recent Form weight was reported to change from approximately 1.3 to 0.1 depending on a conflict gate.
+
+Audit:
+
+* Show the exact current code and conditions that change the Recent Form weight.
+* Confirm the exact minimum and maximum possible weights.
+* Identify whether the deployed version still contains this behavior.
+* Search existing prediction snapshots, audits, or persisted features for enough information to identify which weight was used per prediction.
+* If the used weight is persisted, calculate accuracy and calibration by Recent Form weight/gate state on the test segment.
+* Compare sample counts and correct/incorrect totals.
+* Determine whether the high-weight and low-weight policies produce materially different results.
+* Check whether the weight gate overlaps with Data Quality, model agreement, fallback use, or tournament level.
+* If the selected weight is not persisted, state that historical accuracy by weight cannot be verified.
+* Do not change or freeze the weight during this audit.
+
+Status options:
+
+✅ Dynamic Recent Form weighting supported
+🔄 Weight swing appears harmful
+⚠️ Weight effect unverified
+❌ Required provenance not stored
+
+8F. OVERLAPPING OR DOUBLE-COUNTED SIGNALS
+
+Audit the relationship among:
+
+* Data Quality
+* Model agreement
+* Recent Form
+* Availability
+* Fatigue
+* Match Load Recovery
+* Serve/Return
+* Surface Elo
+* Any confidence or recommendation tier derived from these signals
+
+For each signal:
+
+* List its direct inputs.
+* Identify inputs shared with other signals.
+* Show where the same module output can affect the final prediction more than once.
+* Determine whether “Strong agreement + Excellent DQ” represents independent evidence or repeated use of the same evidence.
+* Search for existing ablation, correlation, feature-importance, or incremental-value results.
+* If persisted prediction snapshots allow read-only analysis, report accuracy for:
+    * Strong agreement alone
+    * Excellent DQ alone
+    * Both together
+    * Neither
+* Include sample sizes and confidence intervals.
+* Do not claim combining signals improves accuracy merely because the combined bucket has a higher retrospective percentage.
+* If no valid ablation exists, mark the issue UNVERIFIED and provide the exact future test required.
+
+Status options:
+
+✅ Independent incremental value verified
+⚠️ Signal overlap confirmed
+🔄 Redundant signal may need removal
+❌ No valid ablation evidence
+
+8G. OVERCONFIDENCE ABOVE 70%
+
+Audit current calibration by predicted-probability band:
+
+* 50–54.9%
+* 55–59.9%
+* 60–64.9%
+* 65–69.9%
+* 70–74.9%
+* 75–79.9%
+* 80% and above
+
+For every band, report:
+
+* Number of predictions
+* Correct and incorrect counts
+* Average predicted probability
+* Actual accuracy
+* Calibration gap
+* Test or validation segment
+* Date range
+* Log loss and Brier contribution if available
+
+Also:
+
+* Break results down by DQ tier, model agreement, tie-break usage, fallback usage, tour, and surface when sample sizes permit.
+* Identify whether probabilities above 70% are still systematically overconfident.
+* Identify which rule, calibration layer, or label converts these predictions into Strong Recommendation or Elite-style outputs.
+* Determine whether thresholds are supported by actual test-segment accuracy.
+* Do not alter calibration or thresholds during this audit.
+
+Status options:
+
+✅ High-confidence calibration verified
+⚠️ Overconfidence remains
+🔄 Confidence thresholds may need rollback
+❌ Insufficient held-out evidence
+
+8H. HARDCODED CONFIDENCE DISCOUNTS
+
+Audit every hardcoded probability/confidence adjustment, including:
+
+* ATP-wide adjustments
+* Low-sample-surface adjustments
+* Tour-level adjustments
+* Data-availability adjustments
+* Any fixed shrinkage or discount applied after the model score
+
+For every adjustment:
+
+* Show the file, function, condition, and exact numeric adjustment.
+* Explain when it activates.
+* Determine whether the activation is persisted in prediction snapshots.
+* Search for existing held-out evidence that the adjustment improves accuracy, log loss, Brier score, or calibration.
+* If persisted data allows read-only analysis, compare adjusted and non-adjusted cohorts without treating different populations as a causal A/B test.
+* Identify adjustments with no supporting test-segment evidence.
+* Do not remove or change any adjustment during the audit.
+
+Status options:
+
+✅ Adjustment supported by held-out evidence
+⚠️ Adjustment remains an unvalidated heuristic
+🔄 Possible rollback candidate
+❌ Cannot determine when adjustment was applied
+
+8I. UNDERLYING TIE-BREAK CASCADE
+
+The soft no-play fix may improve selected-pick accuracy by abstaining, but it does not prove the underlying tie-break decision method is useful.
+
+Audit:
+
+* Show every step of the current tie-break cascade in order.
+* Show which file/function owns each decision.
+* Report test-segment accuracy by tieBreakerDecidingStep, if that value is stored.
+* Report sample sizes, correct/incorrect counts, and confidence intervals for each deciding step.
+* Identify steps performing at or below 50%, close to 50%, or materially above baseline.
+* Determine whether any tie-break step adds useful signal or merely forces a result.
+* Clearly separate:
+    * Improving the underlying prediction
+    * Improving selected-pick accuracy through abstention
+* Do not redesign the cascade during this audit.
+
+Status options:
+
+✅ Useful tie-break step identified
+⚠️ Cascade remains weak
+🔄 Individual steps may need removal
+❌ Step-level evidence unavailable
+
+8J. FEATURE-ABLATION EVIDENCE
+
+Search the repository, database, audit files, and existing result artifacts for ablation tests involving:
+
+* Data Quality
+* Model agreement
+* Recent Form
+* Surface Elo
+* Serve/Return
+* Availability
+* Fatigue
+* Match Load Recovery
+* Hardcoded discounts
+* Dynamic weight gates
+* Tie-break cascade
+* Fallback inputs
+
+For every existing ablation:
+
+* Report the exact feature removed or changed.
+* Report the identical evaluation cohort used.
+* Report baseline and ablated accuracy.
+* Report sample size, log loss, Brier score, and confidence interval when available.
+* Confirm whether it used a held-out test segment.
+* Reject any comparison using different segments, folds, dates, or row sets.
+
+If no valid ablation exists:
+
+* State that the feature’s incremental accuracy value remains unverified.
+* List the exact locked comparison needed later.
+* Do not create or run a new ablation during this audit.
+
+Status options:
+
+✅ Feature adds verified accuracy
+🔄 Feature appears harmful or removable
+⚠️ Evidence is validation-only or mismatched
+❌ No valid ablation exists
+
+8K. ACCURACY-AUDIT CONCLUSION
+
+Return a final ranked table with these columns:
+
+* Rank
+* Accuracy-related issue
+* Current evidence
+* Test/validation segment
+* Sample size
+* Verified accuracy impact
+* Expected effect on raw model accuracy
+* Expected effect on recommended-pick accuracy
+* Coverage impact
+* Current status
+* Production-ready
+* Additional test required
+* Possible rollback
+* Recommended next action
+
+Rank issues from highest expected accuracy value to lowest.
+
+Use only these conclusions:
+
+* VERIFIED ACCURACY IMPROVEMENT
+* VERIFIED WEAK COHORT
+* MEASUREMENT ONLY
+* PROMISING BUT UNVERIFIED
+* NO VALID EVIDENCE
+* POSSIBLE ROLLBACK CANDIDATE
+
+Do not make any code or database changes after completing the audit. Stop after presenting the evidence and ranked table.
+
+9. FINAL LIVE-VERIFICATION AND ACCURACY REPORT
+
+Combine the original live-verification results and this accuracy audit into one report.
+
+Clearly separate:
+
+1. Completed and verified live
+2. Completed but needing more live data
+3. Built but not deployed
+4. Accuracy weakness verified
+5. Potential accuracy improvement unverified
+6. Measurement/instrumentation only
+7. Possible rollback candidates
+8. Blocked by missing data
+9. Exact next engineering actions
+
+Do not describe instrumentation, logging, labeling, or reporting work as an accuracy improvement unless outcome evidence proves it.
