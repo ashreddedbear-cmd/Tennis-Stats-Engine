@@ -104,6 +104,7 @@ test("deriveServicePointEstimate: never fabricates certainty beyond the weaker o
     player2BlendWeight: asFraction(0.05),
     player1TourLevelShare: asFraction(1),
     player2TourLevelShare: asFraction(1),
+    defaulted: false,
     warnings: [],
   };
   const emptyPointLevel = { firstServeWinPct: null, breakPointsSavedPct: null, breakPointsConvertedPct: null, serviceGamesHeldPct: null, sampleSize: 0 };
@@ -116,6 +117,7 @@ test("deriveServicePointEstimate: never fabricates certainty beyond the weaker o
     player2PointLevel: emptyPointLevel,
     reliability: 20,
     note: null,
+    defaulted: false,
     warnings: [],
   };
 

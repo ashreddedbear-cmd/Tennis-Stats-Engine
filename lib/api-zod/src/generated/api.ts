@@ -513,7 +513,8 @@ export const CreatePredictionResponse = zod.object({
   "actualWinnerId": zod.string().nullish(),
   "actualWinnerName": zod.string().nullish(),
   "createdAt": zod.coerce.date(),
-  "resolvedAt": zod.coerce.date().nullish()
+  "resolvedAt": zod.coerce.date().nullish(),
+  "crossEngineAgreement": zod.boolean().nullish().describe('true when the parlay builder independently validates the same pick; false when it finds more evidence for the opponent; null when coverage is insufficient for a builder decision.')
 })
 
 
@@ -787,7 +788,8 @@ export const GetPredictionResponse = zod.object({
   "actualWinnerId": zod.string().nullish(),
   "actualWinnerName": zod.string().nullish(),
   "createdAt": zod.coerce.date(),
-  "resolvedAt": zod.coerce.date().nullish()
+  "resolvedAt": zod.coerce.date().nullish(),
+  "crossEngineAgreement": zod.boolean().nullish().describe('true when the parlay builder independently validates the same pick; false when it finds more evidence for the opponent; null when coverage is insufficient for a builder decision.')
 })
 
 

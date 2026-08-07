@@ -79,13 +79,13 @@ function EdgeBar({ p1Value, p2Value, p1Name, p2Name, label }: { p1Value: number,
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 text-[11px] font-mono font-bold tracking-widest uppercase">
-        <span className="min-w-0 text-primary truncate flex items-center gap-1.5">
+        <span className="min-w-0 overflow-hidden flex items-center gap-1.5 text-primary">
           <span className="w-1.5 h-1.5 rounded-full bg-primary inline-block shrink-0"></span>
-          <span className="min-w-0 truncate">{p1Name}</span><span className="text-primary/70 tabular-nums shrink-0">({p1Value.toFixed(0)})</span>
+          <span className="flex-1 min-w-0 truncate">{p1Name}</span><span className="text-primary/70 tabular-nums shrink-0">({p1Value.toFixed(0)})</span>
         </span>
         <span className="text-muted-foreground/60 whitespace-nowrap">{label}</span>
-        <span className="min-w-0 text-foreground truncate text-right flex items-center justify-end gap-1.5">
-          <span className="text-muted-foreground tabular-nums shrink-0">({p2Value.toFixed(0)})</span><span className="min-w-0 truncate">{p2Name}</span>
+        <span className="min-w-0 overflow-hidden text-foreground text-right flex items-center justify-end gap-1.5">
+          <span className="text-muted-foreground tabular-nums shrink-0">({p2Value.toFixed(0)})</span><span className="flex-1 min-w-0 truncate text-right">{p2Name}</span>
           <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground inline-block shrink-0"></span>
         </span>
       </div>
@@ -99,20 +99,19 @@ function EdgeBar({ p1Value, p2Value, p1Name, p2Name, label }: { p1Value: number,
   )
 }
 
-function MethodologyDetails({ sections }: { sections: Array<{ title: string; text: string }> }) {
-  const [open, setOpen] = useState(false)
+function MethodologyDetails({ sections, open, onOpenChange }: { sections: Array<{ title: string; text: string }>; open: boolean; onOpenChange: (v: boolean) => void }) {
   return (
     <>
-      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setOpen(true)} aria-label="Open methodology">
+      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onOpenChange(true)} aria-label="Open methodology">
         <Info className="w-4 h-4" />
       </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="max-w-xl p-5 sm:p-6">
           <DialogHeader>
             <DialogTitle className="font-display">Methodology</DialogTitle>
             <DialogDescription>Full explanations and validation notes for this prediction.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-5 text-sm leading-relaxed">
+          <div className="space-y-5 text-sm leading-relaxed overflow-y-auto max-h-[70vh]">
             {sections.map((section) => (
               <section key={section.title} id={`methodology-${section.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}>
                 <h4 className="font-mono text-xs font-bold tracking-widest uppercase text-primary mb-1.5">{section.title}</h4>
@@ -123,6 +122,26 @@ function MethodologyDetails({ sections }: { sections: Array<{ title: string; tex
         </DialogContent>
       </Dialog>
     </>
+  )
+}
+
+function CollapsibleWarning({ icon: Icon, iconClass, text, containerClass }: { icon: any; iconClass: string; text: string; containerClass: string }) {
+  const [expanded, setExpanded] = useState(false)
+  const firstStop = text.search(/[.!?]\s/)
+  const short = firstStop > 0 && firstStop < 120 ? text.slice(0, firstStop + 1) : text.slice(0, 90) + (text.length > 90 ? "…" : "")
+  const hasMore = text.length > short.length + 1
+  return (
+    <div className={`flex gap-3 text-sm ${containerClass}`}>
+      <Icon className={`w-5 h-5 shrink-0 mt-0.5 ${iconClass}`} />
+      <div className="flex-1 min-w-0">
+        <span className="leading-snug">{expanded ? text : short}</span>
+        {hasMore && (
+          <button onClick={() => setExpanded(!expanded)} className="ml-1.5 text-[10px] font-mono font-bold text-muted-foreground underline underline-offset-2 whitespace-nowrap">
+            {expanded ? "less" : "more"}
+          </button>
+        )}
+      </div>
+    </div>
   )
 }
 
@@ -166,6 +185,7 @@ export default function PredictionResultPage() {
   const { isSignedIn } = useAuth()
   const [saved, setSaved] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [methodologyOpen, setMethodologyOpen] = useState(false)
 
   const recordOutcome = useRecordPredictionOutcome()
 
@@ -282,7 +302,7 @@ export default function PredictionResultPage() {
             {isCorrect ? <><CheckCircle2 className="w-4 h-4 mr-1.5" /> PREDICTION CORRECT</> : <><XCircle className="w-4 h-4 mr-1.5" /> PREDICTION INCORRECT</>}
           </Badge>
         )}
-        <MethodologyDetails sections={methodologySections} />
+        <MethodologyDetails sections={methodologySections} open={methodologyOpen} onOpenChange={setMethodologyOpen} />
       </div>
 
       {/* COMPACT SUMMARY HERO */}
@@ -496,10 +516,9 @@ export default function PredictionResultPage() {
                     </p>
                   )}
                   {engine.isEliteTier && (
-                    <p className="text-xs text-muted-foreground mt-4 max-w-md leading-relaxed font-mono">
-                      {engine.eliteTierReason ? `${engine.eliteTierReason} ` : ""}
-                      Elite is an early, small-sample tier -- directionally promising but not yet statistically proven
-                      to outperform non-Elite predictions. See the Accuracy Dashboard for current sample counts.
+                    <p className="text-xs text-muted-foreground mt-4 max-w-md leading-relaxed font-mono flex items-center gap-2 flex-wrap">
+                      <span>Not yet statistically validated — early-stage, small sample.</span>
+                      <button onClick={() => setMethodologyOpen(true)} className="text-primary underline underline-offset-2 font-bold whitespace-nowrap text-[11px]">ⓘ Details</button>
                     </p>
                   )}
                 </div>
@@ -632,10 +651,15 @@ export default function PredictionResultPage() {
           Model Votes
         </h3>
 
-        <div className="mb-6 p-5 border border-border/60 bg-secondary/40 rounded-2xl flex gap-4 text-sm shadow-sm backdrop-blur-sm">
-          <Info className="w-5 h-5 shrink-0 mt-0.5 text-primary" />
-          <div className="space-y-2">
-            <div className="text-foreground/80 leading-relaxed">{engine.segmentNote ?? "This prediction predates Phase 6 segment specialists -- no segment data was recorded for it."}</div>
+        <div className="mb-6 p-4 border border-border/60 bg-secondary/40 rounded-2xl flex gap-3 text-sm shadow-sm backdrop-blur-sm">
+          <Info className="w-4 h-4 shrink-0 mt-0.5 text-primary" />
+          <div className="flex-1 min-w-0 space-y-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-foreground/80 text-xs font-mono">
+                {engine.specialistApplied ? "Segment specialist applied to final blend." : "Specialist not applied — threshold not met."}
+              </span>
+              <button onClick={() => setMethodologyOpen(true)} className="text-[10px] font-mono font-bold text-primary underline underline-offset-2 whitespace-nowrap">ⓘ Details</button>
+            </div>
             {engine.segmentLabel && (
               <Badge variant={engine.specialistApplied ? "success" : "outline"} className="font-mono text-[10px] bg-background shadow-sm border-border/60">
                 {engine.segmentLabel} {engine.specialistApplied ? "SPECIALIST APPLIED" : "SPECIALIST NOT AVAILABLE"}
@@ -759,15 +783,15 @@ export default function PredictionResultPage() {
                         <span className="hidden md:block md:w-20 md:text-right font-mono text-xs text-muted-foreground tabular-nums">{vote.reliability.toFixed(0)}</span>
                         <span className="hidden md:block md:w-24 md:text-right text-xs font-mono">{status}</span>
                       </div>
-                      <div className="grid grid-cols-2 md:hidden gap-2 text-[11px] font-mono text-muted-foreground">
-                        <span>Favored: <span className="text-foreground min-w-0 truncate">{favored}</span></span>
-                        <span>Effective Weight: <span className="text-foreground">{effectiveWeightPct.toFixed(1)}%</span></span>
-                        <span>Weighted Contribution: <span className="text-foreground">{weightedContribution.toFixed(1)}</span></span>
-                        <span>Reliability: <span className="text-foreground">{vote.reliability.toFixed(0)}</span></span>
-                        <span>Data Availability: <span className="text-foreground">{availability}</span></span>
-                        <span>Sample Depth: <span className="text-foreground">{sampleDepth}</span></span>
-                        <span>Status: <span className="text-foreground">{status}</span></span>
-                        <span>Explanation: <span className="text-foreground">{status === "Excluded" ? "Near-zero effect in final ensemble." : "Contributed to final probability."}</span></span>
+                      <div className="md:hidden grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[11px] font-mono text-muted-foreground">
+                        <span>FAVORED</span><span className="text-foreground truncate">{favored}</span>
+                        <span>EFF. WEIGHT</span><span className="text-foreground">{effectiveWeightPct.toFixed(1)}%</span>
+                        <span>CONTRIBUTION</span><span className="text-foreground">{weightedContribution.toFixed(1)}</span>
+                        <span>RELIABILITY</span><span className="text-foreground">{vote.reliability.toFixed(0)}</span>
+                        <span>AVAILABILITY</span><span className="text-foreground">{availability}</span>
+                        <span>SAMPLE</span><span className="text-foreground">{sampleDepth}</span>
+                        <span>STATUS</span><span className="text-foreground">{status}</span>
+                        {status !== "Active" && <><span>NOTE</span><span className="text-foreground">{status === "Excluded" ? "Near-zero effect." : "Limited influence."}</span></>}
                       </div>
                     </div>
                   )
@@ -801,13 +825,13 @@ export default function PredictionResultPage() {
               Monte Carlo Simulation
             </h3>
 
-            <div className="mb-6 p-5 border border-border/60 bg-secondary/40 rounded-2xl flex gap-4 text-sm shadow-sm backdrop-blur-sm">
-              <Info className="w-5 h-5 shrink-0 mt-0.5 text-primary" />
-              <div className="space-y-2">
-                <div className="text-foreground/80 leading-relaxed">{engine.simulatorNote}</div>
+            <div className="mb-6 p-4 border border-border/60 bg-secondary/40 rounded-2xl flex gap-3 text-sm shadow-sm backdrop-blur-sm">
+              <Info className="w-4 h-4 shrink-0 mt-0.5 text-primary" />
+              <div className="flex-1 min-w-0 flex items-center gap-3 flex-wrap">
                 <Badge variant={engine.simulatorApplied ? "success" : "outline"} className="font-mono text-[10px] bg-background shadow-sm border-border/60">
                   {engine.simulatorApplied ? "VOTING IN FINAL PROBABILITY" : "DISPLAY-ONLY, NOT YET VOTING"}
                 </Badge>
+                <button onClick={() => setMethodologyOpen(true)} className="text-[10px] font-mono font-bold text-primary underline underline-offset-2 whitespace-nowrap">ⓘ Details</button>
               </div>
             </div>
 
@@ -869,18 +893,19 @@ export default function PredictionResultPage() {
               <ModuleCard title="SET SCORE DISTRIBUTION" reliability={asPercentage(engine.simulation.inputReliability)} icon={Dices} reliabilityLabel="COMP">
                 <div className="space-y-3 mt-2">
                   {engine.simulation.setScoreDistribution.slice(0, 8).map((entry, i) => {
-                    const total = entry.probability || 1;
                     const p1Pct = entry.favors === "player1" ? entry.probability : 100 - entry.probability;
                     const p2Pct = entry.favors === "player2" ? entry.probability : 100 - entry.probability;
                     return (
-                      <div key={i} className="flex items-center gap-2 text-[11px] font-mono font-bold uppercase">
-                        <span className="w-12 text-right text-primary/70 tabular-nums shrink-0">{p1Pct.toFixed(0)}%</span>
-                        <div className="flex h-5 bg-border rounded-sm overflow-hidden flex-1 min-w-0">
-                          <div className="bg-primary shadow-sm" style={{ width: `${p1Pct}%` }} />
-                          <div className="bg-muted-foreground/50" style={{ width: `${p2Pct}%` }} />
+                      <div key={i} className="space-y-0.5">
+                        <div className="flex items-center justify-between text-[10px] font-mono font-bold uppercase tabular-nums">
+                          <span className="text-primary/80">{p1Pct.toFixed(0)}%</span>
+                          <span className="text-muted-foreground/60">{entry.score}</span>
+                          <span className="text-muted-foreground/70">{p2Pct.toFixed(0)}%</span>
                         </div>
-                        <span className="w-20 text-center text-muted-foreground/60 tabular-nums shrink-0">{entry.score}</span>
-                        <span className="w-12 text-muted-foreground/70 tabular-nums shrink-0">{p2Pct.toFixed(0)}%</span>
+                        <div className="flex h-3 bg-border rounded-full overflow-hidden">
+                          <div className="bg-primary shadow-sm transition-all" style={{ width: `${p1Pct}%` }} />
+                          <div className="bg-muted-foreground/40 transition-all" style={{ width: `${p2Pct}%` }} />
+                        </div>
                       </div>
                     );
                   })}
@@ -905,35 +930,29 @@ export default function PredictionResultPage() {
         </h3>
 
         {engine.availabilityNote && (
-          <div className="mb-4 p-5 border-2 border-warning/30 bg-warning/10 text-warning-foreground rounded-2xl flex gap-4 text-sm shadow-sm">
-            <AlertTriangle className="w-6 h-6 shrink-0 text-warning" />
-            <div className="leading-relaxed">{engine.availabilityNote}</div>
+          <div className="mb-4 p-4 border-2 border-warning/30 bg-warning/10 text-warning-foreground rounded-2xl shadow-sm">
+            <CollapsibleWarning icon={AlertTriangle} iconClass="text-warning" text={engine.availabilityNote} containerClass="text-warning-foreground" />
           </div>
         )}
 
         {engine.conditionsNote && (
-          <div className="mb-4 p-5 border border-border/60 bg-secondary/40 rounded-2xl flex gap-4 text-sm text-foreground/80 shadow-sm backdrop-blur-sm">
-            <Activity className="w-6 h-6 shrink-0 text-primary" />
-            <div className="leading-relaxed">{engine.conditionsNote}</div>
+          <div className="mb-4 p-4 border border-border/60 bg-secondary/40 rounded-2xl shadow-sm backdrop-blur-sm">
+            <CollapsibleWarning icon={Activity} iconClass="text-primary" text={engine.conditionsNote} containerClass="text-foreground/80" />
           </div>
         )}
 
         {!!engine.warnings?.length && (
-          <div className="mb-6 p-5 border-2 border-warning/30 bg-warning/5 rounded-2xl space-y-3 shadow-sm">
+          <div className="mb-6 p-4 border-2 border-warning/30 bg-warning/5 rounded-2xl space-y-3 shadow-sm">
             {engine.warnings.map((w, i) => (
-              <div key={i} className="flex gap-3 text-sm text-foreground/80">
-                <AlertTriangle className="w-5 h-5 text-warning shrink-0" /> <span className="leading-snug">{w}</span>
-              </div>
+              <CollapsibleWarning key={i} icon={AlertTriangle} iconClass="text-warning" text={w} containerClass="text-foreground/80" />
             ))}
           </div>
         )}
 
         {!!engine.disclosures?.length && (
-          <div className="mb-8 p-5 border border-border/60 bg-secondary/40 rounded-2xl space-y-3 shadow-sm backdrop-blur-sm">
+          <div className="mb-8 p-4 border border-border/60 bg-secondary/40 rounded-2xl space-y-3 shadow-sm backdrop-blur-sm">
             {engine.disclosures.map((d, i) => (
-              <div key={i} className="flex gap-3 text-sm text-foreground/80">
-                <Info className="w-5 h-5 text-primary shrink-0" /> <span className="leading-snug">{d}</span>
-              </div>
+              <CollapsibleWarning key={i} icon={Info} iconClass="text-primary" text={d} containerClass="text-foreground/80" />
             ))}
           </div>
         )}
@@ -1037,6 +1056,7 @@ export default function PredictionResultPage() {
             )}
           </ModuleCard>
 
+          <ModuleCard title="FATIGUE INDEX" reliability={asPercentage(engine.fatigue.reliability ?? 0)} icon={Activity}>
             <EdgeBar 
               p1Name={prediction.player1Name} 
               p2Name={prediction.player2Name} 

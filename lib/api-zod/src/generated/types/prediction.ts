@@ -30,6 +30,13 @@ export interface Prediction {
   calibratedProbability: number;
   /** The predicted winner's own win probability (always >= 50) -- mirrored from calibratedProbability when player 2 is the pick, so this can never disagree with the player named as predictedWinnerName. Use this for display; calibratedProbability stays player-1-relative for calibration/evaluation purposes. */
   predictedWinnerProbability: number;
+  /**
+   * Raw ensemble probability for player 1, 0-100, before calibration, specialist-blending, and
+   * simulator-blending. Always within 3% of 50 when tieBreakerApplied is true. Null for legacy
+   * predictions made before the decisionTrace field existed.
+   * @nullable
+   */
+  rawEnsembleProbability?: number | null;
   dataQuality: number;
   dataQualityLabel?: PredictionDataQualityLabel;
   upsetRisk: UpsetRisk;
@@ -43,4 +50,10 @@ export interface Prediction {
   createdAt: Date;
   /** @nullable */
   resolvedAt?: Date | null;
+  /**
+   * true when the parlay builder independently validates the same pick; false when it finds more
+   * evidence for the opponent; null when coverage is insufficient for a builder decision.
+   * @nullable
+   */
+  crossEngineAgreement?: boolean | null;
 }

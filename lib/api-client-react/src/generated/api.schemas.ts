@@ -824,6 +824,12 @@ export interface Prediction {
   createdAt: string;
   /** @nullable */
   resolvedAt?: string | null;
+  /**
+   * true when the parlay builder independently validates the same pick; false when it finds more
+   * evidence for the opponent; null when coverage is insufficient for a builder decision.
+   * @nullable
+   */
+  crossEngineAgreement?: boolean | null;
 }
 
 export interface PredictionSummary {
