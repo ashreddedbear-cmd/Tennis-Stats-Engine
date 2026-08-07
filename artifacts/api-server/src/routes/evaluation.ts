@@ -164,7 +164,28 @@ router.post("/evaluation/walk-forward/run", async (req, res): Promise<void> => {
     return;
   }
 
-  const result = await startWalkForwardJob(parsed.data);
+  // Task #127: optional date-range backfill. Both must be YYYY-MM-DD strings if provided.
+  const dateRangeRaw = { startDate: rawBody["startDate"], endDate: rawBody["endDate"] };
+  const hasStart = dateRangeRaw.startDate !== undefined;
+  const hasEnd = dateRangeRaw.endDate !== undefined;
+  if (hasStart !== hasEnd) {
+    res.status(400).json({ error: "startDate and endDate must both be provided or both omitted." });
+    return;
+  }
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  if (hasStart && (typeof dateRangeRaw.startDate !== "string" || !dateRe.test(dateRangeRaw.startDate))) {
+    res.status(400).json({ error: "startDate must be a YYYY-MM-DD string." });
+    return;
+  }
+  if (hasEnd && (typeof dateRangeRaw.endDate !== "string" || !dateRe.test(dateRangeRaw.endDate))) {
+    res.status(400).json({ error: "endDate must be a YYYY-MM-DD string." });
+    return;
+  }
+
+  const result = await startWalkForwardJob({
+    ...parsed.data,
+    ...(hasStart ? { startDate: dateRangeRaw.startDate as string, endDate: dateRangeRaw.endDate as string } : {}),
+  });
   res.json(StartWalkForwardResponse.parse(result));
 });
 

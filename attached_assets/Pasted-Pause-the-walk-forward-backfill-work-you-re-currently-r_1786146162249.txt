@@ -1,0 +1,26 @@
+Pause the walk-forward backfill work you're currently running/building. Do not run or continue running walkForward.ts against the 06/01/2024–present range yet, and do not commit or deploy anything related to it until I tell you to resume.
+
+Before that backfill runs, I need a prerequisite check completed first — call it Ticket 0. Here's why: the backfill's output is only useful if we can trust which rows count as "test" data, and there's unresolved conflicting evidence about that.
+
+## Ticket 0 — Segment provenance check (read-only, do this now)
+
+Do NOT modify, consolidate, or alter any columns or rows. This is read-only verification only.
+
+1. Confirm whether both `segment` and `data_segment` columns currently exist on `evaluation_predictions`.
+2. Report their exact data types.
+3. Report null counts and value distributions for each column.
+4. Check whether recent rows populate both fields.
+5. Check whether the two fields ever disagree on the same row — if so, show examples and how many rows are affected.
+6. Identify which field the current evaluation/audit code actually treats as canonical (i.e., which one the accuracy-reporting logic reads from).
+7. Confirm whether `data_segment` also exists and populates on the live predictions ledger table (separate from `evaluation_predictions`).
+
+Report back with one of these three labels:
+- **VERIFIED CONSISTENT** — both fields exist, agree, and it's clear which is canonical.
+- **CONFLICT FOUND** — the fields disagree, or it's unclear which one the code actually trusts. Include the specific disagreement evidence.
+- **NOT VERIFIED** — something couldn't be checked without making a change; explain exactly what's missing.
+
+Do not make any code changes based on this check. Just report findings.
+
+## After Ticket 0 is reported
+
+Stop and wait for me to review the result before resuming the walk-forward backfill. If Ticket 0 comes back as CONFLICT FOUND, the backfill should not proceed until that's resolved, since it would be generating new rows on top of an inconsistent test-set definition. If it comes back VERIFIED CONSISTENT, let me know and I'll give the go-ahead to resume the backfill from where it left off.

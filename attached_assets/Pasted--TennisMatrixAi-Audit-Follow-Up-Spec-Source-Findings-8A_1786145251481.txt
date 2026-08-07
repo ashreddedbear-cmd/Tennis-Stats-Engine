@@ -1,0 +1,98 @@
+# TennisMatrixAi — Audit Follow-Up Spec
+
+**Source:** Findings 8A–8J from prior live-verification audit.
+**Purpose:** Turn audit findings into ordered, actionable engineering tasks.
+**Constraint carried over from the audit:** No fabricated/synthetic predictions. No backfilling or altering old rows. Read-only checks before any code change, where noted.
+**Note:** The walk-forward historical backfill (06/01/2024–present) is tracked as its own separate ticket and is not included here. Tickets below that depend on its output are noted.
+
+---
+
+## Ticket 1 — Disable / roll back specialist calibration
+
+**Priority:** P0 — clear negative-impact finding, low-risk fix
+**Type:** Config change + read-only verification
+
+**Problem (8F):** `specialist calibration applied=true` → 60.9% accuracy vs. `applied=false` → 64.0%. Worst on clay (−7.0pp).
+
+**Task:**
+1. **Read-only step first:** run the read-only rescore of the current test corpus with specialist calibration disabled (per action item #1) to confirm the expected +3.1pp overall / +7.0pp clay gain.
+2. If confirmed, disable specialist calibration in the live scoring path.
+3. Re-verify post-disable accuracy on a fresh (non-overlapping) live sample once available.
+
+**Acceptance criteria:**
+- Read-only rescore result documented before any change is made.
+- Specialist calibration off in production.
+- Post-change accuracy checked against pre-change baseline once new graded data exists.
+
+---
+
+## Ticket 2 — Persist `formEloConflict` in feature_snapshot
+
+**Priority:** P1 — required before the Recent Form gate (8E) can ever be verified
+**Type:** Logging / schema change
+
+**Problem:** The Recent Form weight gate is deployed in code, but the conflict flag it depends on is not persisted anywhere, so its live effect is permanently unmeasurable without this fix.
+
+**Task:**
+1. Add `formEloConflict` (boolean or equivalent) to `feature_snapshot` at prediction-write time.
+2. Confirm it's populated on new rows only — do not backfill historical rows.
+3. Once the walk-forward backfill (separate ticket) or new live rows accumulate, compare accuracy on `formEloConflict = true` vs. `false` cohorts.
+
+**Acceptance criteria:**
+- Field appears and populates correctly on new rows post-deploy.
+- No changes to historical rows.
+
+---
+
+## Ticket 3 — Stop using DQ tier as a hard confidence gate
+
+**Priority:** P1 — currently actively miscalibrating confidence
+**Type:** Logic change
+
+**Problem (8C):** Limited DQ (64.6%) outperforms Excellent DQ (62.5%) on held-out test data. Only Poor (<25) is reliably worse. Current hard-gating logic likely trusts Excellent over Limited, which is backwards.
+
+**Task:**
+1. Change DQ tier from a hard gate to an informational/logged field only, pending redesign.
+2. If a gate is still desired short-term, gate only on Poor (<25), not on the Excellent/Limited boundary.
+
+**Acceptance criteria:**
+- No prediction confidence or no-play logic depends on the Excellent/Limited distinction until DQ scoring is redesigned.
+
+---
+
+## Ticket 4 — Investigate model-disagreement cohort as a soft no-play signal
+
+**Priority:** P2 — investigate only, do not implement yet
+**Type:** Read-only analysis
+
+**Problem:** 48.6% of picks (n=1,491) involve internal model disagreement — flagged as a candidate for soft no-play, but not yet tested against actual accuracy.
+
+**Task:**
+1. Pull accuracy specifically for the disagreement cohort vs. the agreement cohort, using currently available graded data (and the larger sample from the walk-forward backfill once available).
+2. Report the accuracy delta with raw counts and confidence intervals.
+3. Only proceed to a no-play rule if the disagreement cohort is meaningfully and consistently worse.
+
+**Acceptance criteria:**
+- A documented accuracy comparison exists.
+- No code change made based on this ticket alone — decision deferred to a follow-up ticket if the data supports it.
+
+---
+
+## Deprioritized / not in this round
+
+- **Frozen vs. dynamic weights comparison (8D):** blocked on zero optimizer runs; do not force an optimizer run just to unblock this.
+- **Surface Elo ablation (8J):** blocked — ablation file doesn't exist; not worth building solely for this audit.
+- **Tour discount / surface-sample discount ablation (8H):** directionally reasonable, not flagged as harmful, low urgency.
+- **Signal overlap / Elo double-counting across Surface Elo, Serve & Return, Recent Form (8F):** noted for future feature-weighting redesign, not an immediate fix.
+- **Tie-break cascade (8I):** removed and unrecoverable at the per-step level; revisit only if tie-break accuracy (8A) remains weak after the walk-forward backfill and Tickets 1–2 land, at which point consider reintroducing lightweight cascade logging (separate ticket, not in this round).
+
+---
+
+## Suggested execution order
+
+1. Ticket 1 (independent, safe, high-confidence win)
+2. Ticket 3 (independent, safe, prevents ongoing harm)
+3. Ticket 2 (enables future measurement)
+4. Ticket 4 (analysis, best done once the walk-forward backfill data lands)
+
+*Run in parallel with / after the separate walk-forward backfill ticket (06/01/2024–present), which unblocks verification of 8A (tie-break) and 8E (Recent Form gate).*

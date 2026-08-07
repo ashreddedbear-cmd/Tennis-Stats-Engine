@@ -29,6 +29,10 @@ export function startWalkForwardJob(opts: {
   evaluationOnly?: boolean;
   /** Scope the run to specific historical_matches.id values (integer PKs). */
   matchIds?: number[];
+  /** Task #127: optional inclusive start date (YYYY-MM-DD) for the date-range backfill mode. */
+  startDate?: string;
+  /** Task #127: optional inclusive end date (YYYY-MM-DD) for the date-range backfill mode. */
+  endDate?: string;
 }): { started: boolean; reason?: string } {
   if (currentJob.state === "running") {
     return { started: false, reason: "A walk-forward run is already in progress." };
@@ -49,7 +53,7 @@ export function startWalkForwardJob(opts: {
 async function runJob(
   startedAt: string,
   evaluationOnly: boolean,
-  opts: { foldCount?: number; evaluationOnly?: boolean; matchIds?: number[] },
+  opts: { foldCount?: number; evaluationOnly?: boolean; matchIds?: number[]; startDate?: string; endDate?: string },
 ): Promise<void> {
   try {
     const result = await runWalkForwardEvaluation(opts);

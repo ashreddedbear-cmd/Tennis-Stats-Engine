@@ -36,6 +36,20 @@ export interface WalkForwardOptions {
    * this in production (omit the field entirely, or pass undefined).
    */
   matchIds?: number[];
+  /**
+   * Task #127: optional inclusive lower bound on scheduled_start_at (YYYY-MM-DD or ISO-8601).
+   * When provided together with endDate, only historical matches whose scheduled_start_at falls
+   * within [startDate, endDate] are eligible for scoring. Matches outside the window are still
+   * loaded into the scoring context (Elo index, match history) so predictions remain
+   * point-in-time accurate — only scoring eligibility is restricted.
+   * Omit to score the full corpus (existing default behaviour).
+   */
+  startDate?: string;
+  /**
+   * Task #127: optional inclusive upper bound on scheduled_start_at (YYYY-MM-DD or ISO-8601).
+   * Must be paired with startDate. See startDate for full semantics.
+   */
+  endDate?: string;
 }
 
 export interface WalkForwardSummary {
@@ -124,6 +138,11 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
   const evaluationOnly = options.evaluationOnly ?? false;
   const optimizerRunId = options.optimizerRunId ?? null;
   const scopedMatchIds = options.matchIds && options.matchIds.length > 0 ? options.matchIds : null;
+  // Task #127: optional date-range filter. Both must be provided together or neither.
+  const startDate = options.startDate ? new Date(options.startDate) : null;
+  const endDate = options.endDate ? new Date(options.endDate + "T23:59:59.999Z") : null;
+  if ((startDate !== null) !== (endDate !== null)) throw new Error("startDate and endDate must both be provided or both omitted");
+  if (startDate !== null && endDate !== null && startDate > endDate) throw new Error("startDate must be <= endDate");
   if (foldCount < 1) throw new Error("foldCount must be >= 1");
   if (warmupFraction <= 0 || warmupFraction >= 1) throw new Error("warmupFraction must be between 0 and 1 (exclusive)");
 
@@ -160,8 +179,16 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
   );
 
   const eligible = allMatches.filter(
-    // cancelled matches never reach scoring; already-scored matches are preserved across runs
-    (m) => !m.cancelled && !alreadyScoredIds.has(m.id),
+    // cancelled matches never reach scoring; already-scored matches are preserved across runs.
+    // Task #127: when startDate/endDate are provided, further restrict to matches whose
+    // scheduled_start_at falls within [startDate, endDate]. allMatches is intentionally kept as
+    // the full corpus above so the Elo/history context is still built from all available data
+    // (point-in-time accuracy for the scored subset requires the full historical backdrop).
+    (m) =>
+      !m.cancelled &&
+      !alreadyScoredIds.has(m.id) &&
+      (startDate === null || m.scheduledStartAt >= startDate) &&
+      (endDate === null || m.scheduledStartAt <= endDate),
   );
   if (eligible.length < 20) {
     logger.warn({ count: eligible.length, alreadyScored: alreadyScoredIds.size }, "Not enough new historical matches to run a meaningful walk-forward evaluation");
