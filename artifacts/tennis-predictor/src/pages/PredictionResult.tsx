@@ -11,17 +11,17 @@ import { asPercentage, asFraction, formatPercentage, fractionToPercentage, type 
 import { deriveMonteCarloHeadline } from "@/lib/monteCarloHeadline"
 import { buildPredictionCopyText } from "@/lib/predictionCopyText"
 import { getRecommendationLabel } from "@/lib/recommendationLabels"
-import { Activity, ShieldAlert, CheckCircle2, XCircle, TrendingUp, AlertTriangle, ChevronRight, Dna, ActivitySquare, Database, Vote, Info, Dices, Crown, Scale, Zap, GitBranch, ChevronDown, Copy, Bookmark, BookmarkCheck, FolderOpen, Swords } from "lucide-react"
+import { Activity, ShieldAlert, CheckCircle2, XCircle, TrendingUp, AlertTriangle, ChevronRight, Dna, ActivitySquare, Database, Vote, Info, Dices, Crown, Scale, Zap, GitBranch, ChevronDown, Copy, Bookmark, BookmarkCheck, FolderOpen } from "lucide-react"
 import { useState } from "react"
 import { UPSET_RISK_LABEL, UPSET_RISK_SHORT, UPSET_RISK_TEXT_CLASS, upsetRiskBadgeClasses } from "@/lib/upsetRiskColors"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@clerk/react"
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 
 const BASE = import.meta.env.BASE_URL.replace(/\/$/, "")
 const api = (path: string) => `${BASE}${path}`
 
 const UPSET_RISK_SHORT_LABEL = UPSET_RISK_SHORT
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from "recharts"
 
 const AGREEMENT_STYLES: Record<string, string> = {
   Strong: "text-success",
@@ -78,16 +78,15 @@ function EdgeBar({ p1Value, p2Value, p1Name, p2Name, label }: { p1Value: number,
 
   return (
     <div className="space-y-2">
-      <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 text-[11px] font-mono font-bold tracking-widest uppercase">
+      <div className="flex justify-between text-[11px] font-mono font-bold tracking-widest uppercase">
         <span className="text-primary truncate max-w-[40%] flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-primary inline-block"></span>
-          <span className="min-w-0 truncate">{p1Name}</span><span className="text-primary/70 tabular-nums shrink-0">({p1Value.toFixed(0)})</span>
+          {p1Name} <span className="text-primary/70 tabular-nums ml-1">({p1Value.toFixed(0)})</span>
         </span>
-        <span className="text-muted-foreground/60 whitespace-nowrap">{label}</span>
-        <span className="min-w-0 max-w-full text-foreground truncate text-right flex items-center justify-end gap-1.5">
-          <span className="text-muted-foreground tabular-nums shrink-0">({p2Value.toFixed(0)})</span><span className="min-w-0 truncate">{p2Name}</span>
+        <span className="text-muted-foreground/60">{label}</span>
+        <span className="text-foreground truncate max-w-[40%] text-right flex items-center justify-end gap-1.5">
+          <span className="text-muted-foreground tabular-nums mr-1">({p2Value.toFixed(0)})</span> {p2Name}
           <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground inline-block"></span>
-
         </span>
       </div>
       <div className="h-4 w-full bg-background border border-border shadow-inner rounded-full overflow-hidden flex">
@@ -97,33 +96,6 @@ function EdgeBar({ p1Value, p2Value, p1Name, p2Name, label }: { p1Value: number,
         <div className="h-full bg-muted-foreground/20 transition-all duration-1000 ease-out" style={{ width: `${100 - p1Pct}%` }} />
       </div>
     </div>
-  )
-}
-
-function MethodologyDetails({ sections }: { sections: Array<{ title: string; text: string }> }) {
-  const [open, setOpen] = useState(false)
-  return (
-    <>
-      <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setOpen(true)} aria-label="Open methodology">
-        <Info className="w-4 h-4" />
-      </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-xl p-5 sm:p-6">
-          <DialogHeader>
-            <DialogTitle className="font-display">Methodology</DialogTitle>
-            <DialogDescription>Full explanations and validation notes for this prediction.</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-5 text-sm leading-relaxed">
-            {sections.map((section) => (
-              <section key={section.title} id={`methodology-${section.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}>
-                <h4 className="font-mono text-xs font-bold tracking-widest uppercase text-primary mb-1.5">{section.title}</h4>
-                <p className="text-muted-foreground">{section.text}</p>
-              </section>
-            ))}
-          </div>
-        </DialogContent>
-      </Dialog>
-    </>
   )
 }
 
@@ -184,14 +156,6 @@ export default function PredictionResultPage() {
   }
 
   const engine = prediction.engine;
-  const methodologySections = [
-    { title: "Elite Tier", text: engine.eliteTierReason ?? "Elite tier requires every strict model, data-quality, conflict, and risk gate to pass." },
-    { title: "Monte Carlo Simulation", text: [engine.simulatorNote, engine.simulation?.note].filter(Boolean).join(" ") || "The simulator is computed for transparency and only contributes after validation earns it a vote." },
-    { title: "Serve & Return", text: engine.serveReturn.note ?? "Serve and return ratings use available provider statistics or real set/game margins." },
-    { title: "Model Votes", text: [engine.segmentNote, engine.modelConflictNote].filter(Boolean).join(" ") || "The segment specialist is applied only when its validation sample and calibration mapping meet the required threshold." },
-    { title: "Cross-Engine Agreement", text: prediction.crossEngineAgreement === true ? `The parlay builder independently validated ${prediction.predictedWinnerName} as the correct side. Both the prediction engine and builder's factor analysis (surface Elo, recent form, serve/return, head-to-head, fatigue, availability) are aligned. This does not change the underlying probability.` : prediction.crossEngineAgreement === false ? `The parlay builder found more evidence supporting the opponent when the engine's pick (${prediction.predictedWinnerName}) was validated against the factor analysis. The prediction engine's probability and grade are unchanged — this is a separate signal flag only. Consider reducing position size or treating this as higher-risk.` : "The parlay builder did not have enough data to validate this pick. This is not a disagreement — it means data coverage was insufficient for a builder decision. No adjustment to the probability or grade is made." },
-    { title: "Full Engine Breakdown", text: [...(engine.availabilityNote ? [engine.availabilityNote] : []), ...(engine.conditionsNote ? [engine.conditionsNote] : []), ...(engine.warnings ?? []), ...(engine.disclosures ?? [])].join(" ") || "No additional warnings or disclosures were recorded." },
-  ];
 
   // When tieBreakerApplied=true, the banner must display the RAW ensemble probability that
   // triggered the disclosure — not calibratedProbability, which can land at extreme values
@@ -282,7 +246,6 @@ export default function PredictionResultPage() {
             {isCorrect ? <><CheckCircle2 className="w-4 h-4 mr-1.5" /> PREDICTION CORRECT</> : <><XCircle className="w-4 h-4 mr-1.5" /> PREDICTION INCORRECT</>}
           </Badge>
         )}
-        <MethodologyDetails sections={methodologySections} />
       </div>
 
       {/* COMPACT SUMMARY HERO */}
@@ -335,28 +298,7 @@ export default function PredictionResultPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-12 items-center">
             
             <div className="space-y-8">
-              {prediction.recommendation === 'DATA_INCOMPLETE' && !forceSignal ? (
-                <div>
-                  <div className="flex items-center gap-2 mb-3">
-                    <AlertTriangle className="w-5 h-5 text-warning" />
-                    <p className="text-xs font-mono font-bold text-warning tracking-widest uppercase">Data Incomplete</p>
-                  </div>
-                  <div className="space-y-2">
-                    <h2 className="text-3xl md:text-4xl font-display font-bold tracking-tight text-foreground">No reliable edge recorded</h2>
-                  </div>
-                  <div className="mt-6 flex flex-wrap gap-3">
-                    <Badge variant="outline" className="text-sm px-3 py-1.5 font-bold shadow-md gap-1.5 border-warning/40 text-warning">
-                      <AlertTriangle className="w-3.5 h-3.5" /> DATA INCOMPLETE
-                    </Badge>
-                    <Badge variant="outline" className="text-sm px-3 py-1.5 bg-background shadow-sm">
-                      RAW SPLIT: {rawEnsemble.toFixed(1)} / {(100 - rawEnsemble).toFixed(1)}
-                    </Badge>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-4 max-w-md leading-relaxed font-mono">
-                    One or more contributing inputs were unavailable and defaulted to neutral. This is not classified as a genuine close-call model read; the prediction is eligible for automatic re-computation when data becomes available.
-                  </p>
-                </div>
-              ) : engine.tieBreakerApplied && !forceSignal ? (
+              {engine.tieBreakerApplied && !forceSignal ? (
                 /* ── TOO CLOSE TO CALL hero ─────────────────────────────────── */
                 <div>
                   <div className="flex items-center gap-2 mb-3">
@@ -421,7 +363,6 @@ export default function PredictionResultPage() {
                         prediction.recommendation === 'MODERATE_CONFIDENCE' ? 'secondary' :
                         prediction.recommendation === 'LOW_CONFIDENCE'     ? 'warning' :
                         prediction.recommendation === 'INSUFFICIENT_EDGE'  ? 'outline' :
-                        prediction.recommendation === 'DATA_INCOMPLETE'    ? 'warning' :
                         // Legacy tiers (stored in older prediction rows)
                         prediction.recommendation === 'STRONG_RECOMMENDATION' ? 'success' :
                         prediction.recommendation === 'MODERATE_LEAN'     ? 'secondary' :
@@ -433,8 +374,6 @@ export default function PredictionResultPage() {
                       className={`text-sm px-3 py-1.5 font-bold shadow-md${
                         prediction.recommendation === 'INSUFFICIENT_EDGE'
                           ? ' text-muted-foreground border-muted-foreground/30'
-                          : prediction.recommendation === 'DATA_INCOMPLETE'
-                          ? ' text-warning border-warning/40'
                           : ''
                       }`}
                       title={
@@ -656,10 +595,10 @@ export default function PredictionResultPage() {
           Model Votes
         </h3>
 
-        <div className="mb-6 p-4 border border-border/60 bg-secondary/40 rounded-2xl flex gap-3 text-sm shadow-sm backdrop-blur-sm">
+        <div className="mb-6 p-5 border border-border/60 bg-secondary/40 rounded-2xl flex gap-4 text-sm shadow-sm backdrop-blur-sm">
           <Info className="w-5 h-5 shrink-0 mt-0.5 text-primary" />
-          <div className="space-y-1 min-w-0">
-            <div className="text-foreground/80 leading-relaxed">{engine.specialistApplied ? "Validated specialist contributes to this probability." : "Specialist not applied — general model used."} <a className="text-primary whitespace-nowrap" href="#methodology-model-votes">ⓘ Details</a></div>
+          <div className="space-y-2">
+            <div className="text-foreground/80 leading-relaxed">{engine.segmentNote ?? "This prediction predates Phase 6 segment specialists -- no segment data was recorded for it."}</div>
             {engine.segmentLabel && (
               <Badge variant={engine.specialistApplied ? "success" : "outline"} className="font-mono text-[10px] bg-background shadow-sm border-border/60">
                 {engine.segmentLabel} {engine.specialistApplied ? "SPECIALIST APPLIED" : "SPECIALIST NOT AVAILABLE"}
@@ -673,7 +612,7 @@ export default function PredictionResultPage() {
             <ShieldAlert className="w-6 h-6 shrink-0 text-warning" />
             <div className="space-y-1.5">
               <div className="font-bold font-mono text-[11px] text-warning tracking-widest uppercase">MODEL CONFLICT</div>
-              <div className="text-foreground/80 leading-relaxed">Models disagree on direction. <a className="text-primary whitespace-nowrap" href="#methodology-model-votes">ⓘ Details</a></div>
+              <div className="text-foreground/80 leading-relaxed">{engine.modelConflictNote}</div>
             </div>
           </div>
         )}
@@ -683,7 +622,7 @@ export default function PredictionResultPage() {
             <Scale className="w-6 h-6 shrink-0 text-primary" />
             <div className="space-y-1.5">
               <div className="font-bold font-mono text-[11px] tracking-widest uppercase">GENUINELY CLOSE MATCH — SIGNALS WITHIN 3% OF EVEN</div>
-              <div className="text-foreground/80 leading-relaxed">Core signals are within 3% of even. <a className="text-primary whitespace-nowrap" href="#methodology-model-votes">ⓘ Details</a></div>
+              <div className="text-foreground/80 leading-relaxed">{engine.tieBreakerNote}</div>
             </div>
           </div>
         )}
@@ -720,7 +659,13 @@ export default function PredictionResultPage() {
                       : "UNKNOWN — INSUFFICIENT DATA"}
                   </span>
                 </div>
-                <p className="text-xs text-muted-foreground leading-relaxed">Independent validation is recorded separately from the prediction. <a className="text-primary whitespace-nowrap" href="#methodology-cross-engine-agreement">ⓘ Details</a></p>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  {prediction.crossEngineAgreement === true
+                    ? `The parlay builder independently validated ${prediction.predictedWinnerName} as the correct side. Both the prediction engine and builder's factor analysis (surface Elo, recent form, serve/return, head-to-head, fatigue, availability) are aligned. This does not change the underlying probability.`
+                    : prediction.crossEngineAgreement === false
+                    ? `The parlay builder found more evidence supporting the opponent when the engine's pick (${prediction.predictedWinnerName}) was validated against the factor analysis. The prediction engine's probability and grade are unchanged — this is a separate signal flag only. Consider reducing position size or treating this as higher-risk.`
+                    : "The parlay builder did not have enough data to validate this pick. This is not a disagreement — it means data coverage was insufficient for a builder decision. No adjustment to the probability or grade is made."}
+                </p>
               </div>
             )}
 
@@ -777,7 +722,7 @@ export default function PredictionResultPage() {
                         <span className="hidden md:block md:w-20 md:text-right font-mono text-xs text-muted-foreground tabular-nums">{vote.reliability.toFixed(0)}</span>
                         <span className="hidden md:block md:w-24 md:text-right text-xs font-mono">{status}</span>
                       </div>
-                      <div className="grid grid-cols-2 md:hidden gap-2 text-[11px] font-mono text-muted-foreground [&>span]:min-w-0 [&>span]:truncate">
+                      <div className="grid grid-cols-2 md:hidden gap-2 text-[11px] font-mono text-muted-foreground">
                         <span>Favored: <span className="text-foreground">{favored}</span></span>
                         <span>Effective Weight: <span className="text-foreground">{effectiveWeightPct.toFixed(1)}%</span></span>
                         <span>Weighted Contribution: <span className="text-foreground">{weightedContribution.toFixed(1)}</span></span>
@@ -785,7 +730,7 @@ export default function PredictionResultPage() {
                         <span>Data Availability: <span className="text-foreground">{availability}</span></span>
                         <span>Sample Depth: <span className="text-foreground">{sampleDepth}</span></span>
                         <span>Status: <span className="text-foreground">{status}</span></span>
-                        {status !== "Active" && <span>Explanation: <span className="text-foreground">Near-zero effect in final ensemble. <a className="text-primary" href="#methodology-model-votes">ⓘ Details</a></span></span>}
+                        <span>Explanation: <span className="text-foreground">{status === "Excluded" ? "Near-zero effect in final ensemble." : "Contributed to final probability."}</span></span>
                       </div>
                     </div>
                   )
@@ -822,7 +767,7 @@ export default function PredictionResultPage() {
             <div className="mb-6 p-5 border border-border/60 bg-secondary/40 rounded-2xl flex gap-4 text-sm shadow-sm backdrop-blur-sm">
               <Info className="w-5 h-5 shrink-0 mt-0.5 text-primary" />
               <div className="space-y-2">
-                <div className="text-foreground/80 leading-relaxed">{engine.simulatorApplied ? "Validated simulator contributes to the final probability." : "Not yet validated — display-only simulation."} <a className="text-primary whitespace-nowrap" href="#methodology-monte-carlo-simulation">ⓘ Details</a></div>
+                <div className="text-foreground/80 leading-relaxed">{engine.simulatorNote}</div>
                 <Badge variant={engine.simulatorApplied ? "success" : "outline"} className="font-mono text-[10px] bg-background shadow-sm border-border/60">
                   {engine.simulatorApplied ? "VOTING IN FINAL PROBABILITY" : "DISPLAY-ONLY, NOT YET VOTING"}
                 </Badge>
@@ -880,27 +825,29 @@ export default function PredictionResultPage() {
                       <span className="text-foreground font-bold tabular-nums">{engine.simulation.inputReliability}%</span>
                     </div>
                   </div>
-                  <p className="text-xs text-muted-foreground/80 italic leading-relaxed">Simulation details are preserved in Methodology. <a className="text-primary not-italic" href="#methodology-monte-carlo-simulation">ⓘ Details</a></p>
+                  <p className="text-xs text-muted-foreground/80 italic leading-relaxed">{engine.simulation.note}</p>
                 </CardContent>
               </Card>
 
               <ModuleCard title="SET SCORE DISTRIBUTION" reliability={asPercentage(engine.simulation.inputReliability)} icon={Dices} reliabilityLabel="COMP">
-                <div className="space-y-3 mt-2 font-mono text-[10px]">
-                  {engine.simulation.setScoreDistribution.slice(0, 8).map((entry, i) => {
-                    const player1Probability = entry.favors === "player1" ? entry.probability : 0
-                    const player2Probability = entry.favors === "player2" ? entry.probability : 0
-                    const barWidth = Math.min(100, entry.probability)
-                    return (
-                      <div key={i} className="grid grid-cols-[3.5rem_minmax(0,1fr)_3.5rem] items-center gap-2">
-                        <span className="text-right text-primary tabular-nums">{player1Probability > 0 ? `${player1Probability.toFixed(1)}%` : ""}</span>
-                        <div className="relative h-5 rounded border border-border/50 bg-muted/30 overflow-hidden">
-                          <div className={`absolute top-0 h-full ${entry.favors === "player1" ? "right-1/2 bg-primary" : "left-1/2 bg-muted-foreground/50"}`} style={{ width: `${barWidth / 2}%` }} />
-                          <span className="absolute inset-0 flex items-center justify-center text-foreground font-bold">{entry.score}</span>
-                        </div>
-                        <span className="text-muted-foreground tabular-nums">{player2Probability > 0 ? `${player2Probability.toFixed(1)}%` : ""}</span>
-                      </div>
-                    )
-                  })}
+                <div className="h-72 -ml-4 mt-2">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={engine.simulation.setScoreDistribution.slice(0, 8)} layout="vertical" margin={{ left: 8, right: 16 }}>
+                      <CartesianGrid strokeDasharray="3 3" horizontal={false} className="stroke-border/40" />
+                      <XAxis type="number" unit="%" tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }} tickLine={false} axisLine={false} />
+                      <YAxis type="category" dataKey="score" tick={{ fontSize: 11, fill: "hsl(var(--foreground))", fontWeight: "bold", fontFamily: "var(--font-mono)" }} width={45} tickLine={false} axisLine={false} />
+                      <Tooltip
+                        formatter={(value: number, _name: any, item: any) => [`${value.toFixed(1)}%`, item.payload.favors === "player1" ? prediction.player1Name : prediction.player2Name]}
+                        contentStyle={{ fontSize: 12, borderRadius: '8px', border: '1px solid hsl(var(--border))', backgroundColor: 'hsl(var(--background))', color: 'hsl(var(--foreground))', fontFamily: 'var(--font-mono)' }}
+                        cursor={{ fill: 'hsl(var(--secondary)/0.5)' }}
+                      />
+                      <Bar dataKey="probability" radius={[0, 6, 6, 0]} barSize={24}>
+                        {engine.simulation.setScoreDistribution.slice(0, 8).map((entry, i) => (
+                          <Cell key={i} fill={entry.favors === "player1" ? "hsl(var(--primary))" : "hsl(var(--muted-foreground)/0.5)"} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>
                 <div className="text-[10px] font-mono font-bold text-muted-foreground tracking-widest uppercase flex items-center justify-center gap-6 mt-2 pt-4 border-t border-border/50">
                   <span className="flex items-center gap-2"><span className="inline-block w-2.5 h-2.5 rounded-full bg-primary shadow-sm" /> {prediction.player1Name}</span>
@@ -924,32 +871,32 @@ export default function PredictionResultPage() {
         {engine.availabilityNote && (
           <div className="mb-4 p-5 border-2 border-warning/30 bg-warning/10 text-warning-foreground rounded-2xl flex gap-4 text-sm shadow-sm">
             <AlertTriangle className="w-6 h-6 shrink-0 text-warning" />
-            <div className="leading-relaxed">Availability coverage has a warning. <a className="text-primary whitespace-nowrap" href="#methodology-full-engine-breakdown">ⓘ Details</a></div>
+            <div className="leading-relaxed">{engine.availabilityNote}</div>
           </div>
         )}
 
         {engine.conditionsNote && (
           <div className="mb-4 p-5 border border-border/60 bg-secondary/40 rounded-2xl flex gap-4 text-sm text-foreground/80 shadow-sm backdrop-blur-sm">
             <Activity className="w-6 h-6 shrink-0 text-primary" />
-            <div className="leading-relaxed">Conditions context is available for this prediction. <a className="text-primary whitespace-nowrap" href="#methodology-full-engine-breakdown">ⓘ Details</a></div>
+            <div className="leading-relaxed">{engine.conditionsNote}</div>
           </div>
         )}
 
         {!!engine.warnings?.length && (
-          <div className="mb-6 p-4 border-2 border-warning/30 bg-warning/5 rounded-2xl space-y-2 shadow-sm">
+          <div className="mb-6 p-5 border-2 border-warning/30 bg-warning/5 rounded-2xl space-y-3 shadow-sm">
             {engine.warnings.map((w, i) => (
-              <div key={i} className="flex gap-3 text-sm text-foreground/80 items-center">
-                <AlertTriangle className="w-4 h-4 text-warning shrink-0" /> <span className="leading-snug">Warning {i + 1}</span><a className="text-primary ml-auto whitespace-nowrap" href="#methodology-full-engine-breakdown">ⓘ Details</a>
+              <div key={i} className="flex gap-3 text-sm text-foreground/80">
+                <AlertTriangle className="w-5 h-5 text-warning shrink-0" /> <span className="leading-snug">{w}</span>
               </div>
             ))}
           </div>
         )}
 
         {!!engine.disclosures?.length && (
-          <div className="mb-8 p-4 border border-border/60 bg-secondary/40 rounded-2xl space-y-2 shadow-sm backdrop-blur-sm">
+          <div className="mb-8 p-5 border border-border/60 bg-secondary/40 rounded-2xl space-y-3 shadow-sm backdrop-blur-sm">
             {engine.disclosures.map((d, i) => (
-              <div key={i} className="flex gap-3 text-sm text-foreground/80 items-center">
-                <Info className="w-4 h-4 text-primary shrink-0" /> <span className="leading-snug">Disclosure {i + 1}</span><a className="text-primary ml-auto whitespace-nowrap" href="#methodology-full-engine-breakdown">ⓘ Details</a>
+              <div key={i} className="flex gap-3 text-sm text-foreground/80">
+                <Info className="w-5 h-5 text-primary shrink-0" /> <span className="leading-snug">{d}</span>
               </div>
             ))}
           </div>
@@ -1019,7 +966,7 @@ export default function PredictionResultPage() {
               label="RTN S.P."
             />
             {engine.serveReturn.note && (
-               <p className="text-xs text-muted-foreground mt-2 italic">Real stats or score-margin proxy used. <a className="text-primary not-italic" href="#methodology-serve-return">ⓘ Details</a></p>
+               <p className="text-xs text-muted-foreground mt-2 italic">{engine.serveReturn.note}</p>
             )}
           </ModuleCard>
 
@@ -1064,11 +1011,11 @@ export default function PredictionResultPage() {
             />
             <div className="mt-2 text-xs text-muted-foreground space-y-1">
               <div className="flex justify-between">
-                  <span className="min-w-0 truncate">{prediction.player1Name} matches (7d):</span>
+                <span>{prediction.player1Name} matches (7d):</span>
                 <span className="font-mono font-bold text-foreground">{engine.fatigue.player1MatchesLast7Days}</span>
               </div>
               <div className="flex justify-between">
-                  <span className="min-w-0 truncate">{prediction.player2Name} matches (7d):</span>
+                <span>{prediction.player2Name} matches (7d):</span>
                 <span className="font-mono font-bold text-foreground">{engine.fatigue.player2MatchesLast7Days}</span>
               </div>
             </div>
@@ -1085,27 +1032,29 @@ export default function PredictionResultPage() {
               />
               <div className="mt-2 text-xs text-muted-foreground space-y-1">
                 <div className="flex justify-between">
-                    <span className="min-w-0 truncate">{prediction.player1Name} last match went the distance:</span>
+                  <span>{prediction.player1Name} last match went the distance:</span>
                   <span className="font-mono font-bold text-foreground">
                     {engine.matchLoadRecovery.player1RecentMatchWentDistance === null ? "—" : engine.matchLoadRecovery.player1RecentMatchWentDistance ? "Yes" : "No"}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                    <span className="min-w-0 truncate">{prediction.player2Name} last match went the distance:</span>
+                  <span>{prediction.player2Name} last match went the distance:</span>
                   <span className="font-mono font-bold text-foreground">
                     {engine.matchLoadRecovery.player2RecentMatchWentDistance === null ? "—" : engine.matchLoadRecovery.player2RecentMatchWentDistance ? "Yes" : "No"}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                    <span className="min-w-0 truncate">{prediction.player1Name} rest days (informational only):</span>
+                  <span>{prediction.player1Name} rest days (informational only):</span>
                   <span className="font-mono font-bold text-foreground">{engine.matchLoadRecovery.player1RestDays ?? "—"}</span>
                 </div>
                 <div className="flex justify-between">
-                    <span className="min-w-0 truncate">{prediction.player2Name} rest days (informational only):</span>
+                  <span>{prediction.player2Name} rest days (informational only):</span>
                   <span className="font-mono font-bold text-foreground">{engine.matchLoadRecovery.player2RestDays ?? "—"}</span>
                 </div>
               </div>
-              <p className="text-xs text-muted-foreground mt-2 italic">Single-bit recovery signal; rest days are informational. <a className="text-primary not-italic" href="#methodology-full-engine-breakdown">ⓘ Details</a></p>
+              <p className="text-xs text-muted-foreground mt-2 italic">
+                A new, thin single-bit signal: whether each player's single most recent match went the distance (not a recency-weighted match count). Rest days are shown for transparency but don't feed the score.
+              </p>
             </ModuleCard>
           )}
 
@@ -1113,25 +1062,25 @@ export default function PredictionResultPage() {
             <ModuleCard title="REST, TRAVEL & INJURY" reliability={asPercentage(engine.availability.reliability)} icon={Activity}>
               <div className="text-xs text-muted-foreground space-y-1">
                 <div className="flex justify-between">
-                  <span className="min-w-0 truncate">{prediction.player1Name} rest days:</span>
+                  <span>{prediction.player1Name} rest days:</span>
                   <span className="font-mono font-bold text-foreground">
                     {engine.availability.player1.daysSinceLastMatch ?? "—"}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="min-w-0 truncate">{prediction.player2Name} rest days:</span>
+                  <span>{prediction.player2Name} rest days:</span>
                   <span className="font-mono font-bold text-foreground">
                     {engine.availability.player2.daysSinceLastMatch ?? "—"}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="min-w-0 truncate">{prediction.player1Name} travel since last match:</span>
+                  <span>{prediction.player1Name} travel since last match:</span>
                   <span className="font-mono font-bold text-foreground">
                     {engine.availability.player1.travelDistanceKm !== null ? `${engine.availability.player1.travelDistanceKm} km` : "n/a"}
                   </span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="min-w-0 truncate">{prediction.player2Name} travel since last match:</span>
+                  <span>{prediction.player2Name} travel since last match:</span>
                   <span className="font-mono font-bold text-foreground">
                     {engine.availability.player2.travelDistanceKm !== null ? `${engine.availability.player2.travelDistanceKm} km` : "n/a"}
                   </span>
@@ -1149,7 +1098,9 @@ export default function PredictionResultPage() {
                   </p>
                 )}
               </div>
-              {engine.availability.note && <p className="text-xs text-muted-foreground mt-2 italic">Coverage note available. <a className="text-primary not-italic" href="#methodology-full-engine-breakdown">ⓘ Details</a></p>}
+              {engine.availability.note && (
+                <p className="text-xs text-muted-foreground mt-2 italic">{engine.availability.note}</p>
+              )}
             </ModuleCard>
           ) : (
             <ModuleCard title="REST, TRAVEL & INJURY" reliability={asPercentage(0)} icon={Activity}>
