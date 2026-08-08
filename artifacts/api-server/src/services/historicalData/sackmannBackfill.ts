@@ -921,17 +921,79 @@ export async function runSackmannLocalBackfill(
     };
   }
 
-  // Sort chronologically so runHistoricalBackfill's date-range chunking works correctly.
-  allFixtures.sort((a, b) => a.date.localeCompare(b.date));
-  const dateStart = allFixtures[0].date;
-  const dateStop  = allFixtures[allFixtures.length - 1].date;
+  // Deduplicate by external_id — the same match can appear in multiple local files
+  // (e.g. the ATP main-draw file and the atp_quali file share qualifying-round rows,
+  // and ongoing_tourneys.csv overlaps with the current year file).
+  const seenIds = new Set<string>();
+  const deduped: HistoricalFixture[] = [];
+  for (const f of allFixtures) {
+    if (!seenIds.has(f.id)) { seenIds.add(f.id); deduped.push(f); }
+  }
+  const droppedDupes = allFixtures.length - deduped.length;
+  if (droppedDupes > 0) {
+    logger.info({ droppedDupes }, "sackmannLocal: deduplicated cross-file duplicate fixtures");
+  }
 
+  // Apply yearFrom/yearTo to every fixture — flat files (amateur, ongoing) are not
+  // year-named so they bypass the per-file year guards above.
+  const yearFromStr = String(yearFrom).padStart(4, "0");
+  const yearToStr   = String(yearTo  ).padStart(4, "0");
+  const fixtures = deduped.filter(
+    (f) => f.date.slice(0, 4) >= yearFromStr && f.date.slice(0, 4) <= yearToStr,
+  );
+  const droppedByRange = allFixtures.length - fixtures.length;
+  if (droppedByRange > 0) {
+    logger.info({ droppedByRange, yearFrom, yearTo }, "sackmannLocal: dropped out-of-range fixtures");
+  }
+
+  // ── Pre-filter already-imported rows ─────────────────────────────────────────
+  // runHistoricalBackfill's normal-mode duplicate handling runs an integrity check
+  // BEFORE skipping, which throws when the stored feature-snapshot count diverges from
+  // the current Elo state (e.g. when re-importing with a broader file set than the
+  // original remote backfill used). We pre-filter here so only genuinely new fixtures
+  // are handed to runHistoricalBackfill, bypassing the check without touching its code.
+  const existingIds = new Set<string>();
+  const PAGE = 10_000;
+  for (let page = 0; ; page++) {
+    const { rows } = await pool.query<{ external_id: string }>(
+      `SELECT external_id FROM historical_matches WHERE provider = $1 LIMIT $2 OFFSET $3`,
+      [SACKMANN_PROVIDER, PAGE, page * PAGE],
+    );
+    for (const r of rows) existingIds.add(r.external_id);
+    if (rows.length < PAGE) break;
+  }
+  const alreadyExisted    = fixtures.filter((f) =>  existingIds.has(f.id));
+  const genuinelyNew      = fixtures.filter((f) => !existingIds.has(f.id));
+  const rowsAlreadyExisted = alreadyExisted.length;
   logger.info(
-    { filesProcessed, fixturesLoaded: allFixtures.length, dateStart, dateStop, localDir },
-    "sackmannLocal: all files loaded — starting historical backfill",
+    { total: fixtures.length, existingSkipped: rowsAlreadyExisted, genuinelyNew: genuinelyNew.length },
+    "sackmannLocal: pre-filter complete",
   );
 
-  const provider = new SackmannProvider(allFixtures);
+  if (genuinelyNew.length === 0) {
+    return {
+      filesProcessed,
+      rowsAttempted,
+      rowsInserted: 0,
+      rowsSkipped:  rowsAlreadyExisted,
+      rowsErrored:  errors.length,
+      playerProfilesUpserted,
+      durationMs: Date.now() - startedAt,
+      errors: errors.slice(0, 50),
+    };
+  }
+
+  // Sort chronologically so runHistoricalBackfill's date-range chunking works correctly.
+  genuinelyNew.sort((a, b) => a.date.localeCompare(b.date));
+  const dateStart = genuinelyNew[0].date;
+  const dateStop  = genuinelyNew[genuinelyNew.length - 1].date;
+
+  logger.info(
+    { filesProcessed, genuinelyNew: genuinelyNew.length, dateStart, dateStop, localDir },
+    "sackmannLocal: starting historical backfill (new rows only)",
+  );
+
+  const provider = new SackmannProvider(genuinelyNew);
   const backfill = await runHistoricalBackfill(
     provider as unknown as Parameters<typeof runHistoricalBackfill>[0],
     { dateStart, dateStop, cutoff: "1h", chunkDays: 30 },
@@ -941,7 +1003,7 @@ export async function runSackmannLocalBackfill(
     filesProcessed,
     rowsAttempted,
     rowsInserted: backfill.matchesInserted,
-    rowsSkipped:  backfill.matchesSkippedDuplicate,
+    rowsSkipped:  rowsAlreadyExisted + backfill.matchesSkippedDuplicate,
     rowsErrored:  errors.length,
     playerProfilesUpserted,
     durationMs: Date.now() - startedAt,

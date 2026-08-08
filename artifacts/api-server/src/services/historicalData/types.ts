@@ -48,6 +48,8 @@ export interface BackfillSummary {
   matchesRecomputed: number;
   matchesSkippedDuplicate: number;
   matchesSkippedNoTerminalResult: number;
+  /** Fixtures skipped because player1Id === player2Id — corrupt source data (player can't play themselves). */
+  matchesSkippedBadData: number;
   featureRowsInserted: number;
   byTour: Record<string, number>;
   bySurface: Record<string, number>;

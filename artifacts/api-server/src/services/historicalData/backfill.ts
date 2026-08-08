@@ -201,6 +201,7 @@ export async function runHistoricalBackfill(
     matchesRecomputed: 0,
     matchesSkippedDuplicate: 0,
     matchesSkippedNoTerminalResult: 0,
+    matchesSkippedBadData: 0,
     featureRowsInserted: 0,
     byTour: {},
     bySurface: {},
@@ -255,6 +256,17 @@ export async function runHistoricalBackfill(
       ]);
       if (!fixture.cancelled && fixture.winnerId === null) {
         summary.matchesSkippedNoTerminalResult += 1;
+        continue;
+      }
+
+      // Skip fixtures where both players resolve to the same ID — corrupt source data (a player
+      // cannot play themselves). This most commonly happens when two Sackmann entries share an
+      // abbreviated name and get collapsed by identity resolution.  Inserting such a fixture would
+      // produce duplicate (matchId, playerId, featureName) snapshot rows, violating the unique
+      // constraint.
+      if (fixture.player1Id === fixture.player2Id) {
+        logger.warn({ externalId: fixture.id, playerId: fixture.player1Id }, "backfill: skipping same-player fixture (bad data)");
+        summary.matchesSkippedBadData += 1;
         continue;
       }
 
@@ -347,7 +359,11 @@ export async function runHistoricalBackfill(
       ]
         // Defense in depth: never write a feature whose own source timestamp fails its cutoff
         // check, even though computeFeatures() only ever draws from strictly-earlier matches.
-        .filter((f) => f.sourceTimestamp.getTime() < cutoffAt.getTime());
+        .filter((f) => f.sourceTimestamp.getTime() < cutoffAt.getTime())
+        // Defense in depth: deduplicate on (playerId, featureName) so that if player1Id ===
+        // player2Id somehow slips through (should be caught above), we don't violate the unique
+        // constraint on match_feature_snapshots.
+        .filter((f, i, arr) => arr.findIndex((g) => g.playerId === f.playerId && g.featureName === f.featureName) === i);
 
       // The match row and ALL of its frozen feature snapshots must land together or not at all --
       // otherwise a process failure between the two inserts would leave an orphaned match with no
