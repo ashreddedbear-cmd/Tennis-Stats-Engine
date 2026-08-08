@@ -1,0 +1,34 @@
+# Fix Market Odds Scoring-Timing Bug
+
+## Context
+Market odds was activated in the ensemble today (removed from `EXCLUDED_FROM_ENSEMBLE`, `weightPrior=0.5`), as a deliberate documented override of the Section B n≥200 gate. Verification of model #711 (Check 2) found that **market odds has not fired in a single stored prediction across historical_test, paper_trade, or paper_trade_shadow — 0 out of ~238,000 feature_snapshots.**
+
+Root cause: predictions are scored when the scheduling window opens, well before match time, and `feature_snapshot` is frozen at that point. The odds background job only fetches odds ~15–30 minutes before match start, and writes odds onto the row *after* scoring has already happened. So `input.marketOdds` is always null at scoring time — activation in code has had zero practical effect so far, unrelated to the ablation/override decision itself.
+
+This means Ticket 5's actual goal (fixing the 8G underconfidence "double-correction" bug via market-odds-aware calibration) still cannot be achieved — market odds needs to actually participate in live predictions before its effect on calibration can be measured or trusted.
+
+## Goal
+Make market odds actually reach the ensemble at scoring time for future predictions, without violating existing constraints (no fabricated/synthetic data, no backfilling or altering old rows, read-only investigation before any live code change).
+
+## Step 1 — Investigate current scoring/odds-fetch sequencing (read-only)
+- Confirm exactly when predictions are scored relative to `scheduled_start_at` (what triggers scoring — a cron window opening, a scheduling event, something else).
+- Confirm exactly when the odds background job runs relative to `scheduled_start_at` (confirmed in Check 1: 15–30 min before start).
+- Identify whether `feature_snapshot` is only ever written once (at scoring time) or whether there's already any re-scoring/update mechanism that could be extended.
+- Report findings before proposing a fix.
+
+## Step 2 — Propose fix options (report back before implementing)
+Do not implement yet — propose 2–3 concrete options with tradeoffs, e.g.:
+- **Delay scoring** for predictions until closer to match time (after odds are typically available) — tradeoff: may reduce lead time users have to see predictions before a match.
+- **Re-score/patch** the prediction after odds land — recompute the ensemble with marketOdds included and update the stored prediction, leaving an audit trail that the prediction was odds-adjusted post-initial-score. Tradeoff: added complexity, needs to not violate the "no altering old rows" constraint — this would need to be its own explicit, logged, forward-only update path, not a silent overwrite.
+- **Two-stage prediction**: keep the original odds-less prediction as the primary/displayed one, but also fetch odds sooner (if the data source allows earlier availability) so a fully-scored version can exist without needing to touch the original row at all.
+- Report the options, current architectural cost of each, and which the investigation suggests is most natural given the existing pipeline — without acting yet.
+
+## Do NOT
+- Do not implement any fix without reporting Step 1 and Step 2 back first.
+- Do not alter or backfill any existing prediction rows.
+- Do not change odds-fetch timing to occur significantly earlier unless real odds are actually available that early from the data source (don't synthesize early odds).
+- Do not touch the n≥200 threshold, the override documentation, or the EXCLUDED_FROM_ENSEMBLE set as part of this work — that decision stands independently of this bug.
+
+## Report back
+- Step 1: current scoring/odds-fetch timing findings.
+- Step 2: proposed fix options with tradeoffs, no implementation yet.
