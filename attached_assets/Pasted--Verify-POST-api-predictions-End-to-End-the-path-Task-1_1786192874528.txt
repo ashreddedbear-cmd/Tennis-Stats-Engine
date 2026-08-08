@@ -1,0 +1,24 @@
+# Verify POST /api/predictions End-to-End (the path Task #146 actually targeted)
+
+## Context
+Task #146 shipped and was verified via the admin paper-trade trigger (confirmed the double-fetch removal and oddsStatus writing on that path). But the actual target of Task #146 — the user-facing `POST /api/predictions` endpoint — returned a 401 (Clerk auth required, no admin bypass) during testing and was never hit directly. The paper-trade verification is a reasonable proxy since both paths now share `predictFromSnapshot`, but it's not the same as confirming the real endpoint works end-to-end for an actual user request.
+
+## Instructions
+
+1. Get a valid way to call `POST /api/predictions` as an authenticated user — either a dev/test Clerk JWT, a test user session, or whatever mechanism exists for hitting authenticated endpoints outside the normal UI flow. If no such mechanism exists, say so plainly rather than working around it with another proxy.
+
+2. If a valid auth path is found: call `POST /api/predictions` for two real fixtures —
+   - One **inside** the confirmed ~28–31h odds window (should return `oddsStatus: "included"` with real odds data feeding the prediction)
+   - One **outside** the window, or for a lower-tier match with no book coverage (should return `oddsStatus: "outside_window"`, prediction still succeeds, just without market odds)
+
+3. Report the full response for both, including: `oddsStatus`, whether `marketOdds`/Market Consensus actually appears in the prediction's module breakdown, and confirm the saved DB row's `odds_status` column matches.
+
+4. If no valid auth mechanism can be found without building new test infrastructure: instead, do a careful code-level comparison — confirm line-by-line that `routes/predictions.ts`'s call into `predictFromSnapshot` and its handling of `marketOddsStatus` is identical in shape to what the paper-trade path already exercises, and explicitly state whether that comparison is sufficient confidence or whether a real end-to-end test is still needed before considering this closed.
+
+## Do NOT
+- Do not build new test/auth infrastructure just for this check if it doesn't already exist — report the limitation instead of over-engineering a one-time verification.
+- Do not modify any code as part of this — verification only.
+
+## Report back
+- Whether a real authenticated end-to-end call was made, and its full result for both test cases.
+- If not possible: the code-level comparison and an honest assessment of remaining risk.
