@@ -1,0 +1,29 @@
+# Test: Are Market Odds Actually Available Far Ahead of Match Time?
+
+## Context
+Step 1's finding that odds are only available T-25 to T-15 minutes before match start was derived entirely from `odds_fetched_at` timestamps in the DB — i.e., from when the code *happened to call* `fetchMarketOdds` (always at lock time, T-30 to T-15 min out). That data cannot distinguish "odds don't exist earlier" from "we never asked earlier."
+
+The user is currently looking at live moneylines on a sportsbook app for ATP Montreal and WTA Toronto matches scheduled tomorrow (Aug 9) and later today, and reports having seen these same lines since yesterday afternoon — roughly 24+ hours before match start. This directly contradicts the T-25/T-15 window being a real data-availability constraint, and suggests it may just be an artifact of when the code has always asked.
+
+This needs to be tested directly before Task #146 is scoped or run, since Task #146's plan (odds-fetch added to `POST /api/predictions`, 30→20 min paper-trade lead time) assumes odds aren't available far ahead — if they are, the actual fix is simpler and different.
+
+## Test (read-only, no code changes)
+
+1. Identify 2-3 matches scheduled well in the future relative to right now — ideally 12+ hours and 24+ hours out (e.g., tomorrow's ATP Montreal or WTA Toronto matches, matching what's visible in the user's sportsbook app right now: e.g. Griekspoor/Merida, Fils/Norrie, Swiatek/Kostyuk, Pegula/Shnaider — cross-reference actual fixture IDs/names in the DB against these).
+
+2. Manually call `fetchMarketOdds` (or whatever the underlying function/service call is) directly for those specific matches, right now, via script or console — not through the normal prediction pipeline, just a direct call to the odds-fetching function/API in isolation.
+
+3. Report exactly what comes back for each: real odds data, empty/null, or an error. Include the raw response.
+
+4. If odds ARE returned for matches 12-24+ hours out: this confirms the odds data source has much earlier coverage than the T-25/T-15 assumption. Report what the earliest-available lead time appears to be, if determinable (e.g., try calling for a match even further out, like 48+ hours, to find the actual boundary).
+
+5. If odds are NOT returned for far-out matches: check whether this might be source-specific — i.e., does whatever odds API/provider this system uses (name it) have a different publish schedule than the sportsbook the user is manually viewing? Note: these could be genuinely different data feeds even if they're showing similar/same lines to end users.
+
+## Do NOT
+- Do not modify `paperTradeLeadMinutes`, the `POST /api/predictions` path, or any other code as part of this test.
+- Do not proceed with Task #146 as currently scoped until this comes back — the plan may need to change based on the result.
+
+## Report back
+- Raw odds-fetch results for each tested match, with lead time before match start noted for each.
+- Whether odds are available far earlier than T-25/T-15, and if so, what the actual earliest boundary looks like.
+- Whether the answer changes what Task #146 should actually do.
