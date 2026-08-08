@@ -7,7 +7,7 @@ import { OddsProviderRateLimitedError, OddsProviderUnavailableError, type OddsPr
 
 const BASE_URL = "https://api.the-odds-api.com/v4";
 const SPORTS_TTL_MS = 6 * 60 * 60 * 1000; // in-season tennis tournaments change slowly
-const ODDS_TTL_MS = 5 * 60 * 1000;
+const ODDS_TTL_MS = 30 * 60 * 1000;
 // A provider event's commence_time must fall within this window of our fixture's own scheduled
 // start to be trusted as the SAME match -- guards against matching e.g. an earlier-round meeting
 // between the same two players in a different event.
