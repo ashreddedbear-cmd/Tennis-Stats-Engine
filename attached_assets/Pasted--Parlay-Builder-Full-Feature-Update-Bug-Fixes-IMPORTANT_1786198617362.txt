@@ -1,0 +1,114 @@
+## Parlay Builder — Full Feature Update + Bug Fixes
+
+### IMPORTANT CONSTRAINT
+The prediction engine and parlay builder must remain completely separate
+systems at all times. They do not call each other, share logic, or share
+services. Any fix involving both systems should only use a read-only lookup
+from the parlay builder into the predictions table — no shared services,
+no cross-engine imports, no new connections between the two engines.
+
+---
+
+### NEW BUTTONS — Auto Builder Controls
+
+1. REMOVE BORDERLINE BUTTON
+Add a "Remove Borderline" button next to the existing "Switch Borderline"
+button. When tapped, it removes all matches currently tagged BORDERLINE
+from the active leg list entirely.
+
+2. REMOVE REMOVES BUTTON
+Add a "Remove Removes" button in the Auto Builder controls. When tapped,
+it removes all matches tagged REMOVE (the red ones) from the active leg
+list entirely.
+
+3. SWITCH REMOVES BUTTON
+Add a "Switch Removes" button in the Auto Builder controls. When tapped,
+it does NOT delete the REMOVE matches — instead it flips every
+REMOVE-tagged match to the opposite player, keeping those legs in the
+list with the new pick.
+
+4. HANDSHAKE ENGINE AGREEMENT BUTTON
+Replace the existing NSYNC/engine agreement button with a handshake emoji
+button. When tapped, it filters the list to only show matches where both
+the prediction engine and the parlay builder agree on the same predicted
+winner. Label it "Engine Agreement" in the UI.
+
+The filter should work as follows:
+- The prediction engine already writes its predicted winner to the
+  predictions table independently.
+- The parlay builder does a read-only lookup into that same predictions
+  table at filter time using the match identifier as the join key.
+- It compares the parlay builder's backing pick against what the
+  prediction engine already wrote.
+- No new connection between the two engines. Read only.
+
+---
+
+### BUG FIX — Engine Agreement SyntaxError
+
+Current error: "Engine agreement lookup failed — SyntaxError: The string
+did not match the expected pattern."
+
+This is a format/parsing error, not a logic error. The lookup is failing
+before it hits the database because the match identifier being passed into
+the query does not match the expected format.
+
+To fix:
+- Log the exact value being used as the match identifier when the filter
+  runs.
+- Find the line throwing the SyntaxError — likely a UUID parser, regex
+  validator, or DB client expecting a specific ID format.
+- Transform the parlay leg's match identifier into the format the
+  predictions table expects before passing it to the query.
+- If no shared identifier exists, flag it — do not create a new
+  connection between the engines to solve it.
+
+Show the offending line and ID values before writing any code.
+
+---
+
+### SAVE TOGGLE ON PREDICTION CARDS
+
+The save icon on each prediction card should become a true toggle:
+- First tap → saves the match to the saved folder
+- Second tap → unsaves it, removing it from the saved folder
+The icon should visually reflect saved vs unsaved state (filled vs
+outline bookmark).
+
+---
+
+### PARLAY HISTORY — MINI PREDICTION CARD FEED
+
+Replace the current plain table rows in Leg History with a scrollable
+feed of mini prediction cards. Each card should display:
+- Player names and matchup
+- Tier badge (KEEP / BORDERLINE / REMOVE)
+- Confidence tier badge (ELITE / MODERATE / etc.)
+- Grade badge
+- Tournament name
+- Validation bar + percentage
+- Risk bar + percentage
+- Removal %, Coverage %, Agreement %
+- Closeness score and Surface
+- Score / 100
+Same layout as the full prediction card, just sized down for the history
+feed.
+
+---
+
+### PARLAY HISTORY — WIN/LOSS FILTERING
+
+Add win/loss filter tabs to the Leg History screen, the same way the
+prediction engine already filters results. Users should be able to filter
+to:
+- All legs
+- Wins only
+- Losses only
+The outcome (win/loss) should be visible on each mini card in the history
+feed.
+
+---
+
+### BEFORE WRITING ANY CODE
+Show me the plan for each item above and wait for an explicit "approved"
+reply before touching any code.
