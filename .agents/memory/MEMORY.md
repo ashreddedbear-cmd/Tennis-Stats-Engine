@@ -70,3 +70,4 @@
 - [Prediction engine 50/50 root cause](prediction-engine-50-50-root-cause.md) — api-tennis billing lapse → zero match records → 50/50; fix: tier-5 DB fallback from historical_matches
 - [API-Tennis split circuit breaker and priority queue](api-tennis-split-circuit-breaker.md) — `getPlayerMatches` uses `api-tennis-bulk`; all live paths use `api-tennis-live`; PriorityCallQueue(4) gives live calls priority; bulk storm never trips live breaker.
 - [Sackmann local ZIP import](sackmann-local-zip-import.md) — ZIP filenames differ from GitHub (e.g. `2026.csv` not `atp_matches_2026.csv`); endpoint at `/api/evaluation/sackmann-local-backfill/run`; dryRun=true is synchronous.
+- [Drizzle tablesFilter sequence bug](drizzle-tablesfilter-sequence-bug.md) — tablesFilter whitelist prevents Replit deployment DROP disaster; sequence DROP error is harmless (exits 0); add new pgTable() names to DRIZZLE_MANAGED_TABLES.

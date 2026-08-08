@@ -91,6 +91,19 @@ export const predictionsTable = pgTable(
      */
     oddsStatus: text("odds_status").$type<"included" | "outside_window" | "provider_error">(),
 
+    /**
+     * Shadow-replay / recommendation-audit columns (added via ensureEvaluationSchema.ts
+     * forward-compat ALTER TABLE; reflected here so drizzle-kit does not attempt to drop them).
+     * recommendation_v2: recomputed value under the current 5-tier logic (null until replay runs).
+     * recommendation_version: integer schema version of the recommendation logic used.
+     * recommendation_changed: true when v2 differs from the original stored recommendation.
+     * recommendation_changed_at: timestamp of the last shadow-replay run for this row.
+     */
+    recommendationV2: text("recommendation_v2"),
+    recommendationVersion: integer("recommendation_version"),
+    recommendationChanged: boolean("recommendation_changed"),
+    recommendationChangedAt: timestamp("recommendation_changed_at", { withTimezone: true }),
+
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
   },
