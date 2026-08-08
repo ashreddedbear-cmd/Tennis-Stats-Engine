@@ -1,0 +1,128 @@
+CREATE TABLE "match_source_links" (
+	"id" text PRIMARY KEY NOT NULL,
+	"canonical_match_id" text NOT NULL,
+	"provider" text NOT NULL,
+	"external_match_id" text NOT NULL,
+	"source_payload" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"source_timestamp" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+CREATE TABLE "canonical_matches" (
+	"id" text PRIMARY KEY NOT NULL,
+	"match_key" text NOT NULL,
+	"player_a_id" text NOT NULL,
+	"player_b_id" text NOT NULL,
+	"tournament_name" text,
+	"normalized_tournament_name" text,
+	"tour" text,
+	"event_level" text,
+	"match_date" timestamp with time zone,
+	"round" text,
+	"surface" text,
+	"draw_type" text,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+CREATE TABLE "player_aliases" (
+	"id" text PRIMARY KEY NOT NULL,
+	"provider" text NOT NULL,
+	"external_player_id" text NOT NULL,
+	"external_player_name" text NOT NULL,
+	"normalized_name" text NOT NULL,
+	"canonical_player_id" text NOT NULL,
+	"alias_type" text DEFAULT 'provider-id' NOT NULL,
+	"verification_status" text DEFAULT 'verified' NOT NULL,
+	"metadata" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"first_seen_at" timestamp with time zone,
+	"last_seen_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+CREATE TABLE "canonical_players" (
+	"id" text PRIMARY KEY NOT NULL,
+	"display_name" text NOT NULL,
+	"normalized_name" text NOT NULL,
+	"tour" text,
+	"nationality" text,
+	"date_of_birth" timestamp with time zone,
+	"handedness" text,
+	"height_cm" integer,
+	"active_from" timestamp with time zone,
+	"active_to" timestamp with time zone,
+	"review_status" text DEFAULT 'approved' NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+CREATE TABLE "player_resolution_reviews" (
+	"id" text PRIMARY KEY NOT NULL,
+	"source" text NOT NULL,
+	"provider" text,
+	"external_player_id" text,
+	"external_player_name" text NOT NULL,
+	"normalized_name" text NOT NULL,
+	"candidate_canonical_ids" jsonb DEFAULT '[]'::jsonb NOT NULL,
+	"resolution_method" text NOT NULL,
+	"confidence" real NOT NULL,
+	"supporting_metadata" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"reason" text,
+	"status" text DEFAULT 'pending' NOT NULL,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"reviewed_at" timestamp with time zone
+);
+CREATE TABLE "historical_feature_diagnostics" (
+	"id" text PRIMARY KEY NOT NULL,
+	"canonical_player_id" text NOT NULL,
+	"requested_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"matches_found" integer DEFAULT 0 NOT NULL,
+	"date_from" timestamp with time zone,
+	"date_to" timestamp with time zone,
+	"surface_matches_found" integer DEFAULT 0 NOT NULL,
+	"opponent_quality_sample" integer DEFAULT 0 NOT NULL,
+	"serve_return_sample_size" integer DEFAULT 0 NOT NULL,
+	"resolution_method" text NOT NULL,
+	"resolution_confidence" real NOT NULL,
+	"source_coverage" jsonb DEFAULT '{}'::jsonb NOT NULL,
+	"fallback_reason" text,
+	"historical_data_status" text NOT NULL,
+	"fallback_used" boolean DEFAULT false NOT NULL,
+	"lineage" jsonb DEFAULT '{}'::jsonb NOT NULL
+);
+DROP INDEX "payments_accounts_created_at_idx";
+DROP INDEX "payments_accounts_plan_key_idx";
+ALTER TABLE "predictions" ADD COLUMN "data_segment" text DEFAULT 'live' NOT NULL;
+ALTER TABLE "predictions" ADD COLUMN "used_fallback" boolean;
+ALTER TABLE "predictions" ADD COLUMN "fallback_sources" jsonb;
+ALTER TABLE "predictions" ADD COLUMN "cross_engine_agreement" boolean;
+ALTER TABLE "predictions" ADD COLUMN "odds_status" text;
+ALTER TABLE "evaluation_predictions" ADD COLUMN "used_fallback" boolean;
+ALTER TABLE "evaluation_predictions" ADD COLUMN "fallback_sources" jsonb;
+ALTER TABLE "evaluation_predictions" ADD COLUMN "data_segment" text DEFAULT 'live' NOT NULL;
+ALTER TABLE "parlay_leg_outcomes" ADD COLUMN "removal_probability" integer DEFAULT 0 NOT NULL;
+ALTER TABLE "match_source_links" ADD CONSTRAINT "match_source_links_canonical_match_id_canonical_matches_id_fk" FOREIGN KEY ("canonical_match_id") REFERENCES "public"."canonical_matches"("id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "canonical_matches" ADD CONSTRAINT "canonical_matches_player_a_id_canonical_players_id_fk" FOREIGN KEY ("player_a_id") REFERENCES "public"."canonical_players"("id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "canonical_matches" ADD CONSTRAINT "canonical_matches_player_b_id_canonical_players_id_fk" FOREIGN KEY ("player_b_id") REFERENCES "public"."canonical_players"("id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "player_aliases" ADD CONSTRAINT "player_aliases_canonical_player_id_canonical_players_id_fk" FOREIGN KEY ("canonical_player_id") REFERENCES "public"."canonical_players"("id") ON DELETE no action ON UPDATE no action;
+ALTER TABLE "historical_feature_diagnostics" ADD CONSTRAINT "historical_feature_diagnostics_canonical_player_id_canonical_pl" FOREIGN KEY ("canonical_player_id") REFERENCES "public"."canonical_players"("id") ON DELETE no action ON UPDATE no action;
+CREATE INDEX "match_source_links_canonical_match_idx" ON "match_source_links" USING btree ("canonical_match_id");
+CREATE UNIQUE INDEX "match_source_links_provider_external_id_idx" ON "match_source_links" USING btree ("provider","external_match_id");
+CREATE UNIQUE INDEX "canonical_matches_match_key_idx" ON "canonical_matches" USING btree ("match_key");
+CREATE INDEX "player_aliases_canonical_player_idx" ON "player_aliases" USING btree ("canonical_player_id");
+CREATE INDEX "player_aliases_normalized_name_idx" ON "player_aliases" USING btree ("normalized_name");
+CREATE UNIQUE INDEX "player_aliases_provider_external_id_idx" ON "player_aliases" USING btree ("provider","external_player_id");
+CREATE INDEX "canonical_players_normalized_name_idx" ON "canonical_players" USING btree ("normalized_name");
+CREATE INDEX "canonical_players_tour_idx" ON "canonical_players" USING btree ("tour");
+CREATE INDEX "legal_consents_context_idx" ON "legal_consents" USING btree ("context");
+CREATE INDEX "legal_consents_created_idx" ON "legal_consents" USING btree ("created_at");
+CREATE INDEX "historical_matches_p1_p2_surface_idx" ON "historical_matches" USING btree ("player1_id","player2_id","surface");
+CREATE INDEX "historical_matches_p1_surface_date_idx" ON "historical_matches" USING btree ("player1_id","surface","scheduled_start_at");
+CREATE INDEX "historical_matches_p2_p1_surface_idx" ON "historical_matches" USING btree ("player2_id","player1_id","surface");
+CREATE INDEX "historical_matches_p2_surface_date_idx" ON "historical_matches" USING btree ("player2_id","surface","scheduled_start_at");
+CREATE INDEX "historical_matches_player1_name_idx" ON "historical_matches" USING btree ("player1_name");
+CREATE INDEX "historical_matches_player2_name_idx" ON "historical_matches" USING btree ("player2_name");
+CREATE INDEX "historical_matches_surface_idx" ON "historical_matches" USING btree ("surface");
+CREATE INDEX "historical_matches_tour_idx" ON "historical_matches" USING btree ("tour");
+CREATE INDEX "historical_matches_tournament_level_idx" ON "historical_matches" USING btree ("tournament_level");
+ALTER TABLE "payments_accounts" DROP COLUMN "failed_payment_count";
+ALTER TABLE "payments_accounts" DROP COLUMN "last_payment_at";
+ALTER TABLE "payments_accounts" DROP COLUMN "last_payment_amount";
+ALTER TABLE "payments_accounts" DROP COLUMN "last_payment_status";
+ALTER TABLE "payments_accounts" DROP COLUMN "trial_start_at";
