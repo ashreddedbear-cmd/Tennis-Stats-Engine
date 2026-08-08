@@ -86,7 +86,7 @@ import { startOptimizerJob, getOptimizerJobStatus } from "../services/evaluation
 import { getLatestPatternAnalysis } from "../services/evaluation/patternAnalysis";
 import { getLatestThresholdEvaluation } from "../services/evaluation/thresholdEvaluation";
 import { getOptimizerAccuracySummary } from "../services/evaluation/optimizerSummary";
-import { runCalibrationRefitJob } from "../jobs/runCalibrationRefitJob";
+import { runCalibrationRefitJob, checkRefitCooldown } from "../jobs/runCalibrationRefitJob";
 import { computeRecommendation, type Recommendation } from "../services/predictionEngine/recommendation";
 import { enforceEntitlement } from "../lib/entitlements";
 import { requireAdmin } from "../lib/adminAuth";
@@ -194,6 +194,23 @@ router.post("/evaluation/calibration-refit/run", async (_req, res): Promise<void
 
   if (calibrationRefitInFlight) {
     res.json({ started: false, reason: "A calibration-refit run is already in progress." });
+    return;
+  }
+
+  // Restart-resistant cooldown: query the DB so a server restart doesn't reset the guard.
+  // If the most recently fitted calibration model is less than 2 hours old, reject early
+  // with a clear "recently completed" response instead of starting a new run that would
+  // produce a small, low-quality model.
+  const cooldown = await checkRefitCooldown();
+  if (cooldown.blocked) {
+    const minRemaining = Math.ceil(cooldown.msRemaining / 60_000);
+    res.json({
+      started: false,
+      skipped: true,
+      reason: `Cooldown in effect — last fit ${cooldown.lastFittedAt?.toISOString() ?? "unknown"}, ${minRemaining}min remaining`,
+      lastFittedAt: cooldown.lastFittedAt?.toISOString() ?? null,
+      msRemaining: cooldown.msRemaining,
+    });
     return;
   }
 
@@ -646,17 +663,35 @@ router.get("/evaluation/bridge-rescore/status", async (_req, res): Promise<void>
  */
 router.post("/evaluation/calibration-refit", requireAdmin, async (_req, res): Promise<void> => {
   // Use the same in-process flag as the entitlement-gated endpoint so a concurrent call
-  // from either path is blocked. The restart-resistant cooldown inside runCalibrationRefitJob
-  // is the durable guard; this flag only prevents two simultaneous in-flight runs.
+  // from either path is blocked. The restart-resistant cooldown check below is the durable
+  // guard; this flag only prevents two simultaneous in-flight runs within a single process.
   if (calibrationRefitInFlight) {
     res.json({ started: false, reason: "A calibration-refit run is already in progress." });
+    return;
+  }
+
+  // Restart-resistant cooldown: query the DB so a server restart doesn't reset the guard.
+  // If the most recently fitted calibration model is less than 2 hours old, reject early
+  // with a clear "recently completed" response instead of starting a new run that would
+  // process only the handful of matches added during the restart window and produce a
+  // small, low-quality model.
+  const cooldown = await checkRefitCooldown();
+  if (cooldown.blocked) {
+    const minRemaining = Math.ceil(cooldown.msRemaining / 60_000);
+    res.json({
+      started: false,
+      skipped: true,
+      reason: `Cooldown in effect — last fit ${cooldown.lastFittedAt?.toISOString() ?? "unknown"}, ${minRemaining}min remaining`,
+      lastFittedAt: cooldown.lastFittedAt?.toISOString() ?? null,
+      msRemaining: cooldown.msRemaining,
+    });
     return;
   }
 
   // Route through runCalibrationRefitJob so every attempt is recorded in job_runs and is
   // auditable via GET /evaluation/calibration-refit/job-runs. Pass bypassGradeCountGuard:true
   // so the admin can force a refit even without 500+ new graded predictions; the
-  // restart-resistant cooldown check inside the job still applies.
+  // cooldown check above already blocks post-restart redundant calls.
   calibrationRefitInFlight = true;
   res.json({ started: true });
 
