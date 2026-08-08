@@ -1,0 +1,29 @@
+# Quota Tightening + Task #146 Clean Restate
+
+## Context
+The primary Odds API's real availability window has been confirmed at ~28–31h before match start (far better than the fallback provider's ~12h, which was an artifact of that provider's pipeline, not a market constraint). The 30-min TTL fix deployed earlier only gives ~6 days of headroom during double-tournament load (500 credits / ~84 credits per peak day) — not enough for a full month. This task tightens quota further and cleanly restates Task #146 around the confirmed window, replacing the two prior partial rescopes (T-25/T-15, then ~12h).
+
+## Part 1 — Quota tightening (do this first)
+1. Change the odds cache TTL from 30 minutes to 2 hours.
+2. Change the `/odds` call parameters from `regions=us,uk,eu` to `regions=us` only.
+3. Before deploying: confirm whether restricting to `regions=us` changes match *coverage* (i.e., are there matches — especially lower-tier ATP/WTA events — that only have EU/UK books quoting them, meaning `regions=us` would return empty for those matches even though odds exist elsewhere)? If so, report which tournaments/matches would lose coverage under this restriction before deploying, so this can be decided with real information rather than assumed to be a pure quota win with no coverage cost.
+4. If coverage loss looks meaningful, propose the alternative (e.g., `regions=us,uk` only, dropping just `eu`) and report the credit/coverage tradeoff instead of deploying `regions=us` blind.
+5. Deploy whichever variant is confirmed safe, restart the server, and verify (same method as the last TTL fix — confirm the deployed value in the built dist, not just the source).
+6. Recompute and report projected days-to-exhaustion under the same double-tournament peak-load assumption used before (~28 cycles/day of active-fixture calls).
+
+## Part 2 — Task #146 clean restate
+Discard the prior two partial rescopes (T-25/T-15 framing, then ~12h framing). Write the plan fresh:
+
+1. **Add odds fetch to `POST /api/predictions`.** When a user requests a prediction for a match within the confirmed ~28–31h window, fetch odds (subject to the new TTL/cache) and include them in the ensemble. Outside that window, fall back cleanly with Market Consensus contributing nothing — no error, just an explicit "odds not yet available" status distinct from any provider error.
+2. **Explicit response distinction, three states, not two:** (a) odds included, (b) match outside the available window — odds don't exist yet, this is expected, or (c) provider error/quota exhausted — this is a real failure, not an expected absence. These need to be distinguishable in the API response so a future debugging session doesn't reconstruct today's confusion.
+3. **Quota cost is now a first-class part of the plan, not an afterthought:** every user-facing prediction request for a covered match costs credits (per Part 1's deployed rate). State the expected credit cost per request and confirm it's sustainable at realistic user request volume, not just tournament-fixture volume — user requests are a different (and less predictable) load pattern than the 15-min paper-trade cycle.
+4. **Drop entirely:** the 30→20 min paper-trade lead-time change (never the actual lever, per the earlier finding) and any reference to the debunked T-25/T-15 or superseded ~12h numbers.
+5. **Keep:** the redundant double-fetch cleanup in paper-trade (unaffected by any of this).
+
+## Do NOT
+- Do not deploy `regions=us` if it's confirmed to drop real match coverage without proposing the safer alternative first.
+- Do not implement Task #146 in this same task — write the restated plan and report it; implementation is a separate follow-up once the plan is confirmed.
+
+## Report back
+- Part 1: coverage-loss check result, which regions variant was deployed, verified TTL value, new days-to-exhaustion projection.
+- Part 2: the clean restated Task #146 plan, ready for review before implementation.
