@@ -603,6 +603,7 @@ export async function runSackmannBackfill(
         earliestImportedMatchDate: null,
         latestImportedMatchDate: null,
         dateGapsOver30Days: [],
+        matchesSkippedBadData: 0,
         durationMs: 0,
       } satisfies BackfillSummary,
     };

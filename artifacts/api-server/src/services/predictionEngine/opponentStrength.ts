@@ -131,30 +131,67 @@ export async function buildEloHistoryIndex(identity?: PlayerIdentityIndex): Prom
     .from(matchFeatureSnapshotsTable)
     .where(eq(matchFeatureSnapshotsTable.featureName, "eloOverall"));
 
-  const index: EloHistoryIndex = new Map();
+  // ── Step 1: collect raw snapshot data by the STORED player id (no early canonicalization).
+  // Early canonicalization via canonicalizePlayerId was the source of reference-inequality bugs:
+  // canonicalIdById can be overwritten during identity-index construction (later full-name group
+  // overwrites the Sackmann bridge mapping), so two separate alias groups may read the same raw
+  // id as pointing to different canonicals depending on which ran last.  Storing by raw id and
+  // merging with union-find below avoids this entirely.
+  const rawData = new Map<string, Array<{ t: number; elo: number }>>();
   for (const row of rows) {
-    const key = canonicalizePlayerId(identityIndex, row.playerId, null);
-    const list = index.get(key) ?? [];
+    const list = rawData.get(row.playerId) ?? [];
     list.push({ t: row.sourceTimestamp.getTime(), elo: row.featureValue });
-    index.set(key, list);
+    rawData.set(row.playerId, list);
   }
 
-  // Ensure every participant observed in the complete historical corpus has an explicit
-  // canonical/raw lookup entry, even when no snapshot row exists for that participant yet.
-  for (const canonicalId of rawToCanonical.values()) {
-    if (!index.has(canonicalId)) index.set(canonicalId, []);
-  }
+  // ── Step 2: union-find — every equivalence class of ids that should share one timeline.
+  const ufParent = new Map<string, string>();
+  const ufFind = (x: string): string => {
+    if (!ufParent.has(x)) ufParent.set(x, x);
+    const p = ufParent.get(x)!;
+    if (p !== x) { const root = ufFind(p); ufParent.set(x, root); return root; }
+    return x;
+  };
+  const ufUnion = (a: string, b: string): void => {
+    const ra = ufFind(a); const rb = ufFind(b);
+    if (ra !== rb) ufParent.set(ra, rb);
+  };
+  for (const [rawId, canonicalId] of rawToCanonical) ufUnion(rawId, canonicalId);
   for (const [canonicalId, aliases] of identityIndex.aliasIdsByCanonicalId) {
-    const history = index.get(canonicalId) ?? [];
-    index.set(canonicalId, history);
-    for (const aliasId of aliases) index.set(aliasId, history);
+    for (const aliasId of aliases) ufUnion(canonicalId, aliasId);
   }
+
+  // ── Step 3: build ONE merged, sorted array per component root.
+  // Each root maps to the single array that ALL members of its component will share.
+  const componentData = new Map<string, Array<{ t: number; elo: number }>>();
+  const getComponent = (id: string): Array<{ t: number; elo: number }> => {
+    const root = ufFind(id);
+    if (!componentData.has(root)) componentData.set(root, []);
+    return componentData.get(root)!;
+  };
+  for (const [rawId, data] of rawData) {
+    const arr = getComponent(rawId);
+    for (const entry of data) arr.push(entry);
+  }
+  for (const arr of componentData.values()) arr.sort((a, b) => a.t - b.t);
+
+  // ── Step 4: build the final index — every id points to its component's array (same reference).
+  const index: EloHistoryIndex = new Map();
+  // IDs with snapshot data.
+  for (const rawId of rawData.keys()) index.set(rawId, getComponent(rawId));
+  // IDs seen in historical matches but with no snapshots yet.
   for (const [rawId, canonicalId] of rawToCanonical) {
-    const history = index.get(canonicalId) ?? [];
-    index.set(canonicalId, history);
-    index.set(rawId, history);
+    const arr = getComponent(rawId); // same root as canonicalId
+    index.set(rawId, arr);
+    index.set(canonicalId, arr);
   }
-  for (const list of new Set(index.values())) list.sort((a, b) => a.t - b.t);
+  // Alias groups — applied last so they always win and guarantee reference equality for the
+  // invariant `index.get(aliasId) === index.get(canonicalId)` for every alias group.
+  for (const [canonicalId, aliases] of identityIndex.aliasIdsByCanonicalId) {
+    const arr = getComponent(canonicalId);
+    index.set(canonicalId, arr);
+    for (const aliasId of aliases) index.set(aliasId, arr);
+  }
   const canonicalPlayers = new Set<string>();
   for (const [key, timeline] of index) {
     if (key === canonicalizePlayerId(identityIndex, key)) canonicalPlayers.add(key);

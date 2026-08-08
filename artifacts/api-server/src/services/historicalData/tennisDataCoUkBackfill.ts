@@ -452,7 +452,7 @@ export async function runTennisDataCoUkBackfill(
         matchesSkippedNoTerminalResult: 0, matchesRecomputed: 0, featureRowsInserted: 0,
         byTour: {}, bySurface: {}, byYear: {},
         earliestImportedMatchDate: null, latestImportedMatchDate: null,
-        dateGapsOver30Days: [], durationMs: 0,
+        dateGapsOver30Days: [], matchesSkippedBadData: 0, durationMs: 0,
       } satisfies BackfillSummary,
     };
   }

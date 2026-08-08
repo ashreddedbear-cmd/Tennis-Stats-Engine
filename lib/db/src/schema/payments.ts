@@ -1,4 +1,4 @@
-import { pgTable, serial, text, boolean, jsonb, timestamp, index, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, boolean, jsonb, timestamp, integer, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -23,6 +23,12 @@ export const paymentsAccountTable = pgTable(
     trialEndAt: timestamp("trial_end_at", { withTimezone: true }),
     canceledAt: timestamp("canceled_at", { withTimezone: true }),
     cancelAtPeriodEnd: boolean("cancel_at_period_end").notNull().default(false),
+
+    trialStartAt: timestamp("trial_start_at", { withTimezone: true }),
+    failedPaymentCount: integer("failed_payment_count").notNull().default(0),
+    lastPaymentAt: timestamp("last_payment_at", { withTimezone: true }),
+    lastPaymentAmount: integer("last_payment_amount"),
+    lastPaymentStatus: text("last_payment_status"),
 
     entitlementSnapshot: jsonb("entitlement_snapshot").$type<Record<string, boolean>>().notNull().default({}),
     metadata: jsonb("metadata").$type<Record<string, unknown>>().notNull().default({}),
