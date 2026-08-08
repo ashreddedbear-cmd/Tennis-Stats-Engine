@@ -1,0 +1,23 @@
+I need to know the actual current status of Task #117 (calibration refit for market-odds-active predictions) — read-only check, no code changes, no triggering the refit if it hasn't run yet.
+
+Please check and report on each of these, in order:
+
+1. **Precondition:** How many live predictions have been graded post-activation (cutoffAt > 2026-08-01)? Is it at or above the 200 threshold specified in Task #117's "Done looks like" criteria?
+
+2. **Was the refit actually triggered?** Check for any record of a call to `POST /api/evaluation/calibration/refit` with `evaluationOnly=false` — logs, admin action history, or any audit trail that would show this happened (and when).
+
+3. **Is there a new, active calibration model?** Query for the calibration model row(s) and report:
+   - Does one exist with `holdoutSampleSize > 0`?
+   - Is `is_active=true` on that row, and is it the most recent one (i.e., did it actually replace the old stale curve, or does an older one still show as active)?
+
+4. **Did Section B's log-loss actually improve?** Re-run (read-only, just the measurement) Section B of `auditMarketConsensusAblation.ts` and report the current Δlog-loss. Compare it against the original +0.0205 regression figure. State plainly whether it's now ≤ 0 (the "done" bar) or still positive.
+
+5. **Was the memory file updated?** Check `.agents/memory/market-odds-ablation-results.md` — does it contain post-refit log-loss numbers, or does it still only reflect the pre-refit state?
+
+## Report back with one clear verdict:
+
+- **TASK #117 COMPLETE AND VERIFIED** — refit ran, new calibration model is active, Section B log-loss is ≤ 0, memory file updated.
+- **TASK #117 PARTIALLY DONE** — say exactly which of the 5 steps above happened and which didn't.
+- **TASK #117 NOT STARTED / BLOCKED ON PRECONDITION** — if the 200-prediction threshold hasn't been met yet, say how many exist now and how far off the threshold is.
+
+Do not trigger the refit yourself as part of this check — I want to know the current state first, then decide separately whether to kick it off.
