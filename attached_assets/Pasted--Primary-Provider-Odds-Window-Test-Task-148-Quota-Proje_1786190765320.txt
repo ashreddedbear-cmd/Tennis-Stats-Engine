@@ -1,0 +1,26 @@
+# Primary Provider Odds Window Test (Task #148) + Quota Projection Check
+
+## Context
+The Odds API key was just swapped (fresh key, old one burned at 507/500). The cache TTL fix (5min → 30min) is deployed and verified, giving roughly a 2x reduction in call frequency. Before using this key for anything else, two things need to happen: confirm the fix gives enough headroom for real conditions, and use the fresh key to find the actual odds-availability window for the primary provider (this was never tested — only the fallback, Odds-API.io, was tested earlier, and found a ~12h ceiling capped by that test's 100-event response limit).
+
+## Part 1 — Quota exhaustion projection (read-only, do this first)
+1. Using this week's actual tournament schedule (overlapping ATP Montreal + WTA Toronto, per recent activity) as a realistic load scenario, project how many days the fresh key would last at the new 2x-improved call rate before hitting 500/month again.
+2. State this plainly: at current real-world tournament density, does the TTL fix alone give enough headroom to last a full month, or would the key still exhaust mid-month under similar conditions?
+3. If projected exhaustion is still under ~20 days, flag it — don't proceed to heavy testing in Part 2 without confirming the test calls themselves won't meaningfully contribute to a repeat burn.
+
+## Part 2 — Primary provider window test
+1. Using the fresh key, call The Odds API directly (not through the app's normal pipeline — direct/isolated call) for specific real matches at known lead times: pick matches roughly 12h, 24h, and 48h out from right now if available on the current schedule.
+2. Report exactly what comes back for each: real odds data, empty, or error — same format as the earlier fallback-provider test.
+3. If odds ARE returned at 24h or 48h out, that's a materially different (better) answer than the fallback provider's ~12h ceiling — note this clearly, since it would change how Task #146 should be scoped.
+4. If odds are NOT available that far out even from the primary provider, try to narrow down the actual boundary (e.g., test at 18h, 15h, etc.) the same way the fallback's boundary was approximated.
+5. Use as few calls as reasonably possible to get a confident answer — this is a real quota, not unlimited, even after the TTL fix.
+
+## Do NOT
+- Do not use more test calls than necessary to establish the window.
+- Do not proceed with Task #146 scoping decisions until this comes back.
+- Do not make any further code changes as part of this — this is read-only testing.
+
+## Report back
+- Part 1: days-to-exhaustion projection under real tournament load, and whether the TTL fix alone is sufficient or needs a follow-up (further TTL increase, EVENTS_TTL_MS fix, etc.)
+- Part 2: primary provider's real odds-availability window, with specific lead times tested and results.
+- Whether the primary and fallback windows differ, and what that means for Task #146's final scope.
