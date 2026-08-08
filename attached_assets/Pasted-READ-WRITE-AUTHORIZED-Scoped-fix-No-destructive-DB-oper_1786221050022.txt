@@ -1,0 +1,60 @@
+READ+WRITE AUTHORIZED. Scoped fix. No destructive DB operations, no schema drops, no unrelated changes.
+
+REFERENCE CASE: WTA Toronto, Kostyuk vs Swiatek. Raw signals (Elo, Serve/Return, Recent Form, Market Consensus) all favored Swiatek at roughly 63%. Isotonic calibration reversed this to ~84% Kostyuk. The WTA-Hard Specialist Model hit its weight ceiling of 0.85, leaving all four disagreeing raw signals fighting over the remaining 15% combined. Confidence engine passed this as HIGH CONFIDENCE because margin was 14 points and Specialist/General "agreed" — but that agreement only existed because both were fed the same already-flipped calibrated number. Swiatek won the actual match.
+
+THE PROBLEM, IN TWO PARTS:
+
+PART A — SPECIALIST WEIGHT CEILING IS TOO PERMISSIVE
+The current formula allows a specialist model to reach 0.85 effective weight, which in practice silences the combined voice of every other signal when they disagree.
+
+PART B — CALIBRATION HAS NO SANITY CHECK AND MAY BE OVERFIT
+The isotonic calibration is applied to the raw ensemble with zero safeguard. Given how large this reversal was (63% one way to 84% the other), this pattern should be treated as a signal of likely overfitting until proven otherwise, not accepted as gospel.
+
+STEP 0 — EMPIRICAL BACKTEST (DO THIS FIRST, BEFORE ITEM 1)
+Before choosing any new specialist weight ceiling or any new override rule, query the historical WTA-Hard match data:
+
+For every past graded WTA-Hard match where all four raw signals unanimously favored the same player AND the specialist favored the other player — record which side actually won.
+
+Report:
+- Total number of such true-disagreement cases
+- Win rate for the specialist's pick in those cases
+- Win rate for the raw-consensus pick in those cases
+- If fewer than ~30 such cases exist, say so explicitly and treat the result as directionally suggestive only — do not let a small sample drive a hard rule, for the same reason the calibration reversal itself is suspect.
+
+This result determines how aggressive items 1 and its addendum below should actually be. Do not skip this — shipping a new hard-coded rule without checking it against the 9,408 matches you already have would repeat the exact mistake we're trying to fix.
+
+REQUIRED CHANGES:
+
+1. LOWER THE SPECIALIST WEIGHT CEILING — INFORMED BY STEP 0
+   Reduce the maximum effective weight from 0.85:
+   - If STEP 0 is inconclusive (small sample, or win rates are close), use 0.65 as the default.
+   - If STEP 0 shows raw consensus winning decisively, go lower than 0.65 and report the value chosen and why.
+   - If STEP 0 shows the specialist winning decisively despite equal/worse raw pick accuracy, do NOT silently lower the ceiling anyway — report this conflict explicitly and flag it for human review instead.
+   Report the exact line/file where this constant lives and confirm the change made.
+
+   LOG-LOSS IS NOT PICK ACCURACY: log-loss measures confidence honesty, not winner-pick accuracy. In the reference case the WTA-Hard specialist and General model had IDENTICAL pick accuracy (74.4%) — the specialist earned its weight entirely from calibration quality. The formula must not conflate these without evidence calibration quality actually predicts who wins in disagreement cases — which is what STEP 0 tests.
+   - If STEP 0 shows raw consensus outperforms (or is statistically indistinguishable from) the specialist: apply this rule — a specialist must demonstrate BOTH good calibration AND better-than-general pick accuracy to earn elevated influence over a unanimous vote.
+   - If STEP 0 shows the specialist decisively outperforming raw consensus: do not apply this rule as-is. Report the finding plainly — it would mean log-loss superiority can legitimately override consensus, and that needs a human decision, not an automatic rule.
+   Report whether the current formula has any separate accounting for pick accuracy vs. calibration quality — let STEP 0's results, not an assumption, determine whether this is a real second root cause.
+
+2. ADD A CALIBRATION REVERSAL SANITY CHECK
+   Compare the pre-calibration favored player against the post-calibration favored player before finalizing any prediction.
+   - If they differ by a large margin (specify and report the exact threshold used), flag the prediction CALIBRATION_OVERRIDE.
+   - A CALIBRATION_OVERRIDE prediction can never be graded higher than MODERATE confidence, regardless of margin or model agreement.
+
+3. FIX THE "MODEL AGREEMENT" CHECK TO NOT BE SELF-CONFIRMING
+   Add a second agreement check comparing RAW signals against the FINAL calibrated pick. If a majority of raw signals disagree with the final pick, that must also block HIGH CONFIDENCE, independent of item 2.
+
+4. AUDIT THE CALIBRATION TRAINING DATA FOR OVERFITTING
+   For the WTA-Hard segment, report: how many graded outcomes the calibration was fit on, whether removing an outlier match/cluster would eliminate this reversal, and whether any regularization/smoothing exists. If the sample backing this reversal is small, add a minimum-sample floor before calibration can reverse a raw ensemble's direction at all.
+
+5. RECOMMEND CROSS-VALIDATION FIX IF OVERFITTING IS CONFIRMED
+   If item 4 confirms overfitting, propose — but do not apply without approval — a regularized walk-forward refit of the calibration mapping.
+
+DO NOT:
+- Silently keep the 0.85 ceiling because the formula technically allows it.
+- Suppress calibration's ability to ever override raw signals — real reversals should still be allowed, just capped at MODERATE and flagged.
+- Change how individual raw signals (Elo, Serve/Return, Recent Form, Market Consensus) are calculated.
+- Apply STEP 0's conclusions if the sample size is too small to support them — say so instead of forcing a rule either way.
+
+When done, report: file by file what changed, the full STEP 0 results (sample size + both win rates), the exact new ceiling value and why, whether the dual-criteria rule was applied or flagged for review, the calibration-reversal threshold chosen, the sample size behind the Kostyuk/Swiatek pattern, and a re-run of this exact matchup confirming it grades no higher than MODERATE with CALIBRATION_OVERRIDE visible at the top level.
