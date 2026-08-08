@@ -789,6 +789,26 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     modelAgreement = worseAgreement(modelAgreement, preSimulatorVsSimulatorDisagreement.modelAgreement);
   }
 
+  // ── Tie-break gate: HighDisagreement-only (auditTieBreakBaseline.ts, 2026-08-08) ───────────────
+  // The tie-break disclosure is only warranted when the ensemble is genuinely split across models
+  // (HighDisagreement). For Strong, Moderate, and Mixed predictions that happen to land within
+  // TIE_BAND of 50%, the models still agree enough that the prediction should resolve via normal
+  // confidence tiers (LOW_CONFIDENCE at narrow margins) rather than being forced to
+  // INSUFFICIENT_EDGE.
+  //
+  // Audit findings (test segment, n=83,738):
+  //   - Tie-breaker fires on 28.2% of rows, costs −13.34pp overall (66.84% → 53.50%)
+  //   - Strong:   −11.30pp  |  Moderate: −17.03pp  |  Mixed: −20.11pp
+  //   - HighDisagreement: +1.45pp (within noise — the only category where it is not harmful)
+  //
+  // The gate does NOT change the probability: adjustedProbability === rawEnsembleProbability
+  // always (the cascade no longer nudges). It only controls the `applied` flag, which is what
+  // forces INSUFFICIENT_EDGE in computeRecommendation and `tieBreakerNote` in the UI.
+  const tieBreakerGated: typeof tieBreaker =
+    tieBreaker.applied && modelAgreement !== "HighDisagreement"
+      ? { ...tieBreaker, applied: false, note: null, decidingStep: null }
+      : tieBreaker;
+
   const disagreementNote = buildDisagreementNote(governingDisagreement, input.player1.name, input.player2.name);
   const matchupCloseness = computeMatchupCloseness(calibratedProbability);
 
@@ -873,7 +893,7 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
   const recentFormFavorsP1 = voteFavorsPlayer1(featureModels, "Recent Form");
   const coreSignalsAlign = surfaceEloFavorsP1 === serveReturnFavorsP1 && serveReturnFavorsP1 === recentFormFavorsP1;
 
-  const recommendation = computeRecommendation(calibratedProbability, dataQuality, dataQualityLabel, modelAgreement, tieBreaker.applied, coreSignalsAlign, tieBreaker.dataIncomplete);
+  const recommendation = computeRecommendation(calibratedProbability, dataQuality, dataQualityLabel, modelAgreement, tieBreakerGated.applied, coreSignalsAlign, tieBreakerGated.dataIncomplete);
 
   const favorsPlayer1 = calibratedProbability >= 50;
   const predictedWinnerId = favorsPlayer1 ? input.player1.id : input.player2.id;
@@ -1024,7 +1044,7 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     dataQuality,
     dataQualityLabel,
     simulationPlayer1WinProbability: simulation.player1WinProbability,
-    tieBreakerApplied: tieBreaker.applied,
+    tieBreakerApplied: tieBreakerGated.applied,
     coreSignalsAlign,
   });
   const isEliteTier = consistencyViolations.length === 0 && eliteTierBeforeGuard;
@@ -1068,9 +1088,9 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     simulatorNote,
     modelConflict,
     modelConflictNote,
-    tieBreakerApplied: tieBreaker.applied,
-    tieBreakerDecidingStep: tieBreaker.decidingStep,
-    tieBreakerNote: tieBreaker.note,
+    tieBreakerApplied: tieBreakerGated.applied,
+    tieBreakerDecidingStep: tieBreakerGated.decidingStep,
+    tieBreakerNote: tieBreakerGated.note,
     defaultedInputs,
     isEliteTier,
     eliteTierReason,
@@ -1149,7 +1169,7 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
   const decisionTrace: DecisionTrace = {
     pipeline: {
       rawEnsemble: rawEnsembleProbability,
-      tieBreakerApplied: tieBreaker.applied,
+      tieBreakerApplied: tieBreakerGated.applied,
       afterTieBreaker: ensembleProbability,
       calibrationMethod,
       fallbackShrinkFactor,
@@ -1164,7 +1184,7 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
       afterSimulator: calibratedProbability,
     },
     modules: moduleTraces,
-    recommendation: buildRecommendationTrace(calibratedProbability, dataQuality, dataQualityLabel, modelAgreement, recommendation, tieBreaker.applied, coreSignalsAlign),
+    recommendation: buildRecommendationTrace(calibratedProbability, dataQuality, dataQualityLabel, modelAgreement, recommendation, tieBreakerGated.applied, coreSignalsAlign),
     eliteTier: {
       isElite: isEliteTier,
       gates: {

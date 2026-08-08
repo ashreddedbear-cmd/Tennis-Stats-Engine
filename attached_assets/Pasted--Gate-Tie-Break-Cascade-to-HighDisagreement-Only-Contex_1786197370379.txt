@@ -1,0 +1,40 @@
+# Gate Tie-Break Cascade to HighDisagreement Only
+
+## Context
+`auditTieBreakBaseline.ts` found the tie-break cascade is actively harmful across the board, not accuracy-neutral as previously framed (8A/8I closure described it as "a UX/trust fix, kept for that reason, not an accuracy fix"):
+
+| Agreement level | No tie-break | Tie-break fired | Δ |
+|---|---|---|---|
+| HighDisagreement | 50.91% | 52.36% | +1.45pp (within noise) |
+| Mixed | 87.41% | 67.30% | −20.11pp |
+| Moderate | 73.44% | 56.41% | −17.03pp |
+| Strong | 67.59% | 56.29% | −11.30pp |
+| **Overall** | **66.84%** | **53.50%** | **−13.34pp** |
+
+The cascade currently fires on 28.2% of test-segment rows. It should only fire where it has any plausible benefit: HighDisagreement predictions, where the ensemble is genuinely split and the marginal (within-noise) gain doesn't hurt. Everywhere else, it should be disabled — those predictions should fall through to whatever the model's ordinary resolution is without invoking the cascade.
+
+## Instructions
+
+1. **Read-only first:** locate the tie-break cascade logic (`decidingStep`/`tieBreakerApplied` path — likely in the prediction engine near where `modelAgreement` is computed) and confirm exactly where/how it currently decides whether to fire. Confirm what "not firing" looks like for a prediction that would otherwise have triggered it — i.e., what does the engine fall back to (presumably its ordinary confidence-based winner selection) when the cascade doesn't run.
+
+2. **Implement the gate:** the tie-break cascade should only be permitted to fire when `modelAgreement === "HighDisagreement"`. For all other agreement levels (Strong, Moderate, Mixed), the cascade must not run — the prediction should resolve via its normal path instead.
+
+3. **Confirm this doesn't silently change what gets recommended vs just how it's computed** — i.e., for the ~71.8% of previously-tie-broken rows that will now skip the cascade, make sure there's a sane, already-existing fallback resolution (not a crash or an undefined winner). Report what that fallback actually is.
+
+4. Update `tieBreakerApplied`/`decidingStep` (or equivalent) so it's still an accurate reflection of whether the cascade genuinely ran, post-gate — don't leave it always-true or stale.
+
+5. Update the relevant doc/spec (8A/8I in the master ticket doc) — the "UX/trust fix, not accuracy fix, kept as-is" framing is now wrong and should be corrected: note the harmful-outside-HighDisagreement finding, the gate that was added, and reference `auditTieBreakBaseline.ts`'s results.
+
+## Testing
+- Run the existing test suite; add/update tests confirming: (a) tie-break fires and behaves as before for HighDisagreement predictions, (b) tie-break does NOT fire for Strong/Moderate/Mixed predictions — confirm via a test case that would previously have triggered it.
+- Re-run `auditTieBreakBaseline.ts` against a sample of NEW predictions made after this gate is deployed (existing historical rows won't reflect the fix) — or at minimum, confirm via code path that the gate is correctly scoped, since a live re-audit will need fresh post-deploy data to be meaningful.
+
+## Do NOT
+- Do not alter or backfill any existing prediction rows — this only changes behavior for predictions made going forward.
+- Do not remove the cascade logic itself — only gate when it's permitted to fire.
+
+## Report back
+- Confirmation of where the gate was added and exactly how HighDisagreement-only scoping was implemented.
+- Confirmation of the fallback behavior for previously-tie-broken, now-skipped predictions.
+- Test suite results.
+- Doc/spec update confirmation.

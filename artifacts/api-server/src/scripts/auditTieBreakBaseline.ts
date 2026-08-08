@@ -145,7 +145,7 @@ async function main() {
       rows.map((r) => [
         r.tie_breaker_applied ? "Applied (tie-breaker fired)" : "Not applied (normal ensemble)",
         parseInt(r.n, 10).toLocaleString(),
-        fmt(r.accuracy, true),
+        fmt(parseFloat(r.accuracy), true),
       ]),
     );
     console.log();

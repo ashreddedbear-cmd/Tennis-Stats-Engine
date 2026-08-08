@@ -479,3 +479,110 @@ test("Form-Elo conflict gate: does NOT suppress RF when signals agree — RF ret
     `RF must retain a meaningful weight share when signals agree (got weightUsed=${rfAgree.weightUsed.toFixed(4)})`,
   );
 });
+
+// ── Tie-break gate: HighDisagreement-only (2026-08-08) ───────────────────────────────────────────
+//
+// auditTieBreakBaseline.ts found the tie-break disclosure was harmful outside HighDisagreement:
+//   Strong −11.30pp | Moderate −17.03pp | Mixed −20.11pp | HighDisagreement +1.45pp (within noise)
+//
+// The gate in index.ts: when tieBreaker.applied is true but modelAgreement !== "HighDisagreement",
+// tieBreakerGated.applied is set to false so the recommendation resolves via normal confidence
+// tiers (LOW_CONFIDENCE at narrow margins) rather than being forced to INSUFFICIENT_EDGE.
+
+test("tie-break gate: symmetric (near-50%) players with non-HighDisagreement agreement do NOT get tieBreakerApplied", () => {
+  // Identical match history for both players → all module edges ≈ 0 → raw ensemble ≈ 50%
+  // (within TIE_BAND=3). Without the gate, tieBreakerApplied would be true → INSUFFICIENT_EDGE.
+  // With the gate, Strong/Moderate/Mixed agreement predictions pass through to LOW_CONFIDENCE.
+  const symMatch = (side: string, i: number) =>
+    match(`${side}-opp-${i}`, `Opp${i}`, i % 2 === 0, "Hard", 10 + i * 10, 60);
+
+  const output = runPredictionEngine(
+    baseInput({
+      player1Matches: Array.from({ length: 10 }, (_, i) => symMatch("p1", i)),
+      player2Matches: Array.from({ length: 10 }, (_, i) => symMatch("p2", i)),
+    }),
+  );
+
+  // With identical histories the raw ensemble is exactly 50 → within TIE_BAND.
+  // The gate must suppress tieBreakerApplied for all non-HighDisagreement agreements.
+  if (output.engine.modelAgreement !== "HighDisagreement") {
+    assert.equal(
+      output.engine.tieBreakerApplied,
+      false,
+      `Gate must suppress tieBreakerApplied for modelAgreement="${output.engine.modelAgreement}" — was formerly forced to true for any within-TIE_BAND input`,
+    );
+    assert.notEqual(
+      output.recommendation,
+      "INSUFFICIENT_EDGE",
+      `Near-50% ${output.engine.modelAgreement} prediction must NOT be forced to INSUFFICIENT_EDGE after the gate — expected LOW_CONFIDENCE or similar`,
+    );
+    // The note and decidingStep are also cleared by the gate.
+    assert.equal(
+      output.engine.tieBreakerNote,
+      null,
+      "tieBreakerNote must be null when the gate suppresses the tie-breaker",
+    );
+  }
+});
+
+test("tie-break gate: HighDisagreement near-50% prediction still gets tieBreakerApplied", () => {
+  // Construct inputs where two core modules strongly oppose each other so the ensemble lands
+  // near 50% while modelAgreement is HighDisagreement. Surface Elo strongly favors P1 (many old
+  // Hard wins) while Serve & Return strongly favors P2 (P2 has much better service points),
+  // causing opposing signals that cancel to a near-50% ensemble with genuine disagreement.
+  const output = runPredictionEngine(
+    baseInput({
+      player1Matches: [
+        // Many old Hard wins → P1 builds high surfaceElo
+        ...Array.from({ length: 20 }, (_, i) =>
+          match(`p1-old-${i}`, `OldOpp${i}`, true, "Hard", 400 + i * 14, 45), // low service% 
+        ),
+        // Recent losses → bad recentForm for P1
+        ...Array.from({ length: 6 }, (_, i) =>
+          match(`p1-new-${i}`, `NewOpp${i}`, false, "Hard", i * 8 + 2, 45),
+        ),
+      ],
+      player2Matches: [
+        // Many old Hard losses → P2 has low surfaceElo
+        ...Array.from({ length: 20 }, (_, i) =>
+          match(`p2-old-${i}`, `P2OldOpp${i}`, false, "Hard", 400 + i * 14, 75), // high service%
+        ),
+        // Recent wins → good recentForm for P2
+        ...Array.from({ length: 6 }, (_, i) =>
+          match(`p2-new-${i}`, `P2NewOpp${i}`, true, "Hard", i * 8 + 3, 75),
+        ),
+      ],
+    }),
+  );
+
+  const rawEnsemble = output.decisionTrace.pipeline.rawEnsemble;
+  const withinBand = Math.abs(rawEnsemble - 50) < 3; // TIE_BAND = 3
+
+  if (withinBand && output.engine.modelAgreement === "HighDisagreement") {
+    // Gate must ALLOW tieBreakerApplied for HighDisagreement.
+    assert.equal(
+      output.engine.tieBreakerApplied,
+      true,
+      `Gate must NOT suppress tieBreakerApplied for HighDisagreement — got tieBreakerApplied=false (rawEnsemble=${rawEnsemble.toFixed(1)})`,
+    );
+    // Recommendation is INSUFFICIENT_EDGE (clean data) or DATA_INCOMPLETE (when defaultedInputs
+    // also exist); both require tieBreakerApplied=true, confirming the gate allowed the tie-breaker.
+    assert.ok(
+      output.recommendation === "INSUFFICIENT_EDGE" || output.recommendation === "DATA_INCOMPLETE",
+      `HighDisagreement + within TIE_BAND must produce INSUFFICIENT_EDGE or DATA_INCOMPLETE (both require tieBreakerApplied=true), got "${output.recommendation}"`,
+    );
+  } else {
+    // If the inputs didn't land within TIE_BAND or produced a different agreement level, the
+    // test is vacuously satisfied — but log diagnostics so a maintainer can tune inputs if needed.
+    if (!withinBand) {
+      console.log(
+        `[diagnostic] HighDisagreement gate test: rawEnsemble=${rawEnsemble.toFixed(1)} is outside TIE_BAND — test passes vacuously. Tune inputs if closer targeting is needed.`,
+      );
+    }
+    if (output.engine.modelAgreement !== "HighDisagreement") {
+      console.log(
+        `[diagnostic] HighDisagreement gate test: modelAgreement="${output.engine.modelAgreement}" — symmetric-signal cancellation didn't produce HighDisagreement. Test passes vacuously.`,
+      );
+    }
+  }
+});

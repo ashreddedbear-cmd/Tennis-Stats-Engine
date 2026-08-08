@@ -164,10 +164,58 @@ in a single-fold run; the directional improvement is clear but the exact attribu
 
 ---
 
-## 8. Regression guard
+## 8. Follow-up gate: HighDisagreement-only (2026-08-08)
+
+**Audit:** `auditTieBreakBaseline.ts` — same-cohort test-segment analysis, n=83,738 rows.
+
+After the cascade removal (§1), `tieBreakerApplied: true` still fired for any within-TIE_BAND
+raw ensemble, regardless of model agreement level. This was originally framed as a "UX/trust fix,
+not an accuracy fix" — honest disclosure was worth the INSUFFICIENT_EDGE recommendation even if
+it didn't help accuracy. The full-corpus audit disproved this framing:
+
+| Agreement level | No tie-break | Tie-break fired | Δ |
+|---|---|---|---|
+| HighDisagreement | 50.91% | 52.36% | **+1.45pp** (within noise) |
+| Mixed | 87.41% | 67.30% | **−20.11pp** |
+| Moderate | 73.44% | 56.41% | **−17.03pp** |
+| Strong | 67.59% | 56.29% | **−11.30pp** |
+| **Overall** | **66.84%** | **53.50%** | **−13.34pp** |
+
+The tie-break was firing on 28.2% of test-segment rows and imposing a −13.34pp accuracy cost. Only
+HighDisagreement showed any benefit (+1.45pp, within noise) — the only category where the "models
+are genuinely split" framing is accurate.
+
+**Fix (gate in `index.ts`):** After `modelAgreement` is finalized (post-specialist and
+post-simulator), a `tieBreakerGated` override sets `applied = false` when
+`modelAgreement !== "HighDisagreement"`. This does NOT change the probability
+(`adjustedProbability === rawEnsembleProbability` always — the cascade has been removed). It only
+changes the `applied` flag so Strong/Moderate/Mixed near-50% predictions resolve via normal
+confidence tiers (`LOW_CONFIDENCE` at narrow margins) instead of being forced to
+`INSUFFICIENT_EDGE`.
+
+**Fallback for previously-gated rows:**
+- Strong + margin < 3pp: `LOW_CONFIDENCE` (was `INSUFFICIENT_EDGE`)
+- Moderate + margin < 3pp: `LOW_CONFIDENCE` (was `INSUFFICIENT_EDGE`)
+- Mixed + margin < 8pp: `INSUFFICIENT_EDGE` via recommendation rule r2 (unchanged — rule r2
+  independently catches Mixed+narrow-margin regardless of the tie-break flag)
+
+**Tests added:** `index.test.ts` — two new tests:
+1. Symmetric inputs (near-50%, non-HighDisagreement) → `tieBreakerApplied = false`, no
+   `INSUFFICIENT_EDGE`, `tieBreakerNote = null`.
+2. Opposing-signal inputs (surfaceElo vs recentForm conflict) → IF the ensemble lands within
+   TIE_BAND AND produces HighDisagreement, `tieBreakerApplied = true` and `INSUFFICIENT_EDGE`.
+
+**Consistency with prior finding (Task 8A):** 8A measured tie-break accuracy at 53.28% on
+paper_trade_shadow. The full-corpus historical test confirmed 53.50% — within 0.22pp, consistent
+across different run_kinds. The "UX/trust fix, kept as-is" framing in 8A is **superseded** by
+this gate; refer to `auditTieBreakBaseline.ts` for reproducible SQL.
+
+---
+
+## 9. Regression guard
 
 `artifacts/api-server/src/services/predictionEngine/tieBreakers.test.ts` — already in place.
 Asserts `adjustedProbability === rawInput` and `decidingStep === null` for all within-band
 inputs. Will fail immediately if a future change re-introduces directional nudging.
 
-No code changes are required by this task beyond the audit doc itself.
+No code changes are required by this task beyond the audit doc itself (pre-§8 scope).
