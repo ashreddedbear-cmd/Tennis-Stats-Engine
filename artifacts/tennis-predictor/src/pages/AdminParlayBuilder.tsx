@@ -2001,14 +2001,29 @@ export default function AdminParlayBuilder() {
       const lookupLegs = legs.map(leg => ({
         key: leg.key, player1Id: leg.player1Id, player2Id: leg.player2Id,
       }))
+      // Log IDs so the browser console shows exactly what values are sent to the predictions
+      // lookup — useful for diagnosing agreement mismatches or ID format issues.
+      console.log("[engine-agreement] lookup legs:", lookupLegs.map(l => `${l.key}: ${l.player1Id ?? "null"} | ${l.player2Id ?? "null"}`))
       const response = await fetch(api("/api/admin/parlay/engine-agreement"), {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ legs: lookupLegs }),
       })
-      const payload = await response.json()
-      if (!response.ok) throw new Error(payload.error ?? "Engine agreement lookup failed")
+      // Read as text first so a non-JSON body (e.g. HTML from an expired session redirect)
+      // doesn't throw SyntaxError before we can surface a readable error message.
+      const rawText = await response.text()
+      if (!response.ok) {
+        let msg = rawText
+        try { msg = (JSON.parse(rawText) as { error?: string }).error ?? rawText } catch { /* keep raw text */ }
+        throw new Error(msg || "Engine agreement lookup failed")
+      }
+      let payload: { predictions?: Array<{ key: string; predictedWinnerId: string | null }> }
+      try {
+        payload = JSON.parse(rawText) as typeof payload
+      } catch {
+        throw new Error(`Server returned non-JSON (status ${response.status}): ${rawText.slice(0, 200)}`)
+      }
       const agreeingKeys = new Set<string>()
       for (const prediction of payload.predictions ?? []) {
         const leg = legs.find(candidate => candidate.key === prediction.key)

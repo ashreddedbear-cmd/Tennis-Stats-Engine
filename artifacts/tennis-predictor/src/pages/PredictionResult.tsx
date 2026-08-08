@@ -12,7 +12,7 @@ import { deriveMonteCarloHeadline } from "@/lib/monteCarloHeadline"
 import { buildPredictionCopyText } from "@/lib/predictionCopyText"
 import { getRecommendationLabel } from "@/lib/recommendationLabels"
 import { Activity, ShieldAlert, CheckCircle2, XCircle, TrendingUp, AlertTriangle, ChevronRight, Dna, ActivitySquare, Database, Vote, Info, Dices, Crown, Scale, Zap, GitBranch, ChevronDown, Copy, Bookmark, BookmarkCheck, FolderOpen } from "lucide-react"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip"
 import { UPSET_RISK_LABEL, UPSET_RISK_SHORT, UPSET_RISK_TEXT_CLASS, upsetRiskBadgeClasses } from "@/lib/upsetRiskColors"
@@ -186,8 +186,25 @@ export default function PredictionResultPage() {
   const { toast } = useToast()
   const { isSignedIn } = useAuth()
   const [saved, setSaved] = useState(false)
+  const [savedCardId, setSavedCardId] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
   const [methodologyOpen, setMethodologyOpen] = useState(false)
+
+  // On mount (or when prediction changes), check whether this card is already saved.
+  // Initialises `saved` and `savedCardId` so the toggle starts in the correct state.
+  useEffect(() => {
+    if (!prediction?.id) return
+    let cancelled = false
+    fetch(api("/api/saved-cards"), { credentials: "include" })
+      .then(r => r.ok ? (r.json() as Promise<{ cards: Array<{ id: number; predictionId: number }> }>) : null)
+      .then(data => {
+        if (cancelled || !data?.cards) return
+        const entry = data.cards.find(c => c.predictionId === prediction.id)
+        if (entry) { setSaved(true); setSavedCardId(entry.id) }
+      })
+      .catch(() => { /* non-critical — defaults to unsaved */ })
+    return () => { cancelled = true }
+  }, [prediction?.id])
 
   const recordOutcome = useRecordPredictionOutcome()
 
@@ -247,18 +264,35 @@ export default function PredictionResultPage() {
     if (!prediction || saving) return
     setSaving(true)
     try {
-      const res = await fetch(api("/api/saved-cards"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ predictionId: prediction.id }),
-      })
-      if (res.ok) {
-        const data = await res.json() as { alreadySaved?: boolean }
-        setSaved(true)
-        toast({ title: data.alreadySaved ? "Already in your Cards folder" : "✅ Saved to Cards folder" })
+      if (saved && savedCardId !== null) {
+        // Second tap → unsave
+        const res = await fetch(api(`/api/saved-cards/${savedCardId}`), {
+          method: "DELETE",
+          credentials: "include",
+        })
+        if (res.ok) {
+          setSaved(false)
+          setSavedCardId(null)
+          toast({ title: "Removed from Cards folder" })
+        } else {
+          toast({ title: "Could not remove — try again", variant: "destructive" })
+        }
       } else {
-        toast({ title: "Could not save — try again", variant: "destructive" })
+        // First tap → save
+        const res = await fetch(api("/api/saved-cards"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ predictionId: prediction.id }),
+        })
+        if (res.ok) {
+          const data = await res.json() as { id: number; alreadySaved?: boolean }
+          setSaved(true)
+          setSavedCardId(data.id)
+          toast({ title: data.alreadySaved ? "Already in your Cards folder" : "✅ Saved to Cards folder" })
+        } else {
+          toast({ title: "Could not save — try again", variant: "destructive" })
+        }
       }
     } catch {
       toast({ title: "Network error — try again", variant: "destructive" })
@@ -335,7 +369,7 @@ export default function PredictionResultPage() {
               }`}
               onClick={handleSaveCard}
               disabled={saving}
-              title="Save to your Cards folder"
+              title={saved ? "Remove from Cards folder" : "Save to your Cards folder"}
             >
               {saving ? (
                 <Bookmark className="w-3.5 h-3.5 animate-pulse" />
@@ -344,7 +378,7 @@ export default function PredictionResultPage() {
               ) : (
                 <FolderOpen className="w-3.5 h-3.5" />
               )}
-              {saved ? "SAVED" : "SAVE"}
+              {saving ? (saved ? "Removing…" : "Saving…") : saved ? "SAVED" : "SAVE"}
             </Button>
           </div>
         )}

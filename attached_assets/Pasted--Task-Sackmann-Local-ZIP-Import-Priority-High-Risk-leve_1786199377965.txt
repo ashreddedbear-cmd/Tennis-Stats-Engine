@@ -1,0 +1,241 @@
+# Task: Sackmann Local ZIP Import
+**Priority:** High  
+**Risk level:** Low — purely additive, zero changes to existing code paths
+
+---
+
+## Background
+
+A local ZIP file (`download-all.zip`) contains the full Jeff Sackmann tennis dataset
+(1967–2026, ATP + WTA + Challenger + Qualifying), structured identically to the
+JeffSackmann GitHub repos the existing `sackmannBackfill.ts` already knows how to parse.
+
+The existing backfill fetches CSVs from remote URLs only. This task adds a parallel
+local-file path so the ZIP can be used as an authoritative data source — including
+~1,894 ATP 2026 rows, ~1,750 WTA 2026 rows, and ~4,655 Challenger 2026 rows that
+GitHub may not have yet, plus ongoing-tournament files updated as recently as
+2026-08-04 (Canada Masters, Toronto WTA in progress at file-creation time).
+
+---
+
+## File inventory (from direct inspection of the ZIP)
+
+| Pattern | Count | Example |
+|---|---|---|
+| `{YYYY}.csv` | 60 | ATP main draw 1967–2026 |
+| `{YYYY}_wta.csv` | 37 | WTA main draw 1990–2026 |
+| `{YYYY}_challenger.csv` | 49 | Challenger 1978–2026 |
+| `atp_quali/{YYYY}_atp_quali.csv` | 20 | ATP qualifying 2007–2026 |
+| `ATP_Database.csv` | 1 | 12,900 player profiles |
+| `atp_matches_amateur.csv` | 1 | Pre-Open Era amateur matches |
+| `ongoing_tourneys.csv` | 1 | ATP in-progress matches (Canada Masters etc.) |
+| `challenger_ongoing_tourneys.csv` | 1 | Challenger in-progress matches |
+| `wta_ongoing_tourneys.csv` | 1 | WTA in-progress matches (Toronto etc.) |
+
+**Confirmed CSV schema** (identical across all match files):  
+`tourney_id, tourney_name, surface, draw_size, tourney_level, indoor, tourney_date,
+match_num, winner_id, winner_seed, winner_entry, winner_name, winner_hand, winner_ht,
+winner_ioc, winner_age, winner_rank, winner_rank_points, loser_id, loser_seed,
+loser_entry, loser_name, loser_hand, loser_ht, loser_ioc, loser_age, loser_rank,
+loser_rank_points, score, best_of, round, minutes, w_ace, w_df, w_svpt, w_1stIn,
+w_1stWon, w_2ndWon, w_SvGms, w_bpSaved, w_bpFaced, l_ace, l_df, l_svpt, l_1stIn,
+l_1stWon, l_2ndWon, l_2ndWon, l_SvGms, l_bpSaved, l_bpFaced`
+
+**Unique match ID** = `tourney_id + "_" + match_num` (e.g. `"2024-339_1"`).  
+This composite key is stable and unique within the dataset.
+
+**Player profile schema** (`ATP_Database.csv`):  
+`id, player, atpname, birthdate, weight, height, turnedpro, birthplace, coaches,
+hand, backhand, ioc`
+
+---
+
+## What to build
+
+### Step 0 — Extract the ZIP (one-time, manual in Replit shell)
+```bash
+mkdir -p attached_assets/sackmann_local
+cd attached_assets/sackmann_local
+unzip ../../download-all.zip
+```
+This is a prerequisite, not code. Confirm the folder exists before running Step 1.
+
+---
+
+### Step 1 — De-duplication guard (do this first, before any import)
+
+Before importing any row, check for an existing match using the composite key.
+The check must happen at the DB level, not in application memory.
+
+**Implementation:**  
+Add (or confirm existence of) a unique index on the historical matches table:
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS idx_matches_sackmann_id
+  ON historical_matches (tourney_id, match_num)
+  WHERE source = 'sackmann';
+```
+
+The import upsert should use `ON CONFLICT (tourney_id, match_num) WHERE source = 'sackmann' DO NOTHING`.  
+This means re-running the import is always safe — it will skip already-present rows
+silently. No double-counting is possible regardless of how many times the endpoint
+is called.
+
+If the existing schema already has a different unique key for Sackmann rows, use
+that instead — do not add a conflicting index.
+
+---
+
+### Step 2 — Local-file mode in `sackmannBackfill.ts`
+
+Add an optional `localDir?: string` parameter to the backfill service function.
+
+**Logic:**
+```
+if localDir is set:
+  → read CSVs from disk at localDir/
+  → parse using the EXACT same column-mapping logic as the remote path
+else:
+  → existing remote URL fetch (completely unchanged)
+```
+
+The column mapping is already written for the remote path. Reuse it verbatim —
+do not write a second mapping. Only the file-acquisition method changes.
+
+**File processing order** (import in this order so player IDs resolve correctly):
+1. `ATP_Database.csv` — player profiles first
+2. `{YYYY}.csv` files — ATP main draw, chronological order (1967 → 2026)
+3. `{YYYY}_wta.csv` files — WTA main draw, chronological order (1990 → 2026)
+4. `{YYYY}_challenger.csv` files — Challenger, chronological order (1978 → 2026)
+5. `atp_quali/{YYYY}_atp_quali.csv` — Qualifying rounds (2007 → 2026)
+6. `atp_matches_amateur.csv` — Pre-Open Era / amateur
+7. `ongoing_tourneys.csv` — ATP in-progress
+8. `challenger_ongoing_tourneys.csv` — Challenger in-progress
+9. `wta_ongoing_tourneys.csv` — WTA in-progress
+
+**Ongoing files:** mark rows imported from the `*_ongoing_tourneys.csv` files with
+`is_ongoing = true` (or equivalent flag if one exists). These rows should be
+re-importable on refresh (upsert, not insert-only) since scores/results may
+complete between imports.
+
+---
+
+### Step 3 — New admin endpoint
+
+Add `POST /admin/sackmann-local-backfill` (auth-gated, same as existing admin routes).
+
+```typescript
+// Request body (all optional):
+{
+  localDir?: string;         // default: "attached_assets/sackmann_local"
+  fileTypes?: string[];      // default: all. Options: "atp", "wta", "challenger", "quali", "amateur", "ongoing"
+  yearFrom?: number;         // default: 1967
+  yearTo?: number;           // default: current year
+  dryRun?: boolean;          // default: false. If true, count rows that WOULD import without writing
+}
+
+// Response:
+{
+  filesProcessed: number;
+  rowsAttempted: number;
+  rowsInserted: number;
+  rowsSkipped: number;       // already existed (de-dupe)
+  rowsErrored: number;
+  playerProfilesUpserted: number;
+  durationMs: number;
+  errors: string[];          // first 50 errors if any
+}
+```
+
+The existing `POST /admin/sackmann-backfill` (remote URL path) is **not touched**.
+
+---
+
+### Step 4 — Player profile enrichment
+
+`ATP_Database.csv` contains 12,900 player records with: `height, weight, birthdate,
+turnedpro, birthplace, coaches, hand, backhand, ioc`.
+
+On import of `ATP_Database.csv`:
+- Match each row to players in the existing players table by `winner_id`/`loser_id`
+  (which is the Sackmann player ID, same as the `id` field in ATP_Database.csv)
+- Upsert these fields into the player profile:
+  - `height_cm` (from `winner_ht`/`loser_ht` in match rows, or `height` in ATP_Database)
+  - `hand` (playing hand)
+  - `backhand` (one-handed vs two-handed)  
+  - `birth_date` (from `birthdate`, format YYYYMMDD → parse to date)
+  - `country_code` (from `ioc`)
+  - `turned_pro` (year)
+- Do NOT overwrite fields already populated from a more authoritative source
+  (use `COALESCE(existing, new)` pattern — only fill nulls)
+
+This enriches player search results and prediction context without touching
+prediction logic.
+
+---
+
+### Step 5 — Search/lookup surface
+
+Ensure the following are queryable after import (check existing search endpoints
+and extend if needed — do NOT rebuild what already works):
+
+**Match search** — existing `/api/matches/search` or equivalent should be able to filter by:
+- Player name (winner or loser) — already supported presumably
+- `surface` (Hard/Clay/Grass/Carpet)
+- `tourney_level` (G=Grand Slam, M=Masters, A=ATP 500/250, C=Challenger, F=Finals, D=Davis Cup)
+- `round` (R128/R64/R32/R16/QF/SF/F/RR/Q1/Q2/Q3)
+- Year range
+- `circuit` (ATP/WTA/Challenger/Quali — derived from filename source)
+
+If these filters already exist, no change needed — the imported rows will
+automatically appear in results since they land in the same table.
+
+**Player search** — after profile enrichment, player lookups should surface:
+- Height, playing hand, backhand style, country, turned-pro year
+- Career H2H (computable from historical matches, if not already)
+
+**If any of these filters do NOT exist**, add them as indexed columns with a
+migration — do not do in-memory filtering on large result sets.
+
+---
+
+### Step 6 — Stat columns: store everything, use what's already used
+
+The match files contain rich per-match serve stats:
+`w_ace, w_df, w_svpt, w_1stIn, w_1stWon, w_2ndWon, w_SvGms, w_bpSaved, w_bpFaced`
+(and the same `l_` prefix for the loser).
+
+**Rule:** store all of these columns as-is. Do not compute derived stats at import
+time (1st-serve %, break point conversion %, etc.) — compute them at query time or
+in the existing stats layer, wherever serve stats are already computed.
+
+If the existing schema already has columns for these fields: populate them.  
+If not: add a `jsonb` column `sackmann_stats` and store them there. Do not
+rename or transform.
+
+**Do not wire these into the prediction engine in this task.** That's a separate
+decision. Just ensure the data is stored and retrievable.
+
+---
+
+## What NOT to change in this task
+
+- Prediction engine, weights, calibration — untouched
+- Paper trading, walk-forward, evaluation pipelines — untouched  
+- The remote Sackmann backfill endpoint — untouched
+- The ext-csv (API-Tennis format) import route — untouched
+- Any existing accuracy numbers or model state — untouched
+
+---
+
+## Acceptance criteria
+
+1. `POST /admin/sackmann-local-backfill` with `dryRun: true` returns correct row counts
+   without writing anything.
+2. Running the import twice produces identical row counts the second time
+   (`rowsInserted: 0, rowsSkipped: N`) — proves de-dupe works.
+3. At least one 2026 match (e.g. Taylor Fritz vs Rafael Jodar, Washington 2026-08-02)
+   is queryable by player name after import.
+4. Player profile for a known player (e.g. Grigor Dimitrov, winner_id D875)
+   has height/hand/country populated after import.
+5. All existing tests pass. No new test failures.
+6. The existing remote backfill endpoint still works (smoke test it).
