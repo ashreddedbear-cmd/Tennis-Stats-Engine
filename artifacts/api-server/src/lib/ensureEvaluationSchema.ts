@@ -568,6 +568,13 @@ const STATEMENTS: string[] = [
   )
   `,
 
+  // ── historical_matches: player-name search indexes (for match search endpoint) ─
+  `CREATE INDEX IF NOT EXISTS historical_matches_player1_name_idx ON historical_matches (player1_name)`,
+  `CREATE INDEX IF NOT EXISTS historical_matches_player2_name_idx ON historical_matches (player2_name)`,
+  `CREATE INDEX IF NOT EXISTS historical_matches_tour_idx ON historical_matches (tour)`,
+  `CREATE INDEX IF NOT EXISTS historical_matches_surface_idx ON historical_matches (surface)`,
+  `CREATE INDEX IF NOT EXISTS historical_matches_tournament_level_idx ON historical_matches (tournament_level)`,
+
   // ── Parlay Builder: active session ────────────────────────────────────────────
   // Single-row store (id=1 singleton) for the current in-progress parlay session.
   // Upserted on every change so the session survives browser close / device switch.

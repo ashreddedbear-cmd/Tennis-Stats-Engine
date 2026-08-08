@@ -23,9 +23,13 @@
  * the provider's `getCompletedMatchesByDateRange` simply filters the in-memory array, so the
  * existing 5-day-chunk pattern in runHistoricalBackfill stays fully intact.
  */
+import { readFile } from "fs/promises";
+import { existsSync } from "fs";
+import { join as pathJoin, resolve as pathResolve } from "path";
 import { runHistoricalBackfill } from "./backfill";
 import type { BackfillSummary } from "./types";
 import { ProviderUnavailableError } from "../tennisData/types";
+import { pool } from "@workspace/db";
 import type {
   TennisDataProvider,
   HistoricalFixture,
@@ -635,6 +639,314 @@ export async function runSackmannBackfill(
   );
 
   return { atpYearsLoaded, wtaYearsLoaded, atpChallengerYearsLoaded, wtaItfYearsLoaded, fixturesLoaded: allFixtures.length, backfill };
+}
+
+// ── Local-file import (from extracted ZIP) ────────────────────────────────────
+
+export interface SackmannLocalBackfillOptions {
+  /**
+   * Directory containing the extracted ZIP contents.
+   * Default: "attached_assets/sackmann_local" relative to workspace root.
+   */
+  localDir?: string;
+  /**
+   * Which file types to include. Default: all.
+   * Options: "atp" | "wta" | "challenger" | "quali" | "amateur" | "ongoing"
+   */
+  fileTypes?: Array<"atp" | "wta" | "challenger" | "quali" | "amateur" | "ongoing">;
+  /** First year to import. Default: 1967. */
+  yearFrom?: number;
+  /** Last year to import (inclusive). Default: current year. */
+  yearTo?: number;
+  /**
+   * If true, count rows that WOULD be imported without writing to the DB.
+   * Player profiles are also skipped. Responds synchronously.
+   */
+  dryRun?: boolean;
+}
+
+export interface SackmannLocalBackfillSummary {
+  filesProcessed: number;
+  rowsAttempted: number;
+  rowsInserted: number;
+  rowsSkipped: number;
+  rowsErrored: number;
+  playerProfilesUpserted: number;
+  durationMs: number;
+  errors: string[];
+}
+
+/**
+ * Resolves the workspace root from the API server's CWD (artifacts/api-server → ../../).
+ */
+function workspaceRoot(): string {
+  return pathResolve(process.cwd(), "../..");
+}
+
+/**
+ * Read and parse a CSV file from disk.
+ */
+async function readLocalCsv(filePath: string): Promise<Record<string, string>[]> {
+  const text = await readFile(filePath, "utf-8");
+  return parseCsv(text);
+}
+
+/**
+ * Upsert ATP player profiles from ATP_Database.csv into master_players (country_code)
+ * and canonical_players (height_cm, handedness, date_of_birth, nationality) using
+ * COALESCE so we never overwrite already-populated fields.
+ *
+ * Returns the number of canonical_player rows updated.
+ */
+async function upsertAtpPlayerProfiles(profileRows: Record<string, string>[]): Promise<number> {
+  if (profileRows.length === 0) return 0;
+
+  // Build arrays for batch update
+  const apiKeys: string[]          = [];
+  const iocValues: (string | null)[] = [];
+  const sackmannIds: string[]      = [];
+  const heights: (number | null)[] = [];
+  const birthdates: (string | null)[] = [];
+  const hands: (string | null)[]   = [];
+
+  for (const row of profileRows) {
+    const sid = row.id?.trim();
+    if (!sid) continue;
+
+    const ioc = row.ioc?.trim() || null;
+    const hand = row.hand?.trim() || null;
+
+    const rawHeight = parseInt(row.height ?? "", 10);
+    const heightCm: number | null = Number.isFinite(rawHeight) && rawHeight > 100 ? rawHeight : null;
+
+    const rawBirth = row.birthdate?.trim() ?? "";
+    let birthdate: string | null = null;
+    if (rawBirth.length >= 8) {
+      const candidate = `${rawBirth.slice(0, 4)}-${rawBirth.slice(4, 6)}-${rawBirth.slice(6, 8)}`;
+      if (!Number.isNaN(Date.parse(candidate))) birthdate = candidate;
+    }
+
+    apiKeys.push(`sackmann-${sid}`);
+    iocValues.push(ioc);
+    sackmannIds.push(sid);
+    heights.push(heightCm);
+    birthdates.push(birthdate);
+    hands.push(hand);
+  }
+
+  // 1) Update master_players.country_code (COALESCE — never overwrite)
+  await pool.query(
+    `UPDATE master_players mp
+        SET country_code = COALESCE(mp.country_code, data.ioc)
+       FROM unnest($1::text[], $2::text[]) AS data(api_key, ioc)
+      WHERE mp.api_tennis_key = data.api_key
+        AND data.ioc IS NOT NULL
+        AND data.ioc <> ''`,
+    [apiKeys, iocValues],
+  );
+
+  // 2) Update canonical_players via player_aliases (COALESCE — never overwrite)
+  const result = await pool.query<{ count: number }>(
+    `WITH matched AS (
+       SELECT pa.canonical_player_id,
+              data.height_cm,
+              data.birthdate::date AS date_of_birth,
+              data.hand AS handedness,
+              data.ioc  AS nationality
+         FROM unnest($1::text[], $2::int[], $3::text[], $4::text[], $5::text[])
+              AS data(sackmann_id, height_cm, birthdate, hand, ioc)
+         JOIN player_aliases pa
+           ON pa.provider = 'sackmann'
+          AND pa.external_player_id = data.sackmann_id
+     )
+     UPDATE canonical_players cp
+        SET height_cm    = COALESCE(cp.height_cm,    m.height_cm),
+            date_of_birth = COALESCE(cp.date_of_birth, m.date_of_birth),
+            handedness   = COALESCE(cp.handedness,   m.handedness),
+            nationality  = COALESCE(cp.nationality,  m.nationality)
+       FROM matched m
+      WHERE cp.id = m.canonical_player_id
+        AND (cp.height_cm IS NULL OR cp.date_of_birth IS NULL OR cp.handedness IS NULL OR cp.nationality IS NULL)
+      RETURNING cp.id`,
+    [sackmannIds, heights, birthdates, hands, iocValues],
+  );
+
+  return result.rowCount ?? 0;
+}
+
+/**
+ * Imports match CSVs from a locally-extracted Sackmann ZIP.
+ *
+ * File naming conventions in the ZIP differ from the GitHub repos:
+ *   ATP main draw:    {YYYY}.csv              (not atp_matches_{YYYY}.csv)
+ *   WTA main draw:    {YYYY}_wta.csv
+ *   Challenger:       {YYYY}_challenger.csv
+ *   Qualifying:       atp_quali/{YYYY}_atp_quali.csv
+ *   Amateur:          atp_matches_amateur.csv
+ *   ATP ongoing:      ongoing_tourneys.csv
+ *   Challenger ongoing: challenger_ongoing_tourneys.csv
+ *   WTA ongoing:      wta_ongoing_tourneys.csv
+ *
+ * All files share the identical Sackmann column schema, so rowToFixture() applies unchanged.
+ * The existing runHistoricalBackfill idempotency (pre-query dedup + unique index on
+ * (provider, external_id)) means re-running the import is always safe.
+ */
+export async function runSackmannLocalBackfill(
+  options: SackmannLocalBackfillOptions = {},
+): Promise<SackmannLocalBackfillSummary> {
+  const startedAt = Date.now();
+  const localDir  = pathResolve(
+    workspaceRoot(),
+    options.localDir ?? "attached_assets/sackmann_local",
+  );
+  const yearFrom  = options.yearFrom ?? 1967;
+  const yearTo    = options.yearTo   ?? new Date().getFullYear();
+  const dryRun    = options.dryRun   ?? false;
+  const types     = new Set(options.fileTypes ?? ["atp", "wta", "challenger", "quali", "amateur", "ongoing"]);
+
+  const errors: string[]         = [];
+  const allFixtures: HistoricalFixture[] = [];
+  let filesProcessed    = 0;
+  let rowsAttempted     = 0;
+  let playerProfilesUpserted = 0;
+
+  /**
+   * Read one CSV file, map rows → HistoricalFixture[], append to allFixtures.
+   * Counts raw rows in rowsAttempted even if some fail rowToFixture validation.
+   */
+  async function loadFile(filePath: string, tour: "ATP" | "WTA", label: string): Promise<void> {
+    try {
+      if (!existsSync(filePath)) return;
+      const rows = await readLocalCsv(filePath);
+      if (rows.length === 0) return;
+      rowsAttempted += rows.length;
+      const fixtures = rows
+        .map((r) => rowToFixture(r, tour))
+        .filter((f): f is HistoricalFixture => f !== null);
+      allFixtures.push(...fixtures);
+      filesProcessed++;
+      logger.debug({ label, rows: rows.length, fixtures: fixtures.length }, "sackmannLocal: file loaded");
+    } catch (err) {
+      const msg = `${label}: ${err instanceof Error ? err.message : String(err)}`;
+      errors.push(msg);
+      logger.warn({ err, label }, "sackmannLocal: file load failed (non-fatal)");
+    }
+  }
+
+  // ── 1. Player profiles ─────────────────────────────────────────────────────
+  // Processed first so profile data is available before match rows are inserted.
+  if (types.has("atp")) {
+    const profilePath = pathJoin(localDir, "ATP_Database.csv");
+    if (existsSync(profilePath)) {
+      try {
+        const profileRows = await readLocalCsv(profilePath);
+        if (!dryRun && profileRows.length > 0) {
+          playerProfilesUpserted = await upsertAtpPlayerProfiles(profileRows);
+        }
+        logger.info({ rows: profileRows.length, dryRun }, "sackmannLocal: ATP_Database.csv loaded");
+      } catch (err) {
+        const msg = `ATP_Database.csv: ${err instanceof Error ? err.message : String(err)}`;
+        errors.push(msg);
+        logger.warn({ err }, "sackmannLocal: ATP_Database.csv failed (non-fatal)");
+      }
+    }
+  }
+
+  // ── 2. ATP main-draw: {YYYY}.csv (1967–current) ─────────────────────────────
+  if (types.has("atp")) {
+    for (let year = Math.max(yearFrom, 1967); year <= yearTo; year++) {
+      await loadFile(pathJoin(localDir, `${year}.csv`), "ATP", `ATP ${year}`);
+    }
+  }
+
+  // ── 3. WTA main-draw: {YYYY}_wta.csv (1990–current) ─────────────────────────
+  if (types.has("wta")) {
+    for (let year = Math.max(yearFrom, 1990); year <= yearTo; year++) {
+      await loadFile(pathJoin(localDir, `${year}_wta.csv`), "WTA", `WTA ${year}`);
+    }
+  }
+
+  // ── 4. Challenger: {YYYY}_challenger.csv (1978–current) ─────────────────────
+  if (types.has("challenger")) {
+    for (let year = Math.max(yearFrom, 1978); year <= yearTo; year++) {
+      await loadFile(pathJoin(localDir, `${year}_challenger.csv`), "ATP", `Challenger ${year}`);
+    }
+  }
+
+  // ── 5. ATP Qualifying: atp_quali/{YYYY}_atp_quali.csv (2007–current) ────────
+  if (types.has("quali")) {
+    for (let year = Math.max(yearFrom, 2007); year <= yearTo; year++) {
+      await loadFile(pathJoin(localDir, "atp_quali", `${year}_atp_quali.csv`), "ATP", `ATPQuali ${year}`);
+    }
+  }
+
+  // ── 6. Pre-Open Era amateur matches ──────────────────────────────────────────
+  if (types.has("amateur")) {
+    await loadFile(pathJoin(localDir, "atp_matches_amateur.csv"), "ATP", "ATPAmateur");
+  }
+
+  // ── 7. Ongoing tournament files ───────────────────────────────────────────────
+  if (types.has("ongoing")) {
+    await loadFile(pathJoin(localDir, "ongoing_tourneys.csv"),            "ATP", "ATP-ongoing");
+    await loadFile(pathJoin(localDir, "challenger_ongoing_tourneys.csv"), "ATP", "Challenger-ongoing");
+    await loadFile(pathJoin(localDir, "wta_ongoing_tourneys.csv"),        "WTA", "WTA-ongoing");
+  }
+
+  // ── Dry-run: return counts without writing ────────────────────────────────────
+  if (dryRun) {
+    return {
+      filesProcessed,
+      rowsAttempted,
+      rowsInserted: 0,
+      rowsSkipped: allFixtures.length, // valid fixtures that would be attempted
+      rowsErrored: errors.length,
+      playerProfilesUpserted: 0,
+      durationMs: Date.now() - startedAt,
+      errors: errors.slice(0, 50),
+    };
+  }
+
+  // ── No fixtures loaded ────────────────────────────────────────────────────────
+  if (allFixtures.length === 0) {
+    logger.warn({ localDir, yearFrom, yearTo }, "sackmannLocal: no fixtures loaded");
+    return {
+      filesProcessed,
+      rowsAttempted,
+      rowsInserted: 0,
+      rowsSkipped: 0,
+      rowsErrored: errors.length,
+      playerProfilesUpserted,
+      durationMs: Date.now() - startedAt,
+      errors: errors.slice(0, 50),
+    };
+  }
+
+  // Sort chronologically so runHistoricalBackfill's date-range chunking works correctly.
+  allFixtures.sort((a, b) => a.date.localeCompare(b.date));
+  const dateStart = allFixtures[0].date;
+  const dateStop  = allFixtures[allFixtures.length - 1].date;
+
+  logger.info(
+    { filesProcessed, fixturesLoaded: allFixtures.length, dateStart, dateStop, localDir },
+    "sackmannLocal: all files loaded — starting historical backfill",
+  );
+
+  const provider = new SackmannProvider(allFixtures);
+  const backfill = await runHistoricalBackfill(
+    provider as unknown as Parameters<typeof runHistoricalBackfill>[0],
+    { dateStart, dateStop, cutoff: "1h", chunkDays: 30 },
+  );
+
+  return {
+    filesProcessed,
+    rowsAttempted,
+    rowsInserted: backfill.matchesInserted,
+    rowsSkipped:  backfill.matchesSkippedDuplicate,
+    rowsErrored:  errors.length,
+    playerProfilesUpserted,
+    durationMs: Date.now() - startedAt,
+    errors: errors.slice(0, 50),
+  };
 }
 
 // ── Test-only named exports ───────────────────────────────────────────────────

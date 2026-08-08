@@ -1,0 +1,107 @@
+# Task: Reduce Prediction & Parlay Builder Response Time
+**Priority:** High  
+**Risk level:** Medium — performance work only, zero changes to prediction logic, weights, or accuracy
+
+---
+
+## Ground rules (read before touching anything)
+
+1. **No changes to prediction logic, weights, calibration, or output values.** The goal is the same answer, faster. If any optimization would change a prediction result even by 0.1%, do not do it.
+2. **No changes to the paper trading, walk-forward, or evaluation pipelines.**
+3. **Show a plan and wait for approval before writing any code.** This is standing policy.
+4. **Measure before and after.** Every change must include a before/after timing comparison on a real prediction request. No "this should be faster" without numbers.
+5. **Server stability is the hard constraint.** Nothing that risks OOM, connection pool exhaustion, or blocking the event loop under concurrent load.
+
+---
+
+## Step 1 — Profile first, optimize second
+
+Before writing any code, instrument the two slow paths and report timings broken down by phase.
+
+### For `POST /api/predictions`:
+Add temporary `console.time` / `console.timeEnd` (or equivalent) around each major phase and report the breakdown:
+```
+[prediction] DB player lookup:        Xms
+[prediction] Historical H2H query:    Xms
+[prediction] Surface Elo calc:        Xms
+[prediction] Recent form calc:        Xms
+[prediction] Serve/return calc:       Xms
+[prediction] Odds fetch:              Xms
+[prediction] Calibration lookup:      Xms
+[prediction] Ensemble + final score:  Xms
+[prediction] DB write (save):         Xms
+[prediction] TOTAL:                   Xms
+```
+
+### For Parlay Builder scoring:
+Same breakdown — report which phases dominate.
+
+**Report these numbers back before doing anything else.** The optimization strategy depends entirely on where the time is actually going.
+
+---
+
+## Step 2 — Likely bottlenecks to investigate (do not fix until profiling confirms)
+
+These are hypotheses only. Confirm with profiling data first.
+
+### A. N+1 DB queries
+If the engine is making one DB query per module (H2H lookup, form lookup, surface Elo lookup etc.) sequentially, these can likely be parallelized with `Promise.all()`. This is the most common source of slow prediction times and the safest fix — pure concurrency change, zero logic change.
+
+**Only safe to parallelize if:** the modules don't depend on each other's outputs. Confirm this before doing it.
+
+### B. Missing DB indexes
+H2H queries filter by two player IDs + surface. Surface Elo queries filter by player ID + surface. If these columns aren't indexed, every query is a full table scan on a large historical dataset.
+
+Check for indexes on:
+- `historical_matches (winner_id, loser_id, surface)`
+- `historical_matches (loser_id, winner_id, surface)` (reverse direction)
+- `historical_matches (winner_id, surface, tourney_date)`
+- `elo_ratings (player_id, surface)` or equivalent
+
+Add missing indexes. This is zero-risk and can have dramatic effect on large tables.
+
+**Important:** after the Sackmann ZIP import (separate task), the historical_matches table will grow significantly. Any missing index will hurt more post-import. Fix indexes before or immediately after the import.
+
+### C. Odds fetch blocking the critical path
+From the Task #146 implementation, the odds fetch is now on the user-facing prediction path. If it's awaited serially before the engine runs, it adds network latency to every prediction.
+
+**Safe fix:** run the odds fetch in parallel with the engine computation using `Promise.all([runEngine(), fetchOdds()])`, then merge results. The engine doesn't need odds to compute — odds are merged into the final output. Confirm this is actually the case before parallelizing.
+
+### D. Calibration lookup — repeated queries
+If calibration is looked up per-prediction without caching, and the calibration table is large, this adds latency on every call. A short in-memory cache (e.g. 5-minute TTL, keyed by model version + surface + circuit) is safe here since calibration only changes when a new model is deployed.
+
+### E. Monte Carlo simulation — synchronous blocking
+The Monte Carlo runs 20,000 simulations. If this is synchronous on the main thread, it blocks the event loop during the simulation. 
+
+**Options (in order of safety):**
+1. Check if it's already async/non-blocking. If yes, no change needed.
+2. If it's blocking: move to a worker thread (Node.js `worker_threads`). The simulation is pure CPU work with no shared state — safe to offload.
+3. Do NOT reduce simulation count below 20,000 — that changes output values.
+
+### F. Parlay Builder — batch vs serial scoring
+If the Parlay Builder scores each leg sequentially (one prediction request per leg), this multiplies prediction latency by the number of legs.
+
+**Safe fix:** if legs are independent, score them in parallel with `Promise.all()`. Confirm legs are independent first.
+
+---
+
+## Step 3 — Connection pool check
+
+Before any load testing, verify the DB connection pool is sized appropriately for concurrent requests. If `Promise.all()` parallelizes 6 queries simultaneously and the pool only has 2 connections, you'll get queuing instead of speed.
+
+Report current pool size and max connections. Recommend adjustment if needed, but do not increase beyond what the Replit plan's DB tier supports.
+
+---
+
+## Step 4 — Acceptance criteria
+
+For each optimization implemented:
+- Before timing (from Step 1 profiling)
+- After timing (same request, same data)
+- Confirmation that prediction output is byte-for-byte identical to pre-optimization
+- All existing tests still pass (run full test suite)
+- No new test failures
+
+Target: prediction response time under 3 seconds on a warm server for a standard match with odds available. Parlay Builder scoring under 5 seconds for a 3-leg parlay.
+
+If profiling reveals the bottleneck is something not listed above, report it and wait for direction before proceeding.

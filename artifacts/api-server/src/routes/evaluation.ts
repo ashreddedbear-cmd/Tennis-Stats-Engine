@@ -50,7 +50,7 @@ import { runShadowPaperTradingReplay, listShadowReplayBatches } from "../service
 import { isPipelineQuiet, PAPER_TRADE_QUIET_WINDOW_HOURS, sendPipelineQuietAlert, resetAlertCooldown } from "../services/evaluation/paperTradingQuiet";
 import { usedHistoricalMatchFallback } from "../services/predictionEngine/playerProfileWarnings";
 import { runIncrementalHistoricalBackfill, runHistoricalBackfill, getLatestCoveredMatchDate } from "../services/historicalData/backfill";
-import { runSackmannBackfill, SACKMANN_PROVIDER } from "../services/historicalData/sackmannBackfill";
+import { runSackmannBackfill, runSackmannLocalBackfill, SACKMANN_PROVIDER } from "../services/historicalData/sackmannBackfill";
 import { runTennisDataCoUkBackfill, TENNIS_DATA_CO_UK_PROVIDER } from "../services/historicalData/tennisDataCoUkBackfill";
 import { runExternalCsvBackfill, EXT_CSV_PROVIDER } from "../services/historicalData/externalCsvBackfill";
 import {
@@ -936,6 +936,182 @@ router.get("/evaluation/sackmann-backfill/status", async (_req, res): Promise<vo
         }
       : null,
   });
+});
+
+/**
+ * POST /evaluation/sackmann-local-backfill/run
+ *
+ * Imports match CSVs from the locally-extracted Sackmann ZIP
+ * (attached_assets/sackmann_local/ by default).
+ *
+ * Body (all optional):
+ *   localDir?   string   – default: "attached_assets/sackmann_local"
+ *   fileTypes?  string[] – default: all. Options: "atp","wta","challenger","quali","amateur","ongoing"
+ *   yearFrom?   number   – default: 1967
+ *   yearTo?     number   – default: current year
+ *   dryRun?     boolean  – default: false. If true, count rows without writing.
+ *
+ * dryRun=true → synchronous response with counts (fast — no DB writes).
+ * dryRun=false → fire-and-forget; final counts stored in job_runs (retrieve via status endpoint).
+ */
+router.post("/evaluation/sackmann-local-backfill/run", requireAdmin, async (req, res): Promise<void> => {
+  const localDir   = typeof req.body?.localDir   === "string"  ? req.body.localDir   : undefined;
+  const fileTypes  = Array.isArray(req.body?.fileTypes)        ? req.body.fileTypes  : undefined;
+  const yearFrom   = typeof req.body?.yearFrom   === "number"  ? req.body.yearFrom   : undefined;
+  const yearTo     = typeof req.body?.yearTo     === "number"  ? req.body.yearTo     : undefined;
+  const dryRun     = typeof req.body?.dryRun     === "boolean" ? req.body.dryRun     : false;
+
+  const opts = { localDir, fileTypes, yearFrom, yearTo, dryRun };
+
+  // dryRun is fast (no DB writes) — respond synchronously so callers see row counts immediately.
+  if (dryRun) {
+    try {
+      const result = await runSackmannLocalBackfill(opts);
+      res.json(result);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.error({ err }, "sackmann-local-backfill: dry-run failed");
+      res.status(500).json({ error: errorMessage });
+    }
+    return;
+  }
+
+  // Non-dryRun: fire-and-forget (full import can take 30+ minutes).
+  // Final counts are stored in job_runs and retrievable via the status endpoint.
+  const jobName   = "sackmann-local-backfill";
+  const startedAt = new Date();
+  res.json({ started: true, opts, jobName, message: "Import started. Check /evaluation/sackmann-local-backfill/status for final counts." });
+
+  runSackmannLocalBackfill(opts)
+    .then(async (result) => {
+      await db.insert(jobRunsTable).values({
+        jobName,
+        startedAt,
+        finishedAt: new Date(),
+        status: "success",
+        attempts: 1,
+        summary: result as unknown as Record<string, unknown>,
+        errorMessage: null,
+      });
+      logger.info({ result }, "sackmann-local-backfill: completed");
+    })
+    .catch(async (err) => {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      logger.error({ err }, "sackmann-local-backfill: failed");
+      await db.insert(jobRunsTable).values({
+        jobName,
+        startedAt,
+        finishedAt: new Date(),
+        status: "failed",
+        attempts: 1,
+        summary: null,
+        errorMessage,
+      });
+    });
+});
+
+/**
+ * GET /evaluation/sackmann-local-backfill/status
+ * Returns the most recent sackmann-local-backfill job_runs row.
+ */
+router.get("/evaluation/sackmann-local-backfill/status", requireAdmin, async (_req, res): Promise<void> => {
+  const [latest] = await db
+    .select()
+    .from(jobRunsTable)
+    .where(eq(jobRunsTable.jobName, "sackmann-local-backfill"))
+    .orderBy(desc(jobRunsTable.startedAt))
+    .limit(1);
+
+  res.json({
+    hasRun: !!latest,
+    lastRun: latest
+      ? {
+          status:       latest.status,
+          startedAt:    latest.startedAt?.toISOString()  ?? null,
+          finishedAt:   latest.finishedAt?.toISOString() ?? null,
+          summary:      latest.summary       ?? null,
+          errorMessage: latest.errorMessage  ?? null,
+        }
+      : null,
+  });
+});
+
+/**
+ * GET /evaluation/matches/search
+ *
+ * Query historical matches with optional filters.
+ *
+ * Query params (all optional):
+ *   player        string  – ILIKE search in player1_name OR player2_name
+ *   surface       string  – exact match (Hard/Clay/Grass/IndoorHard)
+ *   tournamentLevel string – exact match (GrandSlam/Masters1000/ATP500/ATP250/Challenger/ITF/WTA1000/WTA500)
+ *   round         string  – exact match (R128/R64/R32/R16/QF/SF/F/RR/Q1/Q2/Q3)
+ *   tour          string  – exact match (ATP/WTA)
+ *   yearFrom      number  – min year of scheduled_start_at
+ *   yearTo        number  – max year of scheduled_start_at
+ *   provider      string  – exact match (sackmann/api-tennis/ext-csv/…)
+ *   limit         number  – default 50, max 200
+ *   offset        number  – default 0
+ */
+router.get("/evaluation/matches/search", requireAdmin, async (req, res): Promise<void> => {
+  const player          = typeof req.query.player          === "string" ? req.query.player.trim()          : null;
+  const surface         = typeof req.query.surface         === "string" ? req.query.surface.trim()         : null;
+  const tournamentLevel = typeof req.query.tournamentLevel === "string" ? req.query.tournamentLevel.trim() : null;
+  const round           = typeof req.query.round           === "string" ? req.query.round.trim()           : null;
+  const tour            = typeof req.query.tour            === "string" ? req.query.tour.trim()            : null;
+  const providerFilter  = typeof req.query.provider        === "string" ? req.query.provider.trim()        : null;
+  const yearFrom        = typeof req.query.yearFrom        === "string" ? parseInt(req.query.yearFrom, 10)  : null;
+  const yearTo          = typeof req.query.yearTo          === "string" ? parseInt(req.query.yearTo, 10)    : null;
+  const limit           = Math.min(typeof req.query.limit  === "string" ? parseInt(req.query.limit, 10) || 50 : 50, 200);
+  const offset          = typeof req.query.offset          === "string" ? parseInt(req.query.offset, 10) || 0 : 0;
+
+  const conditions = [];
+
+  if (player) {
+    const pat = `%${player}%`;
+    conditions.push(
+      sql`(${historicalMatchesTable.player1Name} ILIKE ${pat} OR ${historicalMatchesTable.player2Name} ILIKE ${pat})`,
+    );
+  }
+  if (surface)         conditions.push(eq(historicalMatchesTable.surface,         surface));
+  if (tournamentLevel) conditions.push(eq(historicalMatchesTable.tournamentLevel, tournamentLevel));
+  if (round)           conditions.push(eq(historicalMatchesTable.round,           round));
+  if (tour)            conditions.push(eq(historicalMatchesTable.tour,            tour));
+  if (providerFilter)  conditions.push(eq(historicalMatchesTable.provider,        providerFilter));
+  if (yearFrom && !Number.isNaN(yearFrom)) {
+    conditions.push(sql`EXTRACT(YEAR FROM ${historicalMatchesTable.scheduledStartAt}) >= ${yearFrom}`);
+  }
+  if (yearTo && !Number.isNaN(yearTo)) {
+    conditions.push(sql`EXTRACT(YEAR FROM ${historicalMatchesTable.scheduledStartAt}) <= ${yearTo}`);
+  }
+
+  const whereClause = conditions.length > 0 ? and(...conditions) : undefined;
+
+  const rows = await db
+    .select({
+      id:              historicalMatchesTable.id,
+      externalId:      historicalMatchesTable.externalId,
+      provider:        historicalMatchesTable.provider,
+      tour:            historicalMatchesTable.tour,
+      player1Name:     historicalMatchesTable.player1Name,
+      player2Name:     historicalMatchesTable.player2Name,
+      winnerId:        historicalMatchesTable.winnerId,
+      score:           historicalMatchesTable.score,
+      surface:         historicalMatchesTable.surface,
+      tournamentName:  historicalMatchesTable.tournamentName,
+      tournamentLevel: historicalMatchesTable.tournamentLevel,
+      round:           historicalMatchesTable.round,
+      matchDate:       historicalMatchesTable.scheduledStartAt,
+      player1Rank:     historicalMatchesTable.player1Rank,
+      player2Rank:     historicalMatchesTable.player2Rank,
+    })
+    .from(historicalMatchesTable)
+    .where(whereClause)
+    .orderBy(desc(historicalMatchesTable.scheduledStartAt))
+    .limit(limit)
+    .offset(offset);
+
+  res.json({ matches: rows, count: rows.length, limit, offset });
 });
 
 /**
