@@ -1,0 +1,66 @@
+# Ticket — Structural fixes surfaced by the Task #117 calibration incident
+
+**Priority:** P0/P1 — root causes of the calibration regression, plus a silently-failing recurring job
+**Type:** Bug fixes
+
+Two distinct structural problems were found while investigating why model #708 (worse than baseline) became active. Both need fixing independent of the model rollback itself (tracked separately).
+
+---
+
+## Bug 1 — Calibration refit endpoint has no deduplication guard across server restarts
+
+**Priority:** P0
+
+**Problem:** `POST /evaluation/calibration-refit` calls `startWalkForwardJob({ evaluationOnly: false })` directly. It does not go through `runCalibrationRefitJob()`, so it writes nothing to `job_runs` — meaning refit attempts are invisible to the audit log. Worse, the only thing preventing a duplicate/concurrent run is an in-process `walkForwardInProgress` flag, which lives in memory and resets to `false` whenever the server restarts. A second call to the endpoint after a restart is treated as fresh, even if a first run already completed or is still logically "in progress" from an operator's perspective.
+
+This is exactly what happened: a legitimate confirmation call landed right after a server restart, the flag had reset, and the call ran a real (but data-starved) refit instead of being blocked or treated as a no-op check.
+
+**Task:**
+1. Route calibration refit through `runCalibrationRefitJob()` (or equivalent) so every attempt writes to `job_runs` and is auditable.
+2. Replace the in-process-only guard with a persisted lock (DB row, timestamp-based lock, or similar) that survives a server restart.
+3. Add a minimum-cooldown or explicit "already completed recently" check so a near-duplicate call shortly after a successful run is rejected or clearly flagged as a no-op, rather than silently running again.
+
+**Acceptance criteria:**
+- Refit attempts are visible in `job_runs` going forward.
+- A second call shortly after a completed refit (including across a restart) does not silently trigger a new training run.
+
+---
+
+## Bug 2 — Walk-forward training guard allows a refit on an almost-empty eligible dataset
+
+**Priority:** P0
+
+**Problem:** The guard only checks `holdoutSampleSize > 0` before allowing a new calibration model to activate. It does not check whether the new model is actually as good as, or better than, the model it's replacing, and it does not check whether the eligible training set was reasonably sized relative to prior runs. In the incident, the second run only had ~4,033 rows available (because `alreadyScoredIds` had already exhausted almost the entire historical corpus from the first run), producing a materially worse model that still cleared the "greater than zero" bar and activated anyway.
+
+**Task:**
+1. Add a comparison step: before activating a new calibration model, compare its holdout log-loss against the currently active model's holdout log-loss. Do not activate if it's meaningfully worse (define a threshold — e.g., don't activate if holdout log-loss increases by more than X%).
+2. Add a minimum-sample-size floor that's meaningfully above zero — e.g., don't activate a model trained on a holdout sample dramatically smaller than the prior model's, without an explicit override.
+3. Log (to `job_runs` or equivalent) when a refit completes but is rejected for activation due to either check, so this is visible rather than silent.
+
+**Acceptance criteria:**
+- A new calibration model cannot silently replace a better-performing active model.
+- Rejected activations are logged and visible, not silent.
+
+---
+
+## Bug 3 — `historical-backfill-cycle` job failing every 30 minutes since the Task #117 merge
+
+**Priority:** P1 — unrelated to calibration, but actively broken and recurring
+
+**Problem:** Logs show the `historical-backfill-cycle` job has been failing on its 30-minute schedule since the Task #117 merge, with the error `relation "canonical_players" does not exist`. This indicates a migration or schema change from that merge introduced a dependency on a table that was never created (or a table rename/migration that didn't fully apply).
+
+**Task:**
+1. Confirm whether `canonical_players` was supposed to be created by a migration tied to the Task #117 merge, and whether that migration ran.
+2. If the migration didn't run: run it (following the same read-only-first verification pattern as other tickets — confirm what the migration does before applying).
+3. If the table was intentionally renamed/replaced: find and fix the code path still referencing the old name.
+4. Confirm the job runs clean on its next scheduled cycle after the fix.
+
+**Acceptance criteria:**
+- `historical-backfill-cycle` completes successfully on its normal schedule.
+- Root cause (missing migration vs. stale reference) documented, not just patched around.
+
+---
+
+## Note
+
+Bugs 1 and 2 are the direct root cause of the Ticket 0 incident (model #708 going live). Bug 3 was discovered incidentally during that investigation and is unrelated, but has been silently failing for an unknown duration and should not be left for later just because it surfaced as a side note.

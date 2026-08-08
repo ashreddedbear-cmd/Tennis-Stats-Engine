@@ -78,6 +78,20 @@ function classifyResult(match: { winnerId: string | null; retired: boolean; walk
  */
 export const MIN_ELIGIBLE_FOR_TRAINING = 500;
 
+/**
+ * Minimum holdout sample size a newly-fitted calibration model must have before it is
+ * allowed to replace the currently active model. A model with holdoutSampleSize > 0 but
+ * below this floor was trained on a very small eligible set (e.g. because the historical
+ * corpus was almost entirely already scored from a prior run) and its holdout log-loss
+ * estimate is not reliable enough to stake the live calibration on.
+ *
+ * Distinct from the degenerate guard (holdoutSampleSize > 0) which catches the complete
+ * collapse case; this floor catches the "technically non-zero but too small to trust" case.
+ * Value chosen so a model needs at least 500 genuinely held-out rows — the same floor used
+ * for training eligibility — before it can displace an existing active model.
+ */
+export const MIN_HOLDOUT_SAMPLE_SIZE_TO_ACTIVATE = 500;
+
 /** Return type for `checkTrainingModeGuard`. */
 export type TrainingModeGuardResult =
   | { skip: false; reason: "evaluationOnly" | "scoped" | "aboveFloor" | "bootstrap" }
@@ -376,24 +390,68 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
     const minDate = dates.length ? dates.reduce((a, b) => (b < a ? b : a), dates[0]!) : null;
     const maxDate = dates.length ? dates.reduce((a, b) => (b > a ? b : a), dates[0]!) : null;
 
-    // ── Minimum-quality guard ────────────────────────────────────────────────
-    // A degenerate isotonic fit (holdoutSampleSize === 0) means the entire
-    // validation set was too small to hold out a meaningful comparison slice
-    // (fitBestCalibration requires ≥100 holdout points before the Platt/isotonic
-    // competition can run). Isotonic regression on a handful of rows reliably
-    // collapses to a constant-1 mapping that sends every prediction to ~100%.
+    // ── Minimum-quality gate (three independent checks) ─────────────────────
     //
-    // Guard: only replace the active model when the new fit has a real holdout
-    // (holdoutSampleSize > 0 means ≥100 held-out points were actually scored).
-    // When the guard fires, the new model is still written to the DB for
-    // diagnostics but active: false -- the previous model keeps serving.
-    const fitsPassesQualityGate = liveFit.holdoutSampleSize > 0;
+    // Gate 1 — degenerate guard (unchanged): holdoutSampleSize === 0 means the
+    // validation set was too small for fitBestCalibration to hold out a real
+    // comparison slice (requires ≥100 points). Isotonic regression on a handful
+    // of rows collapses to a constant-1 mapping that sends every prediction to
+    // ~100%. This is the "complete collapse" case.
+    //
+    // Gate 2 — holdout floor: even with holdoutSampleSize > 0, a model trained
+    // on a tiny eligible set (e.g. the corpus was almost entirely already-scored
+    // from a prior run) produces a log-loss estimate with very wide confidence
+    // intervals. Require at least MIN_HOLDOUT_SAMPLE_SIZE_TO_ACTIVATE held-out
+    // rows before trusting the estimate enough to displace the active model.
+    //
+    // Gate 3 — log-loss comparison: a new model must be at least as good as the
+    // currently active one on the holdout. If the active model already has a
+    // lower (better) log-loss, the new fit was likely trained on an unrepresentative
+    // or too-sparse slice and should not displace it. Bootstrap exception: when
+    // no active model exists, or the active model has no stored LL (legacy row),
+    // always allow activation so a fresh environment can produce its first model.
+
+    const [currentActiveModel] = await db
+      .select({ id: calibrationModelsTable.id, isotonicHoldoutLogLoss: calibrationModelsTable.isotonicHoldoutLogLoss })
+      .from(calibrationModelsTable)
+      .where(eq(calibrationModelsTable.active, true))
+      .limit(1);
+
+    const gate1_nonDegenerate = liveFit.holdoutSampleSize > 0;
+    const gate2_aboveFloor    = liveFit.holdoutSampleSize >= MIN_HOLDOUT_SAMPLE_SIZE_TO_ACTIVATE;
+    // Gate 3: allow when no active model, active model has no LL stored (legacy), or new fit is ≤ current LL.
+    // If the new fit's LL is somehow null despite passing gate 1 (should not happen per fitBestCalibration),
+    // be conservative and block activation.
+    const activeLL  = currentActiveModel?.isotonicHoldoutLogLoss ?? null;
+    const newLL     = liveFit.isotonicHoldoutLogLoss;
+    const gate3_notWorseThanCurrent =
+      currentActiveModel === undefined   // bootstrap: no active model yet
+      || activeLL === null               // legacy active model with no LL stored — can't compare, allow
+      || (newLL !== null && newLL <= activeLL);
+
+    const fitsPassesQualityGate = gate1_nonDegenerate && gate2_aboveFloor && gate3_notWorseThanCurrent;
+
     if (fitsPassesQualityGate) {
       await db.update(calibrationModelsTable).set({ active: false }).where(eq(calibrationModelsTable.active, true));
     } else {
+      const rejectionReason = !gate1_nonDegenerate
+        ? `holdoutSampleSize === 0 (degenerate fit — too few validation points)`
+        : !gate2_aboveFloor
+          ? `holdoutSampleSize ${liveFit.holdoutSampleSize} < floor ${MIN_HOLDOUT_SAMPLE_SIZE_TO_ACTIVATE} (eligible set too sparse)`
+          : `new holdout log-loss ${newLL?.toFixed(4) ?? "null"} > active model ${activeLL?.toFixed(4) ?? "null"} (new fit is worse)`;
       logger.warn(
-        { fitSampleSize: liveFit.fitSampleSize, holdoutSampleSize: liveFit.holdoutSampleSize, pooledValidationPoints: allValidationPoints.length },
-        "Calibration refit: holdoutSampleSize === 0 — fit is degenerate (too few validation points); new model stored inactive, previous active model kept",
+        {
+          fitSampleSize: liveFit.fitSampleSize,
+          holdoutSampleSize: liveFit.holdoutSampleSize,
+          newIsotonicHoldoutLogLoss: newLL,
+          activeModelId: currentActiveModel?.id ?? null,
+          activeIsotonicHoldoutLogLoss: activeLL,
+          pooledValidationPoints: allValidationPoints.length,
+          gate1_nonDegenerate,
+          gate2_aboveFloor,
+          gate3_notWorseThanCurrent,
+        },
+        `Calibration refit: new model stored inactive — ${rejectionReason}; previous active model kept`,
       );
     }
     await db.insert(calibrationModelsTable).values({

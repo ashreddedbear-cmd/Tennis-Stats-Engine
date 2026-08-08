@@ -645,8 +645,28 @@ router.get("/evaluation/bridge-rescore/status", async (_req, res): Promise<void>
  * subscription UI and without accidentally triggering an evaluationOnly run.
  */
 router.post("/evaluation/calibration-refit", requireAdmin, async (_req, res): Promise<void> => {
-  const result = startWalkForwardJob({ evaluationOnly: false });
-  res.json(result);
+  // Use the same in-process flag as the entitlement-gated endpoint so a concurrent call
+  // from either path is blocked. The restart-resistant cooldown inside runCalibrationRefitJob
+  // is the durable guard; this flag only prevents two simultaneous in-flight runs.
+  if (calibrationRefitInFlight) {
+    res.json({ started: false, reason: "A calibration-refit run is already in progress." });
+    return;
+  }
+
+  // Route through runCalibrationRefitJob so every attempt is recorded in job_runs and is
+  // auditable via GET /evaluation/calibration-refit/job-runs. Pass bypassGradeCountGuard:true
+  // so the admin can force a refit even without 500+ new graded predictions; the
+  // restart-resistant cooldown check inside the job still applies.
+  calibrationRefitInFlight = true;
+  res.json({ started: true });
+
+  void runCalibrationRefitJob({ bypassGradeCountGuard: true })
+    .catch((err) => {
+      logger.error({ err }, "Admin calibration-refit trigger failed");
+    })
+    .finally(() => {
+      calibrationRefitInFlight = false;
+    });
 });
 
 /**

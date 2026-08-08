@@ -193,50 +193,51 @@ needed per current evidence; monitor WTA and clay sub-segments in live paper-tra
 
 ---
 
-## 🔒 STATUS: Still EXCLUDED as of 2026-08-07
+## 🔒 STATUS: Still EXCLUDED as of 2026-08-08
 
 `"marketOdds"` remains in `EXCLUDED_FROM_ENSEMBLE`. Task #116 (re-confirm at n≥500) was
-cancelled. Calibration refit (task #117) completed 2026-08-07 — see below.
+cancelled. Task #117 (calibration refit) merged 2026-08-07 — see incident note below.
 
 ---
 
-## Calibration Refit — Post-Task #117 (2026-08-07)
+## Calibration Refit — Task #117 Incident (2026-08-07/08)
 
-### Trigger
-`POST /api/evaluation/calibration-refit` (admin, evaluationOnly=false) triggered 2026-08-07
-~21:36 UTC. Walk-forward ran on full 254,928-match corpus (previous model was fitted on ~134k
-matches). Refit completed ~23:10 UTC (~95 min total).
+### What happened
+`POST /api/evaluation/calibration-refit` (admin, evaluationOnly=false) was triggered at
+~21:36 UTC, producing model **#707** (fitted_at 23:51:32 UTC, validationSampleSize=10,348,
+holdoutSampleSize=2,070, isotonicHoldoutLL=0.6682).
 
-### New Active Calibration Model
+After the Task #117 merge caused a server restart (~00:01 UTC), the admin endpoint was called
+a second time. The second walk-forward found nearly all historical matches already scored
+(by the first run), processed only ~4,033 newly-added rows, and produced model **#708**
+(fitted_at 00:10:05 UTC, validationSampleSize=4,033, holdoutSampleSize=807,
+isotonicHoldoutLL=0.6904) — which activated and displaced #707.
+
+Both #707 and #708 are **worse** than the pre-task model #691 (isotonicHoldoutLL=0.6390).
+Model #691 was manually reactivated 2026-08-08 (manual DB update, both #707 and #708 set
+inactive). Root cause and guard fixes tracked in Tasks #134 and #135.
+
+### Current Active Calibration Model (as of 2026-08-08)
 
 | Field | Value |
 |---|---|
-| Model ID | 707 |
+| Model ID | **691** |
 | Method | isotonic |
-| Validation sample size | 26,897 |
-| Holdout sample size | 5,380 ✓ |
-| Isotonic holdout log-loss | **0.5673** |
-| Platt holdout log-loss | 0.5925 |
+| Validation sample size | 21,570 |
+| Holdout sample size | 4,314 |
+| Isotonic holdout log-loss | **0.6390** |
+| Validation date range | 2025-01-01 → 2026-07-26 |
 | Active | true ✓ |
 
-Previous active model (#691): isotonic, validationSampleSize=21,570, holdoutSampleSize=4,314,
-isotonicHoldoutLogLoss=0.6390. New model #707 shows **−0.0717 holdout log-loss improvement**,
-reflecting the expanded corpus and current model configuration.
-
-### B-CAL Cross-Check Delta Status
-Pre-refit: stored calibratedProbability vs re-applied global knots gap = +0.0212 (vintage
-mismatch: model #691 fitted on July 29 while live rows were locked July 14–24).
-Post-refit: new model #707 was fitted on the same corpus configuration as current live
-predictions. The vintage mismatch is now eliminated — new predictions use model #707 at lock
-time and the B-CAL cross-check delta is expected to be ~0.
+**Why #691 beats #707 despite smaller corpus:** #691 was fitted on 2025–2026 graded
+predictions (the most relevant calibration signal for current live picks). #707 was fitted
+on the full corpus back to year 2000, which dilutes the signal. Holdout LL is the
+authoritative comparator: 0.6390 (#691) < 0.6682 (#707) < 0.6904 (#708).
 
 ### Section B Δlog-loss Re-run Status
-**NOT RUN** — Section B's Δlog-loss ≤ 0 goal requires:
-1. Market odds active in the ensemble (currently EXCLUDED; task #116 cancelled)
-2. 200+ graded paper-trade rows locked WITH model #707 as the active calibration
+**NOT RUN** — requires:
+1. Market odds active in the ensemble (currently EXCLUDED)
+2. 200+ graded paper-trade rows locked with a fresh calibration model
 
-The existing 184 stored rows used an older calibration (pre-707). Running Section B against
-those rows would compare old-calibration stored values vs new-calibration re-runs — a
-meaningless apples-to-oranges comparison, not a measure of market odds module quality.
-
+The 201 graded odds rows were all locked before the Task #117 refit (latest cutoff 2026-07-24).
 Section B Δlog-loss verification deferred until market odds activation (future task).

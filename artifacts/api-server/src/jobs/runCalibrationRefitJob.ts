@@ -56,8 +56,51 @@ const RETRY_BACKOFF_MS = [5_000, 30_000];
  * activity at typical fixture volumes — enough new signal to justify refitting. On a fresh
  * environment with no prior calibration model, the first refit always runs (the guard only
  * applies when a previous model exists), so bootstrapping is unaffected.
+ *
+ * Admin-triggered refits (`bypassGradeCountGuard: true`) skip this guard but still respect
+ * the cooldown period below.
  */
 const MIN_NEW_GRADED_FOR_REFIT = 500;
+
+/**
+ * Minimum time (ms) that must have elapsed since ANY calibration model was last fitted —
+ * active or inactive — before a new training run is permitted. Applies to all callers
+ * including admin-forced refits so that a second call shortly after a completed refit
+ * (including across a server restart, where in-process flags reset) is rejected rather
+ * than silently running a data-starved fit.
+ *
+ * Why queries the most-recently-fitted model (not just the active one): an admin refit
+ * that produces an inactive model (degenerate or worse-LL) has still consumed almost the
+ * entire eligible corpus; a second run 18 minutes later will find the same near-empty
+ * dataset and produce the same noise result.
+ *
+ * 2 hours: long enough to catch the "confirmation call right after restart" scenario
+ * while short enough not to block legitimate same-day re-refits after a large data import.
+ */
+export const REFIT_COOLDOWN_MS = 2 * 60 * 60_000;
+
+/**
+ * Returns whether a cooldown block applies based on when the most recently fitted
+ * calibration model (active or inactive) was created. Null means no model has ever been
+ * fitted — cooldown does not apply (bootstrap / recovery path).
+ */
+export async function checkRefitCooldown(): Promise<{
+  blocked: boolean;
+  lastFittedAt: Date | null;
+  msRemaining: number;
+}> {
+  const [lastModel] = await db
+    .select({ fittedAt: calibrationModelsTable.fittedAt })
+    .from(calibrationModelsTable)
+    .orderBy(desc(calibrationModelsTable.fittedAt))
+    .limit(1);
+
+  if (!lastModel?.fittedAt) return { blocked: false, lastFittedAt: null, msRemaining: 0 };
+
+  const elapsed = Date.now() - lastModel.fittedAt.getTime();
+  const msRemaining = Math.max(0, REFIT_COOLDOWN_MS - elapsed);
+  return { blocked: msRemaining > 0, lastFittedAt: lastModel.fittedAt, msRemaining };
+}
 
 /**
  * Returns the number of newly-graded paper-trade / live evaluation_predictions since the
@@ -100,7 +143,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function runWithRetry(): Promise<
+async function runWithRetry(options: { bypassGradeCountGuard?: boolean } = {}): Promise<
   | { attempts: number; summary: WalkForwardSummary }
   | { attempts: number; skipped: true; reason: string }
   | { attempts: number; error: unknown }
@@ -108,20 +151,32 @@ async function runWithRetry(): Promise<
   let lastError: unknown;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
-      // Guard: only run training-mode walk-forward when enough new graded live
-      // predictions have accumulated since the last refit. This prevents the recurring
-      // refit job from creating degenerate calibration noise rows (inactive models that
-      // never serve predictions but pollute calibration_models) when the paper-trading
-      // pipeline is idle or the historical store is sparse.
-      //
-      // The check is inside the retry loop so a transient DB error on the first attempt
-      // does not silently bypass it on retry. The guard is a fast read-only query
-      // (indexed on runKind + status + gradedAt) and retrying it is safe.
-      const newGradedCount = await countNewGradedSinceLastRefit();
-      if (newGradedCount !== null && newGradedCount < MIN_NEW_GRADED_FOR_REFIT) {
-        const reason = `only ${newGradedCount} new graded predictions since last refit (min ${MIN_NEW_GRADED_FOR_REFIT})`;
-        logger.info({ newGradedCount, min: MIN_NEW_GRADED_FOR_REFIT }, "Calibration-refit skipped: not enough new graded predictions since last model was fitted");
+      // Guard 1 (always applies, restart-resistant): cooldown check against the most
+      // recently fitted model (active or inactive). Queries the DB so it survives server
+      // restarts — an in-process flag would reset to false after a restart, allowing a
+      // second run to fire immediately after the first completed.
+      const cooldown = await checkRefitCooldown();
+      if (cooldown.blocked) {
+        const minRemaining = Math.ceil(cooldown.msRemaining / 60_000);
+        const reason = `cooldown in effect — last fit ${cooldown.lastFittedAt?.toISOString() ?? "unknown"}, ${minRemaining}min remaining (cooldown: ${Math.round(REFIT_COOLDOWN_MS / 60_000)}min)`;
+        logger.info(
+          { lastFittedAt: cooldown.lastFittedAt, msRemaining: cooldown.msRemaining },
+          "Calibration-refit skipped: cooldown in effect (restart-resistant DB check)",
+        );
         return { attempts: attempt, skipped: true, reason };
+      }
+
+      // Guard 2 (skipped when bypassGradeCountGuard is true): require enough newly-graded
+      // live predictions since the last refit. Admin-triggered refits bypass this so the
+      // admin can force a refit immediately after a data import; the cooldown above still
+      // applies even to admin refits.
+      if (!options.bypassGradeCountGuard) {
+        const newGradedCount = await countNewGradedSinceLastRefit();
+        if (newGradedCount !== null && newGradedCount < MIN_NEW_GRADED_FOR_REFIT) {
+          const reason = `only ${newGradedCount} new graded predictions since last refit (min ${MIN_NEW_GRADED_FOR_REFIT})`;
+          logger.info({ newGradedCount, min: MIN_NEW_GRADED_FOR_REFIT }, "Calibration-refit skipped: not enough new graded predictions since last model was fitted");
+          return { attempts: attempt, skipped: true, reason };
+        }
       }
 
       const summary = await runWalkForwardEvaluation();
@@ -137,9 +192,21 @@ async function runWithRetry(): Promise<
   return { attempts: MAX_ATTEMPTS, error: lastError };
 }
 
-export async function runCalibrationRefitJob(): Promise<{ ok: boolean }> {
+/**
+ * Options for `runCalibrationRefitJob`.
+ *
+ * `bypassGradeCountGuard`: when true, skips the MIN_NEW_GRADED_FOR_REFIT check so an
+ * admin-triggered refit can proceed even without 500+ new graded predictions. The
+ * restart-resistant cooldown check still applies. Use only for admin/manual triggers
+ * where the operator has already decided a refit is warranted.
+ */
+export interface CalibrationRefitJobOptions {
+  bypassGradeCountGuard?: boolean;
+}
+
+export async function runCalibrationRefitJob(options: CalibrationRefitJobOptions = {}): Promise<{ ok: boolean }> {
   const startedAt = new Date();
-  const outcome = await runWithRetry();
+  const outcome = await runWithRetry(options);
   const finishedAt = new Date();
 
   if ("summary" in outcome) {
