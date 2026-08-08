@@ -193,10 +193,50 @@ needed per current evidence; monitor WTA and clay sub-segments in live paper-tra
 
 ---
 
-## 🔒 STATUS: Still EXCLUDED as of 2026-08-01
+## 🔒 STATUS: Still EXCLUDED as of 2026-08-07
 
-`"marketOdds"` remains in `EXCLUDED_FROM_ENSEMBLE`. Live Section B (n=184) is below the 500-row
-KEEP gate. Section C (+3.0pp, n=5,400) is corroborating but hindsight-biased and cannot serve
-as the primary activation trigger. Module stays excluded until follow-up task #116 (re-run at
-n≥500) confirms Δacc ≥ +0.5pp on unbiased live data. Calibration-refit follow-up tracked in
-task #117.
+`"marketOdds"` remains in `EXCLUDED_FROM_ENSEMBLE`. Task #116 (re-confirm at n≥500) was
+cancelled. Calibration refit (task #117) completed 2026-08-07 — see below.
+
+---
+
+## Calibration Refit — Post-Task #117 (2026-08-07)
+
+### Trigger
+`POST /api/evaluation/calibration-refit` (admin, evaluationOnly=false) triggered 2026-08-07
+~21:36 UTC. Walk-forward ran on full 254,928-match corpus (previous model was fitted on ~134k
+matches). Refit completed ~23:10 UTC (~95 min total).
+
+### New Active Calibration Model
+
+| Field | Value |
+|---|---|
+| Model ID | 707 |
+| Method | isotonic |
+| Validation sample size | 26,897 |
+| Holdout sample size | 5,380 ✓ |
+| Isotonic holdout log-loss | **0.5673** |
+| Platt holdout log-loss | 0.5925 |
+| Active | true ✓ |
+
+Previous active model (#691): isotonic, validationSampleSize=21,570, holdoutSampleSize=4,314,
+isotonicHoldoutLogLoss=0.6390. New model #707 shows **−0.0717 holdout log-loss improvement**,
+reflecting the expanded corpus and current model configuration.
+
+### B-CAL Cross-Check Delta Status
+Pre-refit: stored calibratedProbability vs re-applied global knots gap = +0.0212 (vintage
+mismatch: model #691 fitted on July 29 while live rows were locked July 14–24).
+Post-refit: new model #707 was fitted on the same corpus configuration as current live
+predictions. The vintage mismatch is now eliminated — new predictions use model #707 at lock
+time and the B-CAL cross-check delta is expected to be ~0.
+
+### Section B Δlog-loss Re-run Status
+**NOT RUN** — Section B's Δlog-loss ≤ 0 goal requires:
+1. Market odds active in the ensemble (currently EXCLUDED; task #116 cancelled)
+2. 200+ graded paper-trade rows locked WITH model #707 as the active calibration
+
+The existing 184 stored rows used an older calibration (pre-707). Running Section B against
+those rows would compare old-calibration stored values vs new-calibration re-runs — a
+meaningless apples-to-oranges comparison, not a measure of market odds module quality.
+
+Section B Δlog-loss verification deferred until market odds activation (future task).
