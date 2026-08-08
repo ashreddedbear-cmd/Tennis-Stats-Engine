@@ -1,0 +1,33 @@
+This is urgent — the live calibration model is currently worse than it was before anyone touched it. Please work through this in order. Steps 1–3 are read-only investigation. Do not activate any model or change the guard until I've seen the findings from those steps.
+
+## 1. Find out what triggered the second refit
+
+Model #707 was created by the manual Task #117 refit at ~21:36 UTC. Model #708 was created and activated ~18 minutes later, with a smaller validation sample (4,033 vs. 10,348) and a worse holdout log-loss (0.6904 vs. 0.6682). I need to know what caused that second refit to fire.
+
+- Check for any scheduled job, cron trigger, or background process that calls the calibration refit endpoint automatically.
+- Check application logs / server logs around 2026-08-07 23:51–00:10 UTC for anything that initiated a refit call.
+- Check whether `walkForward.ts` or any other write path has logic that can trigger a refit as a side effect (not just the manual admin endpoint).
+- Report: found the trigger and what it was, OR could not identify it after checking the above — don't guess if you can't find it.
+
+## 2. Compare all three models properly before deciding on a rollback target
+
+Do not assume model #707 (the task's intended output) is the correct one to restore. It is also worse than the model that was active before any of this happened.
+
+- Pull holdout log-loss, holdout sample size, and validation sample size for models #691, #707, and #708 side by side.
+- Report which one is actually best on holdout log-loss, and flag if sample size differences make any of these comparisons unreliable (e.g., a small holdout sample producing a misleadingly good or bad number).
+- Give a clear recommendation for which model should be active, based on the numbers — not based on which one was "supposed to" be the result of Task #117.
+
+## 3. Report current state clearly before any change
+
+- Confirm which model is active right now.
+- Confirm no further automatic refits have fired since #708.
+
+## 4. Once I confirm the rollback target from step 2, reactivate that model
+
+Wait for my explicit go-ahead after seeing steps 1–3 before doing this. When I confirm:
+
+- Reactivate the agreed-upon model (deactivate #708, activate the correct one).
+- Confirm the change took effect (query the active model row and confirm `is_active=true` on the correct ID and `false` on the others).
+- Do NOT touch the guard logic yet, do NOT update the memory file yet — those are separate follow-up steps once the immediate rollback is done and stable.
+
+Report back after steps 1–3 and wait for my confirmation before doing step 4.
