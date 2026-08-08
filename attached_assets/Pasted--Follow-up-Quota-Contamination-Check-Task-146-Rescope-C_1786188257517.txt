@@ -1,0 +1,37 @@
+# Follow-up: Quota Contamination Check + Task #146 Rescope
+
+## Context
+The Odds API (primary provider) quota is exhausted (507/500 used). The fallback provider (Odds-API.io) test just confirmed the real odds-availability ceiling is ~12 hours before match start — not T-25/T-15 (measurement bias, code never asked earlier) and not 24-48h (that appears to be a different feed the user's sportsbook uses). This changes two things: (1) whether today's earlier findings are trustworthy, and (2) how Task #146 should actually be scoped.
+
+## Part 1 — Quota contamination check (read-only)
+
+1. Determine when the primary Odds API's quota was actually exhausted (check request logs / billing dashboard / whatever tracks call count over time) — specifically, was it already exhausted before or during any of today's work?
+
+2. Cross-check against today's key findings, in order:
+   - Check 1/2/3 verification of model #711 (odds timing, weight dominance, train/holdout overlap) — did any of these rely on live odds calls that might have silently failed/returned empty due to quota exhaustion, rather than reflecting genuine absence of data?
+   - The "market odds has never fired in a single stored prediction" finding — was this checked across a period that included quota exhaustion? Could some non-firing be due to the primary provider being dead rather than the timing-gap issue?
+   - The original Step 1 timing investigation (T-25/T-15) — same question.
+
+3. Report: is there any finding from today that needs to be re-verified now that we know the primary provider was (or might have been) failing silently at some point, versus returning genuine "no odds yet" responses?
+
+## Part 2 — Rescope Task #146 around the confirmed ~12h window
+
+The original Task #146 plan (add odds fetch to `POST /api/predictions`, reduce paper-trade lead time 30→20 min) was built around the debunked T-25/T-15 assumption. Now that the real window is ~12h:
+
+1. Rewrite the plan's framing: odds fetch should be attempted on request whenever a match is within the actual available window (~12h out, using the fallback provider's confirmed data, and re-testing the primary provider's true ceiling once quota resets — don't assume it matches the fallback's window without checking).
+2. Confirm whether the 30→20 minute paper-trade lead-time change is still worth doing at all — since both 30 min and 20 min are deep inside a 12-hour window, this specific tweak may no longer be the actual lever and could be dropped from the task, simplifying it.
+3. Keep the redundant double-fetch cleanup — unaffected by any of this, still worth doing.
+4. Add explicit handling for "match is outside the odds-available window" vs. "provider is out of quota" as two distinct, distinguishable outcomes in the API response — don't let a quota failure look identical to "no odds available yet," since that's exactly the ambiguity that could hide problems like the one just found.
+
+## Part 3 — Quota management (flag only, don't fix yet)
+- Report the current call rate (~17/day estimated from 507/30) and whether that's from the 15-min paper-trade cycle, live user requests, or both.
+- Report options for quota (upgrade tier, add caching/TTL so repeated requests for the same match don't re-call the API, switch primary/fallback ordering) but do not implement any of them yet — just lay out options.
+
+## Do NOT
+- Do not implement Task #146 yet — this rescope comes first.
+- Do not assume the primary provider's window matches the fallback's ~12h finding — that needs to be verified once quota resets, not assumed.
+
+## Report back
+- Part 1: contamination check results — anything needing re-verification.
+- Part 2: rescoped Task #146 plan.
+- Part 3: quota rate and options (no action).
