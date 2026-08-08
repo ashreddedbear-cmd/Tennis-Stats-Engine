@@ -1,0 +1,45 @@
+# Verify Ticket 4 Data Source + Confirm Visual QA Pass
+
+## Context
+Ticket 4 (HighDisagreement caution icon) shipped with a new `/monitoring/agreement-accuracy` endpoint feeding live stats into the tooltip. Two things weren't explicitly confirmed in the completion report and need a check before this is considered fully signed off.
+
+## Check 1 — Data source match
+The original Ticket 4 finding was: HighDisagreement 54.95% accuracy (n=26,090) vs Strong agreement 65.24% (n=35,392), non-overlapping 95% CIs, described as coming from "the full 69,333-row corpus" (post-backfill).
+
+Confirm the new `/monitoring/agreement-accuracy` endpoint queries the same underlying dataset — same table(s), same filters (segment, included_in_accuracy, graded status, etc.) — as the original finding. Specifically:
+1. What table(s) and filters does the new endpoint actually query?
+2. Does it return numbers matching (or reasonably close to, accounting for new data accumulated since) 54.95%/65.24% with similar n, when called right now?
+3. If the numbers differ meaningfully from the original finding, explain why (different dataset scope, different filter, or genuinely more data accumulated since) — don't just report a mismatch without explanation.
+
+## Check 2 — Visual QA confirmation
+The original Ticket 4 spec called for a visual-collision check and QA on both agreement and disagreement states before considering the icon shippable. Confirm this actually happened:
+1. Does the ⚠ icon/tooltip render correctly without colliding with other elements on the prediction card (player name, other badges/icons, layout at different screen widths if relevant)?
+2. Confirm it correctly does NOT appear on Strong/non-HighDisagreement predictions (the `enabled` condition on the useQuery hook should gate this, but confirm visually or via a test, not just by reading the condition in code).
+3. If this wasn't checked yet, do it now and report the result — a screenshot or explicit description of both states is fine.
+
+## Do NOT
+- Do not change the endpoint's query logic unless Check 1 reveals a genuine mismatch that needs fixing — report first.
+
+## Report back
+- Check 1: query details, live numbers returned, match/mismatch vs original finding with explanation.
+- Check 2: confirmation of visual QA on both states, with description or screenshot.
+
+---
+
+## Item 3 — Run auditTieBreakBaseline.ts
+Drop into `apps/api-server/src/scripts/`, run with:
+`pnpm --filter @workspace/api-server exec tsx src/scripts/auditTieBreakBaseline.ts`
+
+This produces a valid same-cohort tie-breaker analysis (task11's original +3.1pp claim was invalid — mismatched cohorts, 3,987 validation rows vs 7,844 test rows). This script does not resurrect that comparison; it answers a different, valid question instead: on matches where the tie-breaker fires today, does it help or hurt, within one consistent test-segment cohort? Also includes a fold-integrity check to confirm no validation rows are leaking into the test segment.
+
+Note: this may reinforce or add detail to 8A (already closed today: 53.28% tie-break accuracy, no change from baseline, on the `paper_trade_shadow` sample) — report if this script's findings are consistent with 8A or reveal something new (e.g., in the agreement-level breakdown).
+
+## Item 4 — Run auditParlayComboTestSegment.ts
+Drop into `apps/api-server/src/scripts/`, run with:
+`pnpm --filter @workspace/api-server exec tsx src/scripts/auditParlayComboTestSegment.ts`
+
+Tests the original "High DQ + Low Upset Risk" parlay combo claim (64.3% accuracy, n=311, validation-segment only) against held-out test-segment data. Reports whether the claim holds, is overstated but still beats baseline, or fails outright — same pattern as today's Ticket 1 rescore, where a validation-only claim didn't fully reproduce out-of-sample.
+
+## Report back (Items 3 & 4)
+- Full script output for both (accuracy splits, deltas vs claimed/baseline, verdict lines).
+- Whether either script surfaced a data issue (e.g., fold_id NULL warnings, insufficient n) that needs follow-up before trusting the verdict.
