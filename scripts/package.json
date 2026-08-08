@@ -7,6 +7,10 @@
     "hello": "tsx ./src/hello.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
+  "dependencies": {
+    "@workspace/db": "workspace:*",
+    "drizzle-orm": "catalog:"
+  },
   "devDependencies": {
     "@types/node": "catalog:",
     "tsx": "catalog:"

@@ -74,16 +74,18 @@ test("NOT HIGHEST_CONFIDENCE: Moderate agreement → withheld even with coreSign
   assert.notEqual(result, "HIGHEST_CONFIDENCE");
 });
 
-test("NOT HIGHEST_CONFIDENCE: DQ just below 45 threshold blocks the ≥35-margin gate", () => {
-  // margin=35, DQ=44 → blocked
+test("HIGHEST_CONFIDENCE: DQ gate removed — margin ≥ 35 AND Strong AND coreSignalsAlign reaches HIGHEST_CONFIDENCE regardless of DQ (Ticket 3)", () => {
+  // DQ gate removed 2026-08-08 (Ticket 3): Limited DQ outperforms Excellent DQ on held-out data.
+  // margin=35, DQ=44 → was blocked by old gate, now passes through to HIGHEST_CONFIDENCE.
   const result = computeRecommendation(85, 44, "Acceptable", "Strong", false, true);
-  assert.notEqual(result, "HIGHEST_CONFIDENCE");
+  assert.equal(result, "HIGHEST_CONFIDENCE");
 });
 
-test("NOT HIGHEST_CONFIDENCE: DQ just below 50 threshold blocks the ≥26-margin gate", () => {
-  // margin=26, DQ=49 → blocked
+test("HIGHEST_CONFIDENCE: DQ gate removed — margin ≥ 26 AND Strong AND coreSignalsAlign reaches HIGHEST_CONFIDENCE regardless of DQ (Ticket 3)", () => {
+  // DQ gate removed 2026-08-08 (Ticket 3): Limited DQ outperforms Excellent DQ on held-out data.
+  // margin=26, DQ=49 → was blocked by old gate, now passes through to HIGHEST_CONFIDENCE.
   const result = computeRecommendation(76, 49, "Acceptable", "Strong", false, true);
-  assert.notEqual(result, "HIGHEST_CONFIDENCE");
+  assert.equal(result, "HIGHEST_CONFIDENCE");
 });
 
 // ── HIGH_CONFIDENCE ──────────────────────────────────────────────────────────

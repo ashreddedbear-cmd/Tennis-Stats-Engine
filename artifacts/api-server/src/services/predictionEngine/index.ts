@@ -483,9 +483,9 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
   //
   // Task #21 (2026-07-31): excluded from the ensemble pending the ≥200 paper_trade paired-row
   // reliability bar. The 2026-07-31 ablation run produced n=180 paper_trade pairs (just short of
-  // the required 200). Directional signals are promising — Δacc +0.5pp, Δlog-loss −0.014, market
-  // correct 69.6% when it disagrees with the model — but the sample is too small to declare a
-  // confirmed net positive. "marketOdds" is in EXCLUDED_FROM_ENSEMBLE until re-validated at ≥200.
+  // the required 200). As of 2026-08-08 there are 184 accuracy-eligible rows with odds (still
+  // short of 200). A corrected ablation (both arms through the same current calibration, not
+  // stored calibratedProbability as baseline) must be run once n≥200.
   // See docs/audit-market-consensus-ablation.md and scripts/auditMarketConsensusAblation.ts.
   let marketConsensusInput: { name: string; player1Edge: number; reliability: number; weightPrior: number } | null = null;
   // Task #21: honor the global EXCLUDED_FROM_ENSEMBLE gate for "marketOdds" whenever no explicit

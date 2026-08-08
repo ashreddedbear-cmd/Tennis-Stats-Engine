@@ -374,6 +374,83 @@ test("Market Consensus trace in decisionTrace.modules is always excludedFromData
   );
 });
 
+// ── Clay specialist disable (Ticket 1, 2026-08-08) ───────────────────────────
+// Specialist calibration is disabled for Clay after walk-forward on 196,924 rows found
+// it hurts accuracy by −1.67pp. These tests pin that the gate is always enforced.
+
+test("Clay specialist: specialistApplied=false on Clay even when a fully-qualified segment is provided", () => {
+  const output = runPredictionEngine(
+    baseInput({
+      surface: "Clay",
+      segment: {
+        segmentKey: "ATP-Clay",
+        label: "ATP Clay",
+        meetsThreshold: true,
+        calibrationMapping: [
+          { x: 0.3, y: 0.26 },
+          { x: 0.5, y: 0.48 },
+          { x: 0.7, y: 0.68 },
+        ],
+        weight: 0.55,
+      },
+    }),
+  );
+  assert.strictEqual(
+    output.engine.specialistApplied,
+    false,
+    "specialistApplied must be false for Clay surface — Ticket 1 disable is unconditional",
+  );
+  assert.strictEqual(
+    output.engine.segmentKey,
+    null,
+    "segmentKey must be null for Clay predictions even when a valid segment is supplied",
+  );
+});
+
+test("Clay specialist: specialistApplied=true on Hard surface with identical segment (control — disable is Clay-only)", () => {
+  const output = runPredictionEngine(
+    baseInput({
+      surface: "Hard",
+      segment: {
+        segmentKey: "ATP-Hard",
+        label: "ATP Hard",
+        meetsThreshold: true,
+        calibrationMapping: [
+          { x: 0.3, y: 0.26 },
+          { x: 0.5, y: 0.48 },
+          { x: 0.7, y: 0.68 },
+        ],
+        weight: 0.55,
+      },
+    }),
+  );
+  assert.strictEqual(
+    output.engine.specialistApplied,
+    true,
+    "specialistApplied must be true for Hard surface with a qualifying segment — the disable is Clay-only",
+  );
+  assert.strictEqual(
+    output.engine.segmentKey,
+    "ATP-Hard",
+    "segmentKey must be the provided segment key for Hard predictions",
+  );
+});
+
+// ── formEloConflict field persistence ────────────────────────────────────────
+// formEloConflict is persisted on EngineBreakdown and serialised into featureSnapshot.
+// The ablation script reads engine.formEloConflict to decide Recent Form's weight prior;
+// if the field were missing it would silently default to false and apply the wrong prior.
+
+test("engine.formEloConflict is always present as a boolean in every prediction output", () => {
+  const output = runPredictionEngine(baseInput());
+  assert.ok(
+    typeof output.engine.formEloConflict === "boolean",
+    `engine.formEloConflict must be a boolean on every output (got ${typeof output.engine.formEloConflict})`,
+  );
+});
+
+// ── Form-Elo conflict gate ────────────────────────────────────────────────────
+
 test("Form-Elo conflict gate: does NOT suppress RF when signals agree — RF retains its normal weight contribution", () => {
   // When both surface Elo and recent form point at the same player, the gate must be quiet.
   // Verify by checking that RF's weightUsed in the agree scenario is > a meaningful fraction

@@ -1,6 +1,6 @@
 ---
 name: Market Odds Ablation Results
-description: All sections complete as of 2026-08-01. marketOdds still EXCLUDED — live Section B (n=184) below 500-row KEEP gate. Section C (n=5400) +3.0pp corroborating but hindsight-biased; cannot serve as primary gate.
+description: NOT YET ACTIVATED. Corrected paired-arm Section B (n=174 processed/184 eligible; 10 cross-val failures): Δacc +3.45pp, Δlog-loss −0.0519 — thresholds met but n<200. Re-run once n≥200 pass cross-val.
 ---
 
 ## Authoritative Row Count (2026-08-01 15:26:22 UTC)
@@ -193,14 +193,28 @@ needed per current evidence; monitor WTA and clay sub-segments in live paper-tra
 
 ---
 
-## 🔒 STATUS: Still EXCLUDED as of 2026-08-08
+## 🔒 STATUS: NOT YET ACTIVATED (2026-08-08)
 
-`"marketOdds"` remains in `EXCLUDED_FROM_ENSEMBLE`. Task #116 (re-confirm at n≥500) was
-cancelled. Task #117 (calibration refit) merged 2026-08-07 — see incident note below.
+`"marketOdds"` remains in `EXCLUDED_FROM_ENSEMBLE`. Corrected paired-arm Section B ablation
+(n=174 processed / 184 eligible / 201 total graded with odds; 10 rows rejected by cross-val):
+Δacc +3.45pp ✓, Δlog-loss −0.0519 ✓, but n=174 < 200 threshold ✗.
+
+Correct methodology: BOTH arms reconstruct from stored preCalibrationProbability through the
+same active calibration → specialist → simulator pipeline. S is cross-validated row-by-row
+against stored weightUsed values (tolerance 1.5pp); rows that fail are excluded from metrics.
+Using stored calibratedProbability as baseline is confounded by calibration drift between
+lock time and today.
+
+Re-run `scripts/auditMarketConsensusAblation.ts` once n≥200 rows pass cross-validation.
+Signal is strong and likely to persist at slightly larger n.
 
 ---
 
-## Calibration Refit — Task #117 Incident (2026-08-07/08)
+## Calibration Refit Incident (2026-08-07/08)
+
+---
+
+## Calibration Refit — Incident (2026-08-07/08)
 
 ### What happened
 `POST /api/evaluation/calibration-refit` (admin, evaluationOnly=false) was triggered at

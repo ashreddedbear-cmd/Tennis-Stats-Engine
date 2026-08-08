@@ -170,16 +170,15 @@ export const ENSEMBLE_WEIGHT_PRIOR = {
 // surface-specific edge. See docs/audit-matchloadrecovery-live-revalidation.md for the full
 // breakdown; re-run the ablation if the historical corpus grows substantially and this decision
 // should be revisited.
-// marketOdds: excluded pending the live paper-trade Section B ablation reaching n≥500 accuracy-
-// eligible paired rows. As of 2026-08-01 the sample is n=184 (below the 500-row floor). Section B
-// shows Δacc=+1.1pp (directionally positive) but Δlog-loss=+0.0205 (worse) — the log-loss
-// regression is a calibration-vintage mismatch artifact (B-CAL analysis: global knots fit on
-// 2017-2020 data, live rows are 2025-2026), but it has not been fully resolved. Section C
-// (historical, n=5,400): Δacc=+3.0pp, Δlog-loss=−0.0331 — strong corroborating signal but
-// explicitly hindsight-biased (tennis-data.co.uk player1 = actual winner); cannot serve as the
-// primary KEEP gate. Will be removed from this set once Section B reaches n≥500 with
-// Δacc ≥ +0.5pp — see docs/audit-market-consensus-ablation.md and the follow-up tasks for the
-// live re-confirmation and calibration-refit work.
+//
+// marketOdds: excluded pending the live paper-trade Section B ablation reaching n≥200 processed
+// rows. As of 2026-08-08 the corrected paired-arm ablation (both arms from stored
+// preCalibrationProbability through the SAME active calibration → specialist → simulator pipeline,
+// S cross-validated against stored weightUsed per row) ran at n=174 processed rows (184 eligible;
+// 10 rejected by cross-validation where |Σ(p×w) − preCalP1| > 1.5pp) and shows Δacc=+3.45pp,
+// Δlog-loss=−0.0519 — both thresholds met, but n<200. Will be removed from this set once n≥200
+// rows pass cross-validation AND the re-run confirms Δacc≥+0.5pp AND Δlog-loss≤−0.010.
+// See docs/audit-market-consensus-ablation.md and scripts/auditMarketConsensusAblation.ts.
 export const EXCLUDED_FROM_ENSEMBLE = new Set(["availability", "fatigue", "matchLoadRecovery", "marketOdds"]);
 
 /**
