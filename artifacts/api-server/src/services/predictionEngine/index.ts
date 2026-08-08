@@ -109,6 +109,14 @@ export interface EngineBreakdown {
   /** Per-matchup count of prior meetings/matches on the relevant surface for each player (same window `surfaceElo.ts` used), surfaced explicitly so a low-sample surface prediction is visibly flagged rather than silently blended in. Not present on predictions made before this field existed. */
   surfaceSampleDepth: ReturnType<typeof computeSurfaceSampleDepth>;
   /**
+   * Ticket 2 (2026-08-08): true when the Recent Form weight gate fired — i.e. Recent Form is
+   * pointing strongly in the OPPOSITE direction from Surface Elo. When true, Recent Form's
+   * ensemble weight is reduced to near-zero (0.1) for this prediction. This flag is persisted
+   * here so its live effect can be measured without re-running the engine. Not present on
+   * predictions made before this field was added.
+   */
+  formEloConflict?: boolean;
+  /**
    * Task 56: output of the final-consistency guard (`finalConsistencyCheck.ts`), run as the very
    * last step before this EngineOutput is returned. Empty in the overwhelming common case --
    * every rule it checks already holds by construction elsewhere in this file. A non-empty array
@@ -633,7 +641,16 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
   // (and only when) that segment has cleared its own data-sufficiency thresholds. Everything else
   // falls back to the general model alone, with a visible reason why (never silently).
   // Ablation-only: "segmentSpecialist" removed forces the specialist off regardless of `segment`.
-  const segment = excludedModels?.has("segmentSpecialist") ? null : (input.segment ?? null);
+  //
+  // Ticket 1 (2026-08-08): specialist calibration disabled specifically for Clay. Walk-forward
+  // rescore on 196,924 graded rows shows specialist hurts Clay accuracy by −1.67pp (61.37% vs
+  // 63.04%), while helping Grass (+2.19pp), Hard (+1.30pp), and IndoorHard (+1.47pp). Clay-only
+  // disable preserves the gains on all other surfaces. Revisit once the DQ scoring redesign
+  // (Ticket 3 follow-up) produces cleaner per-surface signals.
+  const specialistDisabledForSurface = input.surface === "Clay";
+  const segment = excludedModels?.has("segmentSpecialist") || specialistDisabledForSurface
+    ? null
+    : (input.segment ?? null);
   const specialistApplied = !!(segment?.meetsThreshold && segment.calibrationMapping && segment.calibrationMapping.length > 0 && typeof segment.weight === "number");
 
   let specialistProbability: number | null = null;
@@ -792,7 +809,9 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
   }
 
   let segmentNote: string;
-  if (!segment) {
+  if (specialistDisabledForSurface) {
+    segmentNote = "Specialist calibration is currently disabled for Clay (2026-08-08 Ticket 1: walk-forward rescore showed −1.67pp accuracy on Clay vs. +1.30–2.19pp on other surfaces — using the general model only on Clay until DQ scoring redesign).";
+  } else if (!segment) {
     segmentNote = "This match's tour isn't one of Phase 6's candidate specialist segments (ATP/WTA on Hard, Clay, Grass, or IndoorHard) -- using the general model only.";
   } else if (specialistApplied) {
     segmentNote = `Segment specialist for ${segment.label} applied (blend weight ${Math.round(specialistWeight * 100)}%), measured on ${segment.validationSampleSize} validation-segment predictions across ${segment.historicalMatchCount} real historical ${segment.label} matches.`;
@@ -1061,6 +1080,7 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
     upsetRiskBreakdown,
     surfaceSampleDepth,
     consistencyViolations,
+    formEloConflict,
   };
 
   // ---------------------------------------------------------------------------
