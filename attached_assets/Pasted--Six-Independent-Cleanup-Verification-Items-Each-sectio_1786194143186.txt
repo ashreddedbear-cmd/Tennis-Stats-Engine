@@ -1,0 +1,28 @@
+# Six Independent Cleanup/Verification Items
+
+Each section below is independent — implement, test, and report on each separately so any one item can be reverted without touching the others. Do not let one item's changes bleed into another's files unless unavoidable.
+
+---
+
+## Item 1 — Ticket 4: HighDisagreement caution icon (build)
+Full spec is in the master ticket doc (`tennismatrixai-audit-followup-spec.md`, Ticket 4 section). Recap: HighDisagreement matches are 54.95% accurate (n=26,090) vs 65.24% for Strong agreement (n=35,392) — non-overlapping CIs, real ~10pp gap. Decision made: no suppression, just a visible caution/warning icon (⚠) next to the player's name on the prediction card. Tooltip/tap shows the real historical numbers, pulled live from the same query used in the audit — not hardcoded. Implement per the existing spec's field/value check, icon placement, tooltip content, visual-collision check, and QA on both agreement/disagreement states.
+
+## Item 2 — Simulate a provider_error and confirm it's handled correctly
+The three-state oddsStatus (`included` / `outside_window` / `provider_error`) has only ever been tested for the first two. Simulate a real provider failure — temporarily point at an invalid API key, or mock the provider throwing an exception — and confirm the code correctly sets `oddsStatus: "provider_error"` (not misclassified as `outside_window`). Test via the same admin-cookie auth path used for Task #146's verification. Revert the simulated failure condition afterward — this is a test, not a permanent change.
+
+## Item 3 — Degenerate calibration rows (folds 243–245)
+Rows in folds 243–245 have `calibrated_probability = 100.00` from collapsed per-fold models during #711's walk-forward (early corpus, sparse data, <100 holdout points). Confirmed not to affect #711's aggregate result, but bad values sitting in the DB. Either: (a) clean these specific rows if there's a safe way to do so without violating the "no altering old rows" constraint — check whether these are `historical_test`/walk-forward intermediate rows rather than graded predictions, which may make cleanup safe — or (b) if cleanup isn't safe/appropriate, add a clear comment/doc note (e.g. in `docs/audit-market-consensus-ablation.md` or wherever calibration methodology is documented) flagging that folds 243-245 contain known-degenerate intermediate values so a future direct query isn't misled. Report which approach was taken and why.
+
+## Item 4 — Stale index.ts comment
+`index.ts` still has a comment referencing "must be run once n≥200" — leftover from before the market-odds override decision. Update it to accurately reflect current state (marketOdds is active via documented override, not because n≥200 was met — see `docs/audit-market-consensus-ablation.md` for the override rationale). One-line fix, no logic change.
+
+## Item 5 — Reconcile conflicting historical Section B numbers
+Two docs report different Section B numbers for the same original analysis: the planning doc (`docs/audit-market-consensus-ablation.md`, dated 2026-07-31) reports +0.5pp / −0.0141 log-loss; the memory file (updated 2026-08-01) reports +1.1pp / +0.0205 for the same section. Determine which (if either) is correct by checking against source data/logs if still available, and reconcile both docs to state the correct number with a note explaining the discrepancy existed and was resolved on [date]. If the original source data isn't recoverable, document both figures with a note that they conflict and the earlier one is unverified, rather than silently picking one.
+
+## Item 6 — EVENTS_TTL_MS on Odds-API.io
+Only `ODDS_TTL_MS` (per-event odds) was raised to 2 hours on Odds-API.io; `EVENTS_TTL_MS` (the events-list call) is still at 5 minutes. Raise it to match — 2 hours — using the same deploy/verify method as the earlier TTL fixes (confirm the value in the built dist, not just source). Note: Odds-API.io is the fallback provider with a separate quota pool from The Odds API, so this is lower priority, but the fix is trivial and consistent with the primary provider's change.
+
+---
+
+## Report back
+One section per item above — confirm what was done, verified, and any decision made (especially for Items 3 and 5, which involve judgment calls, not just mechanical fixes).

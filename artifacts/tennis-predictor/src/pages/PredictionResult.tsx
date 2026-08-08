@@ -13,6 +13,8 @@ import { buildPredictionCopyText } from "@/lib/predictionCopyText"
 import { getRecommendationLabel } from "@/lib/recommendationLabels"
 import { Activity, ShieldAlert, CheckCircle2, XCircle, TrendingUp, AlertTriangle, ChevronRight, Dna, ActivitySquare, Database, Vote, Info, Dices, Crown, Scale, Zap, GitBranch, ChevronDown, Copy, Bookmark, BookmarkCheck, FolderOpen } from "lucide-react"
 import { useState } from "react"
+import { useQuery } from "@tanstack/react-query"
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip"
 import { UPSET_RISK_LABEL, UPSET_RISK_SHORT, UPSET_RISK_TEXT_CLASS, upsetRiskBadgeClasses } from "@/lib/upsetRiskColors"
 import { useToast } from "@/hooks/use-toast"
 import { useAuth } from "@clerk/react"
@@ -188,6 +190,19 @@ export default function PredictionResultPage() {
   const [methodologyOpen, setMethodologyOpen] = useState(false)
 
   const recordOutcome = useRecordPredictionOutcome()
+
+  // Item 1 — HighDisagreement caution icon: fetch live historical accuracy by modelAgreement
+  // category, used to populate the ⚠ tooltip on the predicted winner name.
+  // Enabled only when the prediction actually shows HighDisagreement (avoids quota use on
+  // the common case; staleTime keeps repeated visits free).
+  const { data: agreementStatsData, isLoading: agreementStatsLoading } = useQuery({
+    queryKey: ["monitoring-agreement-accuracy"],
+    queryFn: () =>
+      fetch(api("/monitoring/agreement-accuracy"), { credentials: "include" })
+        .then((r) => r.json() as Promise<{ stats: Record<string, { n: number; accuracy: number }> }>),
+    staleTime: 5 * 60 * 1000,
+    enabled: prediction?.engine?.modelAgreement === "HighDisagreement",
+  })
 
   if (isLoading) {
     return (
@@ -408,9 +423,44 @@ export default function PredictionResultPage() {
                 /* ── Normal predicted winner hero ───────────────────────────── */
                 <div>
                   <p className="text-xs font-mono font-bold text-muted-foreground mb-3 tracking-widest uppercase">PREDICTED WINNER</p>
-                  <h2 className="text-5xl md:text-7xl font-display font-bold tracking-tight text-primary break-words leading-[1.05]">
-                    {prediction.predictedWinnerName}
-                  </h2>
+                  <div className="flex items-start gap-2">
+                    <h2 className="text-5xl md:text-7xl font-display font-bold tracking-tight text-primary break-words leading-[1.05]">
+                      {prediction.predictedWinnerName}
+                    </h2>
+                    {engine.modelAgreement === "HighDisagreement" && (
+                      <TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="mt-3 cursor-help flex-shrink-0 inline-flex">
+                              <AlertTriangle className="w-5 h-5 text-destructive" aria-label="High model disagreement" />
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent side="right" className="max-w-[280px] p-3 space-y-2">
+                            <p className="font-semibold text-destructive text-xs uppercase tracking-wide">⚠ High Model Disagreement</p>
+                            {agreementStatsLoading ? (
+                              <p className="text-xs text-muted-foreground">Loading historical accuracy…</p>
+                            ) : agreementStatsData?.stats?.HighDisagreement && agreementStatsData?.stats?.Strong ? (
+                              <p className="text-xs leading-relaxed">
+                                Historically, HighDisagreement picks are{" "}
+                                <span className="font-bold text-destructive">
+                                  {agreementStatsData.stats.HighDisagreement.accuracy}% accurate
+                                </span>{" "}
+                                (n={agreementStatsData.stats.HighDisagreement.n.toLocaleString()}) vs{" "}
+                                <span className="font-bold">
+                                  {agreementStatsData.stats.Strong.accuracy}%
+                                </span>{" "}
+                                for Strong agreement (n={agreementStatsData.stats.Strong.n.toLocaleString()}). Core models point in meaningfully different directions.
+                              </p>
+                            ) : (
+                              <p className="text-xs text-muted-foreground">
+                                The core models strongly disagree on this pick — consider lower position size.
+                              </p>
+                            )}
+                          </TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    )}
+                  </div>
                   <div className="mt-6 flex flex-wrap gap-3">
                     <Badge
                       variant={

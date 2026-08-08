@@ -1,18 +1,23 @@
 # Market Consensus Ablation — Section B Results
 
 **Generated:** 2026-08-08  
-**Status:** 🔒 NOT ACTIVATED — n=174 processed rows, below the 200-row gate
+**Status:** ✅ ACTIVATED via documented override (2026-08-08) — n=174 < 200 gate; see `artifacts/api-server/docs/audit-market-consensus-ablation.md § "Activation Decision"`
 
 ---
 
 ## Decision
 
-`marketOdds` remains in `EXCLUDED_FROM_ENSEMBLE`. Both the accuracy and log-loss thresholds are
-exceeded by a large margin, but the n≥200 processed-row gate is not met.
+**2026-08-08 override:** `marketOdds` was activated despite not meeting the n≥200 gate (n=174).
+Effect-size stability across three independent runs (Δacc 3.45–3.80pp, Δlog-loss −0.0514 to −0.0805)
+justified the override. See `artifacts/api-server/docs/audit-market-consensus-ablation.md §
+"Activation Decision: Documented Override"` for the full rationale.
 
-**Re-run this script** once n≥200 accuracy-eligible paper_trade rows with odds have passed
+~~`marketOdds` remains in `EXCLUDED_FROM_ENSEMBLE`. Both the accuracy and log-loss thresholds are
+exceeded by a large margin, but the n≥200 processed-row gate is not met.~~
+
+~~**Re-run this script** once n≥200 accuracy-eligible paper_trade rows with odds have passed
 cross-validation. If both signal thresholds still hold, remove `"marketOdds"` from
-`EXCLUDED_FROM_ENSEMBLE` in `dataQuality.ts`.
+`EXCLUDED_FROM_ENSEMBLE` in `dataQuality.ts`.~~
 
 ---
 
@@ -93,15 +98,20 @@ the ablation only uses rows where the reconstruction is verifiably accurate.
 | A (market vs model direction, live) | 184 | market right 69.6% on disagree | — | Stored columns only; no confound |
 | **B (corrected paired-arm, live)** | **174** | **+3.45pp** | **−0.0519** | **Primary gate — 10 rows rejected by cross-val** |
 | B (prior confounded, 2026-08-08) | 184 | +3.80pp | −0.0805 | Superseded — calibration drift in baseline |
-| B (prior, 2026-08-01) | ~180 | +1.1pp | +0.0205 | Superseded — calibration-vintage mismatch |
+| B (original, 2026-07-31) | 180 | +0.5pp | −0.0141 | Superseded — first run, raw re-score (no cross-val rejection, no calibration-alignment) |
+| B (prior, 2026-08-01) | ~180 | +1.1pp | +0.0205 | Superseded — calibration-vintage mismatch; conflicted with B-original (Item 5 reconciliation 2026-08-08) |
 | C fast direction (historical, hindsight) | 5,932 | +3.7pp | −0.0338 | Corroborating; player1=winner bias |
 | C full engine re-run (historical, hindsight) | 5,400 | +3.0pp | −0.0331 | Corroborating; player1=winner bias |
 
 ---
 
-## Next step
+## Next step (SUPERSEDED — activation already occurred 2026-08-08)
 
-Re-run `scripts/auditMarketConsensusAblation.ts` once n≥200 rows pass cross-validation.
+~~Re-run `scripts/auditMarketConsensusAblation.ts` once n≥200 rows pass cross-validation.
 The current signal is very strong; at +3.45pp accuracy and −0.0519 log-loss on n=174,
 any modest increase in sample size will confirm the result. The n≥200 bar is the agreed
-reliability gate and must be met before activation.
+reliability gate and must be met before activation.~~
+
+`marketOdds` was activated via documented override on 2026-08-08. This section is preserved
+as a historical record of the script's original output. Re-running the script is still
+worthwhile once the corpus grows to validate the activation decision holds.

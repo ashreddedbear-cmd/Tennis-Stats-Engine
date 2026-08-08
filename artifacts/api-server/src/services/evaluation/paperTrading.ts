@@ -182,6 +182,8 @@ export async function runPaperTradingCycle(providerOverride?: TennisDataProvider
         preCalibrationProbability: rawProbability,
         dataQuality: output.dataQuality,
         isEliteTier: output.engine.isEliteTier,
+        // Per-module weight trace: written forward-only; absent on rows scored before this field.
+        moduleWeights: output.decisionTrace.modules,
       };
 
       // Task 47 / Task #146: market odds were already fetched inside predictFromSnapshot

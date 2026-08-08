@@ -1,4 +1,4 @@
-import type { EngineBreakdown } from "../predictionEngine";
+import type { EngineBreakdown, ModuleTrace } from "../predictionEngine";
 
 /**
  * Bumped whenever the historical walk-forward scoring APPROACH materially changes -- not the
@@ -71,6 +71,14 @@ export interface LiveFeatureSnapshot {
    */
   dataQuality?: number;
   isEliteTier?: boolean;
+  /**
+   * Per-module weight trace from `DecisionTrace.modules` — each module's `weightUsed`
+   * (effectiveWeight), reliability, importance, raw edge, and probability contribution.
+   * Added forward-only: absent on rows scored before this field existed. Enables direct SQL
+   * queries over module contributions (e.g. "how much weight did marketOdds carry across the
+   * last N predictions") without manually reconstructing the path through engine.models blobs.
+   */
+  moduleWeights?: ModuleTrace[];
 }
 
 export interface CalibrationKnot {

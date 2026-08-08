@@ -1,0 +1,30 @@
+# Store engine.modules Per-Module Weight Trace in feature_snapshot
+
+## Context
+`feature_snapshot` currently stores these keys: `risks`, `models`, `fatigue`, `reasons`, `weather`, `warnings`. The per-module weight trace — `engine.modules`, which includes each module's `weightUsed`, `reliability`, and contributed probability (e.g. Market Consensus's actual weight and probability on a given prediction) — is not among them.
+
+This matters now that market odds is live in the ensemble (Task #146): verifying Market Consensus's actual contribution to a prediction currently requires manually reconstructing the JSON path inside the stored `engine.models` blob (as had to be done during Task #146's end-to-end verification, where the first attempt looked in the wrong path and initially misreported Market Consensus as absent). There's no straightforward way to query "how much weight did marketOdds carry across the last N predictions" without that kind of manual reconstruction each time.
+
+## Goal
+Persist the per-module weight trace (`engine.modules` or equivalent — whatever object currently holds `weightUsed`/`reliability`/`player1Probability` per module) as a queryable part of `feature_snapshot`, so future audits (weight-dominance checks, module-contribution analysis, anything like Check 2 from the #711 verification) can query it directly instead of reconstructing it per-row.
+
+## Instructions
+
+1. **Read-only first:** confirm the exact current shape of the per-module trace in the engine's return value (where it lives before being written to `feature_snapshot`), and confirm which existing `feature_snapshot` keys are already being persisted at the same point in the code, so the new key is added consistently with the existing pattern.
+
+2. Add the per-module trace to `feature_snapshot` at write time — new key (e.g. `moduleWeights` or `engineModules`, whatever fits existing naming conventions best) containing each module's `weightUsed`, `reliability`, and probability contribution.
+
+3. This should apply to **new predictions going forward only** — do not backfill or alter existing rows. Old rows simply won't have this key, same pattern as how `formEloConflict` was added earlier (Ticket 2).
+
+4. Confirm this doesn't change `feature_snapshot`'s size/shape in a way that breaks anything reading it downstream (any strict schema validation, size limits, etc.) — check before deploying.
+
+5. Run the existing test suite to confirm nothing breaks. Add a small test confirming a new prediction's `feature_snapshot` contains the new module-weight key with the expected shape.
+
+## Do NOT
+- Do not backfill or alter any existing prediction/paper_trade rows.
+- Do not change any calibration, ensemble, or scoring logic — this is additive persistence only.
+
+## Report back
+- Confirmed shape of the new key and where it was added in code.
+- Test suite result.
+- Confirmation this is forward-only (old rows unaffected).

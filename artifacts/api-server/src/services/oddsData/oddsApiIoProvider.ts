@@ -6,7 +6,7 @@ import { matchPlayersToEvent } from "./nameMatch";
 import { OddsProviderRateLimitedError, OddsProviderUnavailableError, type OddsProvider, type OddsProviderStatusInfo, type OddsQuote } from "./types";
 
 const BASE_URL = "https://api.odds-api.io/v3";
-const EVENTS_TTL_MS = 5 * 60 * 1000;
+const EVENTS_TTL_MS = 2 * 60 * 60 * 1000; // 2 h — matches ODDS_TTL_MS; raised from 5 min to cut quota usage
 const ODDS_TTL_MS = 2 * 60 * 60 * 1000;
 const COMMENCE_TIME_TOLERANCE_MS = 36 * 60 * 60 * 1000;
 // The `/odds` endpoint 400s with "Missing bookmakers" if this isn't sent explicitly on every call

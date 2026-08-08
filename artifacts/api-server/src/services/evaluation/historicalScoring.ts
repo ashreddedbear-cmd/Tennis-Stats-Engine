@@ -169,6 +169,8 @@ export function scoreHistoricalMatch(
     preCalibrationProbability: output.rawEnsembleProbability,
     dataQuality: output.dataQuality,
     isEliteTier: output.engine.isEliteTier,
+    // Per-module weight trace: written forward-only; absent on rows scored before this field.
+    moduleWeights: output.decisionTrace.modules,
   };
   const fallback = extractFallbackInstrumentation({
     engine: output.engine,

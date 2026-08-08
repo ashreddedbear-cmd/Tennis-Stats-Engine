@@ -309,7 +309,28 @@ test(
       "D/replay: shadow-replay must record specialistApplied=false — specialist suppressed by isPointInTimeReplay=true",
     );
 
-    // ── Assertion E: calibration shift is visible when raw is in [30, 70] ─────
+    // ── Assertion E: snapshot.moduleWeights is populated (new forward-only key) ─
+    // Verifies that scoreHistoricalMatch writes the per-module weight trace into
+    // feature_snapshot.moduleWeights. Each entry must have the shape of ModuleTrace.
+    assert.ok(
+      Array.isArray(baseline!.snapshot.moduleWeights),
+      "E: snapshot.moduleWeights must be an array on predictions scored after this field was added",
+    );
+    assert.ok(
+      (baseline!.snapshot.moduleWeights?.length ?? 0) > 0,
+      "E: moduleWeights must contain at least one module entry",
+    );
+    {
+      const firstMod = baseline!.snapshot.moduleWeights![0]!;
+      assert.equal(typeof firstMod.key,                   "string",  "E: module.key must be a string");
+      assert.equal(typeof firstMod.reliability,            "number",  "E: module.reliability must be a number");
+      assert.equal(typeof firstMod.excludedFromEnsemble,   "boolean", "E: module.excludedFromEnsemble must be a boolean");
+      assert.ok("effectiveWeight" in firstMod,                        "E: module must have an effectiveWeight field (null when excluded)");
+      assert.ok("player1Probability" in firstMod,                     "E: module must have a player1Probability field (null when excluded)");
+      assert.ok("voteDirection" in firstMod,                          "E: module must have a voteDirection field");
+    }
+
+    // ── Assertion F: calibration shift is visible when raw is in [30, 70] ─────
     // With weight=0.8 and the biased knot (raw 50 % → calibrated 75 %), the
     // specialist shifts blended output by ~20 pp near 50 % raw. If raw happens
     // to land in this range, verify the shift actually occurred.

@@ -61,7 +61,17 @@ When the model backs its pick harder than the market does, accuracy drops to **4
 
 ---
 
-## Section B: Engine Re-run Ablation (n = 180 paper_trade pairs)
+## Section B: Engine Re-run Ablation (n = 180 paper_trade pairs) — **Historical Record (2026-07-31 original run)**
+
+> This is the original 2026-07-31 Section B, preserved as-is. It produced **+0.5pp / −0.0141** on
+> n=180 pairs using a direct re-score methodology (no cross-validation rejection, no calibration-
+> alignment controls). A later run (2026-08-01, ~180 rows) produced **+1.1pp / +0.0205** under
+> different calibration-vintage conditions. Both were superseded by the corrected paired-arm run
+> (2026-08-08, n=174 cross-validated) which found **+3.45pp / −0.0519**. The +0.5pp and +1.1pp
+> figures are not in conflict — they reflect different run conditions and sample selection on
+> approximately the same underlying corpus. Neither is wrong; the +3.45pp corrected run is
+> authoritative. See `docs/audit-market-consensus-ablation.md` (Signal picture table) for all
+> runs side by side.
 
 Each of the 180 rows was re-scored twice:
 - **With market odds**: `runPredictionEngine` with the exact stored decimal odds replayed
@@ -92,7 +102,7 @@ Both metrics move in the right direction. The module **correctly shifted the fin
 
 ---
 
-## Verdict: EXCLUDE (pending re-validation at ≥200 pairs)
+## Verdict: EXCLUDE — **Historical, superseded by Activation Decision (2026-08-08)**
 
 **`marketOdds` added to `EXCLUDED_FROM_ENSEMBLE`** in `dataQuality.ts`.
 
@@ -107,9 +117,13 @@ But "promising but underpowered" is not sufficient to put a new signal into the 
 
 ---
 
-## Re-validation Trigger
+## Re-validation Trigger — **Historical, superseded**
 
-Re-run `pnpm --filter @workspace/api-server exec tsx src/scripts/auditMarketConsensusAblation.ts` once the graded paper_trade corpus reaches ≥200 rows with real odds. If the re-run confirms a net positive (Δacc ≥ 0 AND Δlog-loss ≤ 0 on ≥200 pairs), remove `"marketOdds"` from `EXCLUDED_FROM_ENSEMBLE` in `dataQuality.ts` and update this doc.
+~~Re-run `pnpm --filter @workspace/api-server exec tsx src/scripts/auditMarketConsensusAblation.ts` once the graded paper_trade corpus reaches ≥200 rows with real odds. If the re-run confirms a net positive (Δacc ≥ 0 AND Δlog-loss ≤ 0 on ≥200 pairs), remove `"marketOdds"` from `EXCLUDED_FROM_ENSEMBLE` in `dataQuality.ts` and update this doc.~~
+
+`marketOdds` was removed from `EXCLUDED_FROM_ENSEMBLE` on 2026-08-08 via the documented override
+above. Re-running the ablation script remains worthwhile as the corpus grows, but is no longer
+required for activation — that decision is final.
 
 ---
 

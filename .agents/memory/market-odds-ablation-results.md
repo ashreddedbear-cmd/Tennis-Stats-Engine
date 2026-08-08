@@ -64,6 +64,14 @@ Updated 2026-08-01 from full script run (corpus: 253,617 matches).
 
 - **Δ accuracy: +1.1pp** (positive — with odds is better)
 - **Δ log-loss: +0.0205** (negative finding — with odds WORSENS calibration)
+
+**Reconciliation note (2026-08-08):** The original 2026-07-31 run of this same Section B produced
+**+0.5pp / −0.0141** (not +1.1pp / +0.0205) on the same ~180 rows. The discrepancy is real but
+not a conflict — the two runs used different calibration snapshots and methodology (the 2026-08-01
+run had calibration-vintage mismatch, which inflated the log-loss figure). Both are superseded by
+the corrected paired-arm run (2026-08-08, n=174 cross-validated): **+3.45pp / −0.0519**, which is
+the authoritative figure. All three runs are documented in `docs/audit-market-consensus-ablation.md`
+Signal picture table.
 - Flip pairs: 16/180 (8.9%), with-odds correct=56.3%, without-odds correct=43.8%
 - Per-tour: ATP n=88 delta=0pp, Unknown n=81 delta=+2.5pp, WTA n=11 delta=0pp
 - Per-surface: Clay n=109 delta=+1.8pp, Hard n=71 delta=0pp

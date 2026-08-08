@@ -342,4 +342,38 @@ router.get("/monitoring/accuracy-trend", requireClerkUser, async (req, res): Pro
   }
 });
 
+// ─── GET /monitoring/agreement-accuracy ──────────────────────────────────────
+// Lightweight aggregation for the HighDisagreement caution icon tooltip on the prediction card.
+// Returns accuracy % and sample count by modelAgreement category (historical_test rows).
+router.get("/monitoring/agreement-accuracy", requireClerkUser, async (_req, res): Promise<void> => {
+  try {
+    const result = await db.execute<{ model_agreement: string; n: string; accuracy: string }>(
+      sql`
+        SELECT
+          model_agreement,
+          COUNT(*)::int                                                          AS n,
+          ROUND(
+            100.0 * SUM(CASE WHEN actual_winner_id = predicted_winner_id THEN 1 ELSE 0 END)
+              / NULLIF(COUNT(*), 0),
+            2
+          )::float                                                               AS accuracy
+        FROM evaluation_predictions
+        WHERE run_kind  = 'historical_test'
+          AND status    = 'graded'
+          AND included_in_accuracy = true
+          AND model_agreement IS NOT NULL
+        GROUP BY model_agreement
+        ORDER BY model_agreement
+      `,
+    );
+    const stats = Object.fromEntries(
+      result.rows.map((r) => [r.model_agreement, { n: Number(r.n), accuracy: Number(r.accuracy) }]),
+    );
+    res.json({ stats });
+  } catch (err) {
+    logger.error({ err }, "Monitoring agreement-accuracy error");
+    res.status(500).json({ error: "Failed to load agreement accuracy data." });
+  }
+});
+
 export default router;
