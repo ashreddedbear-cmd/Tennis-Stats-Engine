@@ -1,0 +1,25 @@
+# Clarify: User-Visible Prediction Timing vs. paper_trade Lock Cycle
+
+## Context
+Step 1 of the market-odds-timing investigation found that `paper_trade` rows lock 30 minutes before match start (`paperTradeLeadMinutes=30`), with odds fetched synchronously at lock time. But the user, looking at the app directly, regularly sees predictions for matches 24–48 hours out — well before that 30-minute lock window. This needs to be reconciled before any fix to the odds-timing problem is designed, since Options A/B/C were all built around fixing the T-30-minute lock, which may not be the thing the user actually sees.
+
+## Questions (read-only investigation)
+
+1. **What generates the prediction shown in the app UI 24–48 hours before a match?** Is it:
+   - The same `paper_trade` row/pipeline investigated in Step 1 (i.e., does a row exist and get displayed well before it's "locked," and "locked" just means something different than "first visible")? or
+   - A separate prediction path/table/run_kind entirely, generated on a different schedule?
+
+2. **If it's a separate path:** when does that user-facing prediction get generated, and does it ever refresh or update as match time approaches? Is there a "final"/locked version separate from the early-visible one, or is the early version the only one that ever exists for that match?
+
+3. **Does the user-facing prediction path have any odds-inclusion mechanism at all**, currently or plannable — separate from the `paper_trade` grading/calibration pipeline? Or is odds-awareness currently only possible in the `paper_trade` pipeline (used for grading/calibration), with no connection to what users actually see?
+
+4. **If the user-facing prediction is a distinct, earlier-generated row**, does it ever get updated/replaced by a later, odds-aware version — or does whatever the user saw at T-48h remain exactly what's shown at T-0, regardless of what the `paper_trade` cycle does later for grading purposes?
+
+## Do NOT
+- Do not implement any timing fix yet — this is purely to establish which pipeline actually needs the fix.
+- Do not assume the answer; report what the code and DB actually show.
+
+## Report back
+- A clear map: which table/pipeline/run_kind produces what the user sees in the app, and when, versus what produces the `paper_trade` rows investigated in Step 1.
+- Whether these are the same mechanism at different points in its lifecycle, or genuinely separate systems.
+- Whether the user-visible prediction has any path to ever include market odds, given its generation timing.
