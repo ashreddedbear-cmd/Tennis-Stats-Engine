@@ -257,12 +257,13 @@ function buildRecommendationTrace(
   rules.push({ rule: `margin < 8 AND (Mixed|HighDisagreement) → INSUFFICIENT_EDGE (margin=${margin.toFixed(1)}, agreement="${modelAgreement}")`, matched: r2, decided: r2 });
   if (r2) return { result, margin, rulesChecked: rules };
 
-  const r3 = margin >= 35 && dataQuality >= 45 && modelAgreement === "Strong" && coreSignalsAlign;
-  rules.push({ rule: `margin ≥ 35 AND DQ ≥ 45 AND Strong AND coreSignalsAlign → HIGHEST_CONFIDENCE (margin=${margin.toFixed(1)}, DQ=${dataQuality}, coreSignalsAlign=${coreSignalsAlign})`, matched: r3, decided: r3 });
+  // DQ gate removed 2026-08-08 (Ticket 3): Limited DQ outperforms Excellent DQ on held-out data.
+  const r3 = margin >= 35 && modelAgreement === "Strong" && coreSignalsAlign;
+  rules.push({ rule: `margin ≥ 35 AND Strong AND coreSignalsAlign → HIGHEST_CONFIDENCE (margin=${margin.toFixed(1)}, coreSignalsAlign=${coreSignalsAlign}) [DQ gate removed — DQ=${dataQuality} logged only]`, matched: r3, decided: r3 });
   if (r3) return { result, margin, rulesChecked: rules };
 
-  const r4 = margin >= 26 && dataQuality >= 50 && modelAgreement === "Strong" && coreSignalsAlign;
-  rules.push({ rule: `margin ≥ 26 AND DQ ≥ 50 AND Strong AND coreSignalsAlign → HIGHEST_CONFIDENCE (margin=${margin.toFixed(1)}, DQ=${dataQuality}, agreement="${modelAgreement}")`, matched: r4, decided: r4 });
+  const r4 = margin >= 26 && modelAgreement === "Strong" && coreSignalsAlign;
+  rules.push({ rule: `margin ≥ 26 AND Strong AND coreSignalsAlign → HIGHEST_CONFIDENCE (margin=${margin.toFixed(1)}, agreement="${modelAgreement}") [DQ gate removed — DQ=${dataQuality} logged only]`, matched: r4, decided: r4 });
   if (r4) return { result, margin, rulesChecked: rules };
 
   const r5 = margin >= 20 && modelAgreement === "Strong";

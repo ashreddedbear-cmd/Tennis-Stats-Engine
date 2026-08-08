@@ -1,0 +1,76 @@
+Five items to work through. Please do them in this order, and stop between items only where noted.
+
+---
+
+## 1. Ticket 3 — Stop using DQ tier as a hard confidence gate
+
+**Problem:** Limited DQ (64.6%) outperforms Excellent DQ (62.5%) on held-out test data. Only Poor (<25) is reliably worse. Current hard-gating logic likely trusts Excellent over Limited, which is backwards.
+
+**Task:**
+1. Change DQ tier from a hard gate to an informational/logged field only, pending redesign.
+2. If a gate is still desired short-term, gate only on Poor (<25), not on the Excellent/Limited boundary.
+
+**Acceptance criteria:** No prediction confidence or no-play logic depends on the Excellent/Limited distinction until DQ scoring is redesigned.
+
+---
+
+## 2. Ticket 1 — Disable / roll back specialist calibration
+
+**Problem:** `specialist calibration applied=true` → 60.9% accuracy vs. `applied=false` → 64.0%. Worst on clay (−7.0pp).
+
+**Task:**
+1. **Read-only first:** run a read-only rescore of the current test corpus with specialist calibration disabled. Confirm the expected accuracy gain (originally estimated at +3.1pp overall / +7.0pp clay) before changing anything live.
+2. Report that result to me before proceeding.
+3. If confirmed, disable specialist calibration in the live scoring path.
+4. Re-verify post-disable accuracy on a fresh (non-overlapping) live sample once available.
+
+**Acceptance criteria:** Read-only rescore result documented before any change is made. Specialist calibration off in production. Post-change accuracy checked against pre-change baseline once new graded data exists.
+
+---
+
+## 3. Ticket 2 — Persist `formEloConflict` in feature_snapshot
+
+**Problem:** The Recent Form weight gate is deployed in code, but the conflict flag it depends on (`formEloConflict`) is not persisted anywhere, so its live effect is permanently unmeasurable without this fix.
+
+**Task:**
+1. Add `formEloConflict` (boolean or equivalent) to `feature_snapshot` at prediction-write time.
+2. Confirm it's populated on new rows only — do not backfill historical rows.
+3. Report confirmation that it's writing correctly on a handful of fresh rows.
+
+**Acceptance criteria:** Field appears and populates correctly on new rows post-deploy. No changes to historical rows.
+
+---
+
+## 4. Ticket 6 — Investigate Elo double-counting across Surface Elo, Serve & Return, and Recent Form
+
+**Problem:** Surface Elo, Serve & Return, and Recent Form all partially share opponent-Elo as an input — confirmed partial double-counting.
+
+**Task (read-only analysis, no code changes to scoring logic):**
+1. Quantify how much opponent-Elo contributes to each of the three features individually.
+2. Estimate the degree of correlation/overlap between the three features on the current test corpus.
+3. Test, read-only on held-out data, whether down-weighting or orthogonalizing the shared Elo component changes accuracy meaningfully in either direction.
+4. Report findings and a recommendation: worth fixing now, worth fixing later, or negligible enough to leave alone.
+
+**Acceptance criteria:** A documented quantification of the overlap exists. A clear recommendation is given. No live scoring logic changed based on this item alone.
+
+---
+
+## 5. Ticket 5 — Task #117: calibration refit for market-odds-active predictions
+
+**IMPORTANT — do this one last, and gate it:** Before starting this item, confirm that the Bug 1 and Bug 2 guard fixes (restart-resistant cooldown, and the three-gate quality check preventing a weaker model from activating) are actually clean on main — no leftover duplicate logic from the task #135 collision. If that hasn't been confirmed clean yet, **stop and report back instead of proceeding** — do not attempt a new calibration refit until the guards are confirmed solid, since re-attempting this before that confirmation risks the same failure mode that caused the original incident.
+
+If confirmed clean, proceed:
+
+**Problem:** The model is systematically underconfident — actual accuracy exceeds predicted probability in every confidence band. The original premise for Task #117 was that the calibration curve predates market-odds being active in the ensemble. Note: as of the last check, market odds is still `EXCLUDED_FROM_ENSEMBLE` — confirm current status before assuming this premise is even testable yet.
+
+**Task:**
+1. Confirm whether market odds is currently active in the ensemble. If it's still excluded, report that plainly — this ticket may still be blocked on that precondition, not on the calibration process itself.
+2. If market odds is active: run the calibration refit through the now-fixed `runCalibrationRefitJob` path (with the new guards in place), read-only/shadow first — compare recalibrated confidence bands against actual accuracy on held-out data before touching the live path.
+3. If the refit closes the gap and passes the new quality gates, deploy it to the live confidence-reporting path.
+4. Re-verify band-by-band calibration on fresh post-deploy data once available.
+
+**Acceptance criteria:** Market-odds-active status confirmed before proceeding. If active, refit executed through the fixed job path and passes the new guards. Predicted-vs-actual accuracy gap measured before and after. Live confidence bands reflect real accuracy within a reasonable tolerance post-deploy.
+
+---
+
+Report back after each item rather than batching all five reports at the end — I want to review Ticket 1's read-only rescore result before it goes live, and I want confirmation on the Bug 1/Bug 2 state before Ticket 5 starts.

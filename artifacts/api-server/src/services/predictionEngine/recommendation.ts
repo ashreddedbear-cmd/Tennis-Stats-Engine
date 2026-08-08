@@ -86,12 +86,16 @@ export function computeRecommendation(
   // Strong, reliable, consistent evidence across independent signals. Requires:
   //  • all three core signals agree on the same player (coreSignalsAlign)
   //  • strong probability margin from a coin flip
-  //  • data quality above the "Acceptable" floor
   //  • full model consensus (Strong agreement)
-  // Upset risk is NOT checked here — it is a separate, independent dimension.
-  if (margin >= 35 && dataQuality >= 45 && modelAgreement === "Strong" && coreSignalsAlign)
+  //
+  // DQ gate intentionally removed (2026-08-08, Ticket 3): walk-forward data showed
+  // Limited DQ (25–44) outperforms Excellent DQ (≥85) on held-out predictions —
+  // 64.6% vs 62.5% — meaning treating higher DQ as more trustworthy here was
+  // backwards. Only the Poor (<25) hard gate below is retained pending a full DQ
+  // scoring redesign. Upset risk is NOT checked here; it is a separate dimension.
+  if (margin >= 35 && modelAgreement === "Strong" && coreSignalsAlign)
     return "HIGHEST_CONFIDENCE";
-  if (margin >= 26 && dataQuality >= 50 && modelAgreement === "Strong" && coreSignalsAlign)
+  if (margin >= 26 && modelAgreement === "Strong" && coreSignalsAlign)
     return "HIGHEST_CONFIDENCE";
 
   // ── HIGH_CONFIDENCE ────────────────────────────────────────────────────────
