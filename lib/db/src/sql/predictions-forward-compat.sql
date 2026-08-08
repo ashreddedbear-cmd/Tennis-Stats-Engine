@@ -69,6 +69,10 @@ UPDATE predictions
 SET input_snapshot_hash = md5(concat_ws('|', coalesce(player1_id, ''), coalesce(player2_id, ''), coalesce(created_at::text, ''), coalesce(id::text, '')))
 WHERE input_snapshot_hash IS NULL;
 
+-- Task #146: three-state market-odds outcome, written once at creation time, never updated.
+-- Null for rows inserted before this column existed.
+ALTER TABLE predictions ADD COLUMN IF NOT EXISTS odds_status TEXT;
+
 CREATE INDEX IF NOT EXISTS predictions_created_at_idx ON predictions (created_at);
 CREATE INDEX IF NOT EXISTS predictions_recommendation_idx ON predictions (recommendation);
 CREATE UNIQUE INDEX IF NOT EXISTS predictions_identity_input_snapshot_idx ON predictions (match_identity_key, input_snapshot_hash);

@@ -81,6 +81,16 @@ export const predictionsTable = pgTable(
      */
     clerkUserId: text("clerk_user_id"),
 
+    /**
+     * Task #146: three-state market-odds outcome recorded at creation time, never updated.
+     * - "included"       — odds were fetched and passed to the engine for this prediction
+     * - "outside_window" — provider returned no odds (match outside the ~28-31h availability
+     *                      window, or not covered by this sport key); expected, not an error
+     * - "provider_error" — fetchMarketOdds threw (quota exhausted, network failure, circuit open)
+     * Null for rows inserted before this column existed.
+     */
+    oddsStatus: text("odds_status").$type<"included" | "outside_window" | "provider_error">(),
+
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     resolvedAt: timestamp("resolved_at", { withTimezone: true }),
   },
@@ -98,7 +108,12 @@ export const predictionsTable = pgTable(
   ],
 );
 
-export const insertPredictionSchema = createInsertSchema(predictionsTable).omit({
+export const insertPredictionSchema = createInsertSchema(predictionsTable, {
+  // createInsertSchema infers text columns as z.string(), losing the .$type<>() literal union.
+  // Override explicitly so InsertPrediction.oddsStatus stays typed as the literal union,
+  // matching what drizzle's insert overloads require.
+  oddsStatus: z.enum(["included", "outside_window", "provider_error"]).nullable().optional(),
+}).omit({
   id: true,
   createdAt: true,
 });

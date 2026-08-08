@@ -3,7 +3,6 @@ import { and, eq } from "drizzle-orm";
 import { getTennisDataProvider, ProviderUnavailableError, type TennisDataProvider } from "../tennisData";
 import { getPredictionSettings, settleEvaluationPrediction } from "./settle";
 import { LIVE_MODEL_VERSION, type LiveFeatureSnapshot } from "./types";
-import { fetchMarketOdds } from "../oddsData";
 import { computeVigAdjustedImpliedProbability } from "../oddsData/impliedProbability";
 import { logger } from "../../lib/logger";
 import { defaultPredictionMode, derivePredictionStrategyIdentity, getCurrentProductionStrategyIdentity } from "./strategyIdentity";
@@ -154,7 +153,7 @@ export async function runPaperTradingCycle(providerOverride?: TennisDataProvider
         summary.errors.push(`Fixture ${fixture.id}: missing player profile or surface/format, skipped this cycle`);
         continue;
       }
-      const { player1, player2, output, activeCalibrationId } = await predictFromSnapshot({
+      const { player1, player2, output, activeCalibrationId, marketOdds: paperTradeOddsQuote } = await predictFromSnapshot({
         provider,
         player1Id: fixture.player1Id,
         player2Id: fixture.player2Id,
@@ -185,16 +184,10 @@ export async function runPaperTradingCycle(providerOverride?: TennisDataProvider
         isEliteTier: output.engine.isEliteTier,
       };
 
-      // Task 47: real market odds, looked up AT LOCK TIME (never refreshed or backfilled
-      // afterwards) so the resulting edge genuinely reflects what the market priced in when this
-      // prediction was actually made. A matchup with no odds from either provider yields no odds
-      // fields at all -- never a fabricated quote or a defaulted edge of 0.
-      let oddsQuote = null;
-      try {
-        oddsQuote = await fetchMarketOdds(player1.name, player2.name, scheduledStartAt);
-      } catch (err) {
-        logger.warn({ err, fixtureId: fixture.id }, "Market odds lookup failed for this fixture, locking prediction without odds");
-      }
+      // Task 47 / Task #146: market odds were already fetched inside predictFromSnapshot
+      // (shared with the engine's Market Consensus module) — reuse that result here for the
+      // audit columns instead of making a second provider call for the same fixture.
+      const oddsQuote = paperTradeOddsQuote;
       const impliedProbability = oddsQuote
         ? computeVigAdjustedImpliedProbability(oddsQuote.player1DecimalOdds, oddsQuote.player2DecimalOdds)
         : null;

@@ -326,6 +326,7 @@ router.post("/predictions", requireClerkUser, predictionLimiter, async (req, res
       player2OpponentStrength,
       activeCalibrationId,
       output,
+      marketOddsStatus,
     } = await predictFromSnapshot({
       provider,
       player1Id: resolvedPlayer1Id,
@@ -395,6 +396,8 @@ router.post("/predictions", requireClerkUser, predictionLimiter, async (req, res
       crossEngineAgreement: null,
       matchIdentityKey,
       inputSnapshotHash,
+      // Task #146: write-once at creation, never updated — see schema comment.
+      oddsStatus: marketOddsStatus,
       // Stamp the requesting Clerk user ID so history is scoped per-user.
       // Admin sessions have no Clerk userId — their predictions remain unscoped (null).
       clerkUserId: getAuth(req).userId ?? null,
