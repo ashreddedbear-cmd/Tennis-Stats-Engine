@@ -1,0 +1,43 @@
+# Market Odds Activation — Documented Override (Section B gate not met)
+
+## Context
+Task #141's corrected, cross-validated Section B ablation produced:
+- n = 174 accuracy-eligible rows (survived weightUsed cross-validation; 10 of 184 rejected)
+- Δaccuracy = +3.45pp (threshold: ≥ +0.5pp — cleared)
+- Δlog-loss = −0.0519 (threshold: ≤ −0.010 — cleared)
+- n ≥ 200 gate: **NOT MET** (174 < 200)
+
+This result has been stable across three independent runs (flawed methodology, corrected pre-cross-validation, corrected post-cross-validation), with Δaccuracy ranging 3.45–3.80pp and Δlog-loss ranging −0.0514 to −0.0805 — both thresholds cleared by wide margins in every version.
+
+Decision has been made to activate `marketOdds` now, as a **deliberate documented override** of the n≥200 threshold — not as a claim that Section B passed. This is a judgment call based on the stability and margin of the effect size, made explicitly aware that the pre-registered sample-size requirement was not met.
+
+## Instructions
+
+1. **Do NOT change the n≥200 threshold in code.** Leave the gate constant (in `auditMarketConsensusAblation.ts`, line ~723) exactly as it is. The threshold must continue to read as n≥200 and the gate must continue to evaluate as FAILED for this run. Do not retroactively lower it to 174 or any other value — the threshold represents a pre-registered confidence requirement, not a target to be fitted to whatever sample was available.
+
+2. **Activate marketOdds**: remove `"marketOdds"` from the `EXCLUDED_FROM_ENSEMBLE` set in `artifacts/api-server/src/services/predictionEngine/dataQuality.ts` (currently line 183).
+
+3. **Update `docs/audit-market-consensus-ablation.md`** to add an explicit, clearly-labeled override section (do not overwrite the existing corrected-methodology results). Suggested wording:
+
+   > ## Activation Decision: Documented Override
+   >
+   > Section B's n≥200 gate was **not met** (n=174 accuracy-eligible rows, cross-validated). Despite this, marketOdds was activated on [DATE] as a deliberate override, based on:
+   > - Effect size stability across three independent re-runs (Δacc 3.45–3.80pp, Δlog-loss −0.0514 to −0.0805)
+   > - Both thresholds cleared by wide margins (accuracy ~7x bar, log-loss ~5x bar) in every version
+   > - Judgment that 26 additional rows are unlikely to reverse a result of this magnitude and consistency
+   >
+   > **This is not a Section B pass.** The n≥200 threshold remains the documented requirement and was not met. This entry exists so future sessions do not mistake this activation for a validated Section B result.
+
+4. **Update `.agents/memory/MEMORY.md`** (or wherever Task #141's status lives) with the same override framing — status should read something like: `marketOdds: ACTIVATED (override, n=174 < 200 threshold — see docs/audit-market-consensus-ablation.md for full rationale)`. Do not mark Section B as "passed" or "complete."
+
+5. **Update `index.test.ts`**: flip the test that currently asserts marketOdds is absent in live calls (from the DO-NOT-ACTIVATE state) to verify the module now votes when valid odds are present — same change made and then correctly reverted earlier in this task's history, now re-applied because activation is intentional this time.
+
+6. **Run the full validation suite** (prediction-engine + parlayBuilder + Monte Carlo tests) and report the pass/fail count.
+
+7. **Do not touch the n≥200 gate value anywhere else in the codebase** — including any other file that references the Section B threshold. A search for the literal `200` near `Section B` / `auditMarketConsensusAblation` context is worth doing to make sure no other copy of the threshold exists that would also need to stay unchanged.
+
+## Report back
+- Confirm `marketOdds` removed from `EXCLUDED_FROM_ENSEMBLE`, with the exact diff.
+- Confirm the n≥200 threshold constant is unchanged in code.
+- Confirm the doc and memory updates are in place, worded as an override (not a pass).
+- Full test suite result.
