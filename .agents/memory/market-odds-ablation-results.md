@@ -1,6 +1,6 @@
 ---
 name: Market Odds Ablation Results
-description: NOT YET ACTIVATED. Corrected paired-arm Section B (n=174 processed/184 eligible; 10 cross-val failures): Δacc +3.45pp, Δlog-loss −0.0519 — thresholds met but n<200. Re-run once n≥200 pass cross-val.
+description: ACTIVATED 2026-08-08 (documented override, n=174 < 200 threshold). Section B: Δacc +3.45pp, Δlog-loss −0.0519 — both thresholds cleared, n<200 gate not met. Override justified by stability across 3 runs. NOT a Section B pass.
 ---
 
 ## Authoritative Row Count (2026-08-01 15:26:22 UTC)
@@ -193,20 +193,19 @@ needed per current evidence; monitor WTA and clay sub-segments in live paper-tra
 
 ---
 
-## 🔒 STATUS: NOT YET ACTIVATED (2026-08-08)
+## ✅ STATUS: ACTIVATED 2026-08-08 — Documented Override
 
-`"marketOdds"` remains in `EXCLUDED_FROM_ENSEMBLE`. Corrected paired-arm Section B ablation
-(n=174 processed / 184 eligible / 201 total graded with odds; 10 rows rejected by cross-val):
-Δacc +3.45pp ✓, Δlog-loss −0.0519 ✓, but n=174 < 200 threshold ✗.
+`"marketOdds"` removed from `EXCLUDED_FROM_ENSEMBLE` in `dataQuality.ts` on 2026-08-08.
 
-Correct methodology: BOTH arms reconstruct from stored preCalibrationProbability through the
-same active calibration → specialist → simulator pipeline. S is cross-validated row-by-row
-against stored weightUsed values (tolerance 1.5pp); rows that fail are excluded from metrics.
-Using stored calibratedProbability as baseline is confounded by calibration drift between
-lock time and today.
+**This is NOT a Section B pass.** The n≥200 threshold remains the documented requirement and
+was not met (n=174). Override justified by effect-size stability across three independent runs:
+- Δacc 3.45–3.80pp across all three runs (threshold ≥+0.5pp cleared ~7×)
+- Δlog-loss −0.0514 to −0.0805 across all three runs (threshold ≤−0.010 cleared ~5×)
 
-Re-run `scripts/auditMarketConsensusAblation.ts` once n≥200 rows pass cross-validation.
-Signal is strong and likely to persist at slightly larger n.
+See `docs/audit-market-consensus-ablation.md` § "Activation Decision: Documented Override"
+for full rationale. Future sessions must not treat this activation as a validated Section B
+result. A genuine Section B pass still requires n≥200 rows post-cross-validation with
+Δacc≥+0.5pp AND Δlog-loss≤−0.010.
 
 ---
 

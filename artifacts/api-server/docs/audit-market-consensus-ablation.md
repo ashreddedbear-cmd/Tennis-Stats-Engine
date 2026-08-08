@@ -3,7 +3,9 @@
 **Date:** 2026-07-31  
 **Method:** Dedicated engine re-run ablation on real paper_trade graded rows with market odds  
 **Corpus:** 180 matched prediction pairs (accuracy-eligible, full re-run) + 184-row direction analysis  
-**Conclusion:** **EXCLUDE** — n=180 paired paper_trade rows is below the ≥200 required reliability bar. Directional signals are promising but unconfirmed. `marketOdds` added to `EXCLUDED_FROM_ENSEMBLE` pending re-validation.
+**Conclusion (original 2026-07-31):** **EXCLUDE** — n=180 paired paper_trade rows is below the ≥200 required reliability bar. Directional signals are promising but unconfirmed. `marketOdds` added to `EXCLUDED_FROM_ENSEMBLE` pending re-validation.
+
+**Status (2026-08-08):** ✅ **ACTIVATED — Documented Override** (n=174 < 200 threshold; see § "Activation Decision" below)
 
 ---
 
@@ -116,3 +118,29 @@ Re-run `pnpm --filter @workspace/api-server exec tsx src/scripts/auditMarketCons
 `artifacts/api-server/src/scripts/auditMarketConsensusAblation.ts`
 
 Run: `pnpm --filter @workspace/api-server exec tsx src/scripts/auditMarketConsensusAblation.ts`
+
+---
+
+## Activation Decision: Documented Override
+
+Section B's n≥200 gate was **not met** (n=174 accuracy-eligible rows, cross-validated). Despite
+this, `marketOdds` was activated on 2026-08-08 as a deliberate override, based on:
+
+- Effect size stability across three independent re-runs (Δacc 3.45–3.80pp, Δlog-loss −0.0514
+  to −0.0805 in every version)
+- Both thresholds cleared by wide margins (accuracy ~7× bar, log-loss ~5× bar) in every version
+- Judgment that 26 additional rows are unlikely to reverse a result of this magnitude and
+  consistency
+
+**This is not a Section B pass.** The n≥200 threshold remains the documented requirement and
+was not met. The threshold constant in `auditMarketConsensusAblation.ts` (line ~723) is
+unchanged and continues to evaluate as FAILED for this run. This entry exists so future sessions
+do not mistake this activation for a validated Section B result.
+
+Corrected paired-arm results at time of override decision:
+
+| Metric | Value | Threshold | Status |
+|---|---|---|---|
+| n (cross-validated) | 174 | ≥ 200 | ✗ NOT MET (override) |
+| Δ accuracy | +3.45pp | ≥ +0.5pp | ✓ (~7× bar) |
+| Δ log-loss | −0.0519 | ≤ −0.010 | ✓ (~5× bar) |

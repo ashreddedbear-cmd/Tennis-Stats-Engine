@@ -218,19 +218,16 @@ test("Form-Elo conflict gate: RF genuinely influences the ensemble and its remov
 // ─── Market Odds wiring tests ─────────────────────────────────────────────────
 //
 // The market odds module is a live-signal supplement that:
-//   - is present in engine.models only when a real OddsQuote is supplied AND
-//     either (a) marketOdds is not in EXCLUDED_FROM_ENSEMBLE, or (b) an explicit
-//     excludedModels set is provided (ablation bypass — the caller overrides the global gate)
+//   - is present in engine.models when a real OddsQuote is supplied AND marketOdds is not
+//     in EXCLUDED_FROM_ENSEMBLE (activated 2026-08-08 — documented override, n=174 < 200)
+//   - is also present when an explicit excludedModels: new Set() is passed (ablation bypass)
 //   - is absent when marketOdds is null (no fallback to 50/50 invented vote)
-//   - is absent when "marketOdds" is in excludedModels (ablation override)
-//   - is absent in normal live calls when globally excluded via EXCLUDED_FROM_ENSEMBLE
-//     (Task #21: excluded until the ≥200 paper_trade paired-row reliability bar is cleared)
+//   - is absent when "marketOdds" is in excludedModels (ablation exclusion override)
 //   - uses vig-normalized implied probability, so symmetric odds produce ~50%
 //   - is always excluded from the Data Quality blend (decisionTrace check)
 //
-// Tests that verify the module IS active pass excludedModels: new Set() to signal ablation
-// mode (bypassing the EXCLUDED_FROM_ENSEMBLE global gate). Tests that verify the global
-// exclusion behavior pass only marketOdds with no excludedModels override.
+// Tests that verify global exclusion behavior pass excludedModels: new Set(["marketOdds"]).
+// Tests that verify live activation pass valid odds with no excludedModels override.
 
 test("Market Consensus appears in engine.models when odds are supplied in ablation mode (excludedModels: new Set())", () => {
   const output = runPredictionEngine(baseInput({
@@ -285,11 +282,11 @@ test("Market Consensus is absent when excluded via ablation (excludedModels: Set
   );
 });
 
-test("Market Consensus is absent in live calls (no excludedModels) even with valid odds when globally excluded via EXCLUDED_FROM_ENSEMBLE", () => {
-  // This test verifies the Task #21 global gate: when marketOdds is in EXCLUDED_FROM_ENSEMBLE
-  // and no explicit excludedModels is passed (the live/paper_trade code path), the market module
-  // must NOT vote even if real odds are provided. The global gate is enforced only on no-override
-  // calls so live predictions are never influenced by an underpowered-sample module.
+test("Market Consensus appears in live calls (no excludedModels) when valid odds are present — activated 2026-08-08 (documented override, n=174 < 200 threshold)", () => {
+  // marketOdds was removed from EXCLUDED_FROM_ENSEMBLE on 2026-08-08 as a deliberate override
+  // of the n≥200 Section B threshold (n=174, both accuracy and log-loss thresholds cleared by
+  // wide margins across three independent runs). With marketOdds now active, a live call
+  // supplying valid odds must produce a Market Consensus vote in engine.models.
   const output = runPredictionEngine(baseInput({
     marketOdds: {
       provider: "Test Provider",
@@ -301,10 +298,13 @@ test("Market Consensus is absent in live calls (no excludedModels) even with val
   }));
 
   const marketVote = output.engine.models.find((m) => m.modelName === "Market Consensus");
-  assert.strictEqual(
-    marketVote,
-    undefined,
-    "Market Consensus must NOT appear in a live call (no excludedModels override) while globally excluded via EXCLUDED_FROM_ENSEMBLE — the module is pending re-validation (Task #21)",
+  assert.ok(
+    marketVote !== undefined,
+    "Market Consensus must appear in a live call when valid odds are present — marketOdds is now active in EXCLUDED_FROM_ENSEMBLE (2026-08-08 override)",
+  );
+  assert.ok(
+    marketVote!.weightUsed > 0,
+    `Market Consensus must have positive ensemble weight in live calls (got ${marketVote?.weightUsed})`,
   );
 });
 

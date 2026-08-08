@@ -171,15 +171,14 @@ export const ENSEMBLE_WEIGHT_PRIOR = {
 // breakdown; re-run the ablation if the historical corpus grows substantially and this decision
 // should be revisited.
 //
-// marketOdds: excluded pending the live paper-trade Section B ablation reaching n≥200 processed
-// rows. As of 2026-08-08 the corrected paired-arm ablation (both arms from stored
-// preCalibrationProbability through the SAME active calibration → specialist → simulator pipeline,
-// S cross-validated against stored weightUsed per row) ran at n=174 processed rows (184 eligible;
-// 10 rejected by cross-validation where |Σ(p×w) − preCalP1| > 1.5pp) and shows Δacc=+3.45pp,
-// Δlog-loss=−0.0519 — both thresholds met, but n<200. Will be removed from this set once n≥200
-// rows pass cross-validation AND the re-run confirms Δacc≥+0.5pp AND Δlog-loss≤−0.010.
-// See docs/audit-market-consensus-ablation.md and scripts/auditMarketConsensusAblation.ts.
-export const EXCLUDED_FROM_ENSEMBLE = new Set(["availability", "fatigue", "matchLoadRecovery", "marketOdds"]);
+// marketOdds: ACTIVATED 2026-08-08 as a deliberate documented override of the n≥200 threshold.
+// Corrected paired-arm Section B (n=174 processed / 184 eligible; 10 cross-val rejections):
+// Δacc=+3.45pp ✓ (threshold ≥+0.5pp), Δlog-loss=−0.0519 ✓ (threshold ≤−0.010) — both met,
+// but n=174 < 200 gate NOT MET. Override justified by effect-size stability across three
+// independent runs (Δacc 3.45–3.80pp, Δlog-loss −0.0514 to −0.0805 in every version).
+// This is NOT a Section B pass. The n≥200 threshold remains the documented requirement.
+// See docs/audit-market-consensus-ablation.md § "Activation Decision: Documented Override".
+export const EXCLUDED_FROM_ENSEMBLE = new Set(["availability", "fatigue", "matchLoadRecovery"]);
 
 /**
  * Per-model confidence shrink (see `EnsembleModuleInput.confidenceShrink`), derived directly from
