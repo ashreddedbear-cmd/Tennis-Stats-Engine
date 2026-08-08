@@ -1,0 +1,30 @@
+# Model #711 Post-Refit Verification (read-only)
+
+## Context
+The marketOdds-inclusive calibration refit produced model #711, with holdout log-loss dropping from 0.6390 (#691) to 0.2889 — a 55% reduction. That's a large jump relative to the more modest improvement in the actual calibration gap (historical_test: −4.32pp → −2.98pp, ~31% improvement). Before treating #711 as verified, three read-only checks are needed to rule out leakage or an over-reliance on market odds as the explanation for the size of the jump. Do not deactivate or roll back #711 as part of this — this is verification only.
+
+## Check 1 — Odds timing / leakage
+- For a sample of holdout rows used in #711's walk-forward evaluation, confirm the market odds value used was the one actually locked/available at prediction time (matching `oddsData` as captured pre-match), not a later or closing-line value that could encode information not available when the real prediction would have been made.
+- Confirm there's no path where post-match or near-match-time information (final lineups, late scratches, in-progress score data) could have leaked into the odds field or any other feature used in this holdout set.
+- Report: what timestamp/field governs "odds at prediction time," and whether every holdout row's odds value is confirmed to predate the match.
+
+## Check 2 — Market odds weight dominance
+- Pull `weightUsed` for the `marketOdds` module across a representative sample of #711's post-activation predictions (both from the refit's own holdout set and, if available, live paper_trade rows).
+- Compare against `weightUsed` for Surface Elo, Serve & Return, and Recent Form on the same rows.
+- Report the distribution — is marketOdds contributing comparably to the other modules, or dominating the final probability in most rows? If dominating, note roughly what fraction of predictions have marketOdds as the top-weighted module.
+
+## Check 3 — Train/holdout overlap
+- Confirm the walk-forward split used to produce #711 has zero match overlap between the training window and the holdout window — same match should never appear in both.
+- Confirm no player-level or date-adjacent leakage path exists (e.g., a match's outcome influencing a same-tournament match's features across the split boundary).
+- Report the exact split boundary (dates or row ranges) and confirm no overlap.
+
+## Do NOT
+- Do not roll back or deactivate model #711 based on this check alone — report findings first.
+- Do not modify the refit pipeline, walk-forward logic, or odds ingestion as part of this check.
+- Do not run a new refit.
+
+## Report back
+- Check 1: timing/leakage confirmation or concern, with specifics.
+- Check 2: weight distribution table/summary, dominance assessment.
+- Check 3: overlap confirmation, split boundary detail.
+- Overall: does the 55% log-loss reduction look explainable by legitimate market-odds signal strength, or does something in these three checks suggest it's inflated?

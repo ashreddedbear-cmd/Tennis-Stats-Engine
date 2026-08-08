@@ -1,0 +1,42 @@
+# Ticket 5 Re-Attempt: Calibration Refit for Market-Odds-Active Predictions
+
+## Context
+Original problem (8G): the model was systematically UNDERconfident — a known "double-correction" bug. Task #117 was supposed to fix this by refitting the calibration curve to account for market odds being live in the ensemble. That attempt caused the Ticket 0 incident (runaway duplicate refit, models #707/#708 both worse than active model #691) and was rolled back before the actual calibration goal was ever achieved.
+
+Both preconditions for re-attempting are now met:
+1. Bug 1 (restart-resistant dedup guard) and Bug 2 (walk-forward quality guard requiring new model log-loss ≤ active model log-loss) — landed and confirmed clean via the #135 collision check.
+2. Market odds is now active in the ensemble (`marketOdds` removed from `EXCLUDED_FROM_ENSEMBLE`), via a documented override — see `docs/audit-market-consensus-ablation.md` for full rationale. Note: this was an override of the n≥200 Section B gate (actual n=174), not a passed gate — don't treat market odds' presence as "extra validated," just as "now live."
+
+## Step 0 — Guardrail reconfirmation (read-only, do this first)
+Before touching the refit endpoint at all:
+1. Confirm `runCalibrationRefitJob.ts` still has the DB-persisted cooldown (`checkRefitCooldown`, 2-hour window) intact and unmodified since the #135 collision check.
+2. Confirm `walkForward.ts` still enforces all three conditions: (a) holdout sample present, (b) holdout sample ≥ 500, (c) new model log-loss ≤ active model log-loss (with bootstrap exception only if no active model exists).
+3. Confirm model #691 is still the sole active model (`active=true`), and #707/#708 remain inactive.
+4. Report all three back before proceeding to Step 1. If any guardrail looks weakened or missing, STOP and report — do not proceed with a refit.
+
+## Step 1 — Assess current double-correction status
+Before refitting anything, check whether the 8G underconfidence problem is still present now that market odds is live:
+- Pull a sample of recent predictions with market odds now contributing to the ensemble.
+- Compare predicted probability vs. actual outcome frequency (a basic calibration curve / reliability diagram) — is the model still underconfident, and does that pattern look different now that market odds is in the mix versus the pre-activation baseline?
+- Report this before refitting — we want a "before" picture now that the input landscape (market odds live) has actually changed, not just reuse the pre-activation characterization of 8G.
+
+## Step 2 — Run the refit (single attempt, respecting guardrails)
+- Trigger the refit through the normal endpoint path only — do not call it twice, do not add a manual "confirm" second call (this is exactly what caused the Ticket 0 incident).
+- Let the walk-forward quality guard evaluate the result. If the new model's log-loss is not ≤ #691's (0.6390), the guard should block activation automatically — report that outcome as a valid result, not a failure to work around.
+- If the guard passes a new model, report: new model ID, holdout log-loss, holdout sample size, and the log-loss delta vs. #691.
+
+## Step 3 — Verify no duplicate trigger occurred
+- Check `job_runs` (or equivalent log) for exactly one refit execution tied to this attempt.
+- Confirm no second model was activated within the same window.
+
+## Do NOT
+- Do not bypass or loosen the walk-forward quality guard "just to see."
+- Do not call the refit endpoint more than once per attempt.
+- Do not backdate, fabricate, or synthesize any calibration or holdout data.
+- Do not reframe the market-odds override as a passed Section B gate anywhere in this ticket's output.
+
+## Report back
+- Step 0 guardrail confirmation (all 3 items)
+- Step 1 pre-refit calibration assessment
+- Step 2 refit outcome (new model accepted or blocked by guard, with numbers)
+- Step 3 duplicate-trigger check result

@@ -481,20 +481,17 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
   // Orientation: player1DecimalOdds / player2DecimalOdds are player-1-relative (same convention
   // as every other engine input), so normP1 maps directly to player1Edge without name-matching.
   //
-  // Task #21 (2026-07-31): excluded from the ensemble pending the ≥200 paper_trade paired-row
-  // reliability bar. The 2026-07-31 ablation run produced n=180 paper_trade pairs (just short of
-  // the required 200). As of 2026-08-08 there are 184 accuracy-eligible rows with odds (still
-  // short of 200). A corrected ablation (both arms through the same current calibration, not
-  // stored calibratedProbability as baseline) must be run once n≥200.
-  // See docs/audit-market-consensus-ablation.md and scripts/auditMarketConsensusAblation.ts.
+  // Task #21 (2026-07-31 original gate) / 2026-08-08 override: marketOdds was activated via a
+  // documented override of the n≥200 Section B threshold (actual n=174, both accuracy and log-loss
+  // thresholds cleared by wide margins across 3 independent runs). "marketOdds" is no longer in
+  // EXCLUDED_FROM_ENSEMBLE. See docs/audit-market-consensus-ablation.md § "Activation Decision".
   let marketConsensusInput: { name: string; player1Edge: number; reliability: number; weightPrior: number } | null = null;
-  // Task #21: honor the global EXCLUDED_FROM_ENSEMBLE gate for "marketOdds" whenever no explicit
-  // per-call ablation set is provided (i.e. every live, paper-trade, and non-ablation call). An
-  // explicitly-provided `excludedModels` (even an empty Set) signals ablation mode — the caller
-  // takes responsibility for which modules are active, so the global gate is bypassed for that
-  // call only. This lets the dedicated market-odds ablation script test both "with odds" and
-  // "without odds" arms independently via `excludedModels`, while standard live calls always
-  // respect the global exclusion.
+  // Honor the global EXCLUDED_FROM_ENSEMBLE gate: if "marketOdds" is ever re-added to the set,
+  // this gate re-engages automatically without any code change. An explicitly-provided
+  // `excludedModels` (even an empty Set) signals ablation mode — the caller takes responsibility
+  // for which modules are active, so the global gate is bypassed for that call only. This lets
+  // the ablation script test both "with odds" and "without odds" arms independently, while
+  // standard live calls always respect the global Set.
   const marketGloballyExcluded = excludedModels == null && EXCLUDED_FROM_ENSEMBLE.has("marketOdds");
   if (
     input.marketOdds != null &&
