@@ -1,0 +1,26 @@
+Read-only code verification — no changes, just confirm what's actually happening.
+
+## Context
+
+There's a standing item of confusion I want resolved against the actual code, not against what we've been assuming: whether the system is using dynamic (optimizer-driven) weights or frozen weights.
+
+The signal so far is that `optimizer_run_id` is zero across all rows in the database, which reads as "frozen weights are in use system-wide." But per-card weight values for Surface Elo / Serve & Return / Recent Form do appear to vary from card to card. Those two facts don't obviously contradict each other — per-card variation could come from something other than an optimizer (e.g., feature-dependent weighting, a formula that shifts weight by input values, or a gating mechanism), and that would be a completely different thing from "the optimizer is running and adjusting weights."
+
+## Task
+
+1. Find the actual code path that determines the weight given to each module (Surface Elo, Serve & Return, Recent Form) for a given prediction.
+2. Determine: is there ANY code path where `optimizer_run_id` would be set to something other than zero? If yes, has it ever executed? If no, confirm that path is currently dead/unreachable.
+3. Explain what actually causes the per-card weight variation you can observe in the data — is it:
+   - A fixed formula/rule that varies weight based on feature values (e.g., the `formEloConflict`-style gating)?
+   - Some other mechanism?
+   - Confirm this is NOT the optimizer, if that's what the evidence shows.
+4. State plainly: as of right now, are model weights frozen (fixed, non-learned) or dynamic (adjusted by an optimizer based on data)? Don't hedge — if the code shows one clearly, say which one.
+
+## Report back
+
+- Where in the code this is decided (file/line).
+- Whether `optimizer_run_id` is reachable at all in the current code, or effectively dead.
+- What actually causes per-card weight variation, in plain terms.
+- The direct answer: frozen or dynamic, as things stand today.
+
+No changes needed — this is purely to settle the question against ground truth.
