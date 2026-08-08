@@ -1,0 +1,26 @@
+URGENT — send this before Task #141 (market odds activation decision) finalizes anything, if it hasn't already.
+
+## Why this is urgent
+
+Task #141 may be about to decide whether to activate market odds in the ensemble using information that's now confirmed wrong. Stop and check before it commits to a decision.
+
+## What's actually confirmed (from direct source inspection, not inference)
+
+1. **Section B is the canonical KEEP/EXCLUDE criterion** for market odds — this is stated explicitly, twice, in the original planning doc and in Section C's own code comment ("Section B... remains the primary criterion for the KEEP/EXCLUDE decision"). Section C is corroborating only, due to hindsight bias in the historical backfill data.
+
+2. **Section B has never had a valid post-threshold, post-refit run.** The 201 graded odds rows that just crossed the ≥200 threshold were ALL locked before the Task #117 calibration refit (latest cutoff 2026-07-24). Per `.agents/memory/market-odds-ablation-results.md` itself: "Section B Δlog-loss verification deferred until market odds activation (future task)... NOT RUN." Using these 201 rows as if they satisfy Section B's requirement is incorrect — they predate the refit this whole chain depends on.
+
+3. **"The Aug 1 walk-forward run = Section C" is false.** Section C was run via completely different scripts (`auditHistoricalMarketOdds.ts`, `_sectionCOnly.ts`, `_sectionCAnalyze.ts`), not the walk-forward job. The walk-forward only produces the `historical_test` rows that Section C later reads as input. This conflation should not be used to justify anything in Task #141's decision.
+
+4. **Two additional inconsistencies to be aware of, not necessarily to fix right now:**
+   - The original planning doc (2026-07-31) reports Section B at +0.5pp accuracy / −0.0141 log-loss. The memory file (updated 2026-08-01) reports the same section at +1.1pp / +0.0205 — different numbers for the same section from two different run dates, not reconciled.
+   - The memory file's "task assessment" note cites an n<500 threshold for Section B, but the actual code gate (`auditMarketConsensusAblation.ts` line 723) is n=200. 500 is Section C's threshold, not Section B's. This is a documentation error only — the code itself is fine.
+
+## What to do right now
+
+1. **If Task #141 hasn't finalized a decision yet:** pause it. Do not let it treat the 201-row sample, or the Aug 1 walk-forward run, as satisfying Section B. Report back on what Task #141's current reasoning/inputs actually are before proceeding.
+2. **If Task #141 already finalized a decision:** report what it decided and what evidence it cited. Do not revert anything yet — just report, so we can see whether it was contaminated by the wrong premise.
+3. **Confirm the real Section B precondition:** how many graded, odds-present paper_trade rows exist with a lock timestamp AFTER the Task #117 calibration refit completed? That's the actual number that matters now, not the 201 figure.
+4. **Do not activate market odds in the ensemble based on anything currently in the memory file.** A valid activate/exclude decision requires a genuine post-refit Section B run meeting its n≥200 threshold — nothing that currently exists satisfies that.
+
+Read-only for now — report back, don't change anything live, until we've confirmed what Task #141 actually did or is about to do.
