@@ -270,7 +270,7 @@ export async function runShadowPaperTradingReplay(options: ShadowReplayOptions):
       const isVoid = resultType === "walkover" || resultType === "cancelled";
 
       const calibrationMapping = getCalibrationMappingAsOf(calibrationHistory, match.cutoffAt);
-      const scored = scoreHistoricalMatch(match, scoringContext, calibrationMapping);
+      const scored = await scoreHistoricalMatch(match, scoringContext, calibrationMapping);
       if (!scored) {
         summary.skippedInsufficientData += 1;
         continue;

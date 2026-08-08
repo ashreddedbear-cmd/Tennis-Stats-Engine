@@ -186,7 +186,7 @@ async function buildContext(allMatches: HistoricalMatchRow[]): Promise<AblationC
   };
 }
 
-function scoreMatch(match: HistoricalMatchRow, excluded: ReadonlySet<AblationModelKey>, ctx: AblationContext): EngineOutput | null {
+async function scoreMatch(match: HistoricalMatchRow, excluded: ReadonlySet<AblationModelKey>, ctx: AblationContext): Promise<EngineOutput | null> {
   if (!match.surface || !match.matchFormat || !match.winnerId) return null;
   const surface = match.surface as Surface;
   const matchFormat = match.matchFormat as MatchFormat;
@@ -202,7 +202,7 @@ function scoreMatch(match: HistoricalMatchRow, excluded: ReadonlySet<AblationMod
   const segmentDef = resolveSegment(match.tour, surface);
   const segment = segmentDef ? ctx.segmentBySegmentKey.get(segmentDef.segmentKey) ?? null : null;
 
-  return runPredictionEngine({
+  return await runPredictionEngine({
     player1: minimalProfile(match.player1Id, match.player1Name),
     player2: minimalProfile(match.player2Id, match.player2Name),
     player1Matches,
@@ -418,7 +418,7 @@ export async function runAblationAnalysis(onProgress?: (p: AblationProgress) => 
       await yieldToEventLoop();
     }
     const match = eligible[i];
-    const output = scoreMatch(match, BASELINE_VARIANT.excluded, ctx);
+    const output = await scoreMatch(match, BASELINE_VARIANT.excluded, ctx);
     if (!output) continue;
 
     const correct = output.predictedWinnerId === match.winnerId;
@@ -509,7 +509,7 @@ export async function runAblationAnalysis(onProgress?: (p: AblationProgress) => 
       const baselineRecord = baselineByMatchId.get(match.id);
       if (!baselineRecord) continue;
 
-      const output = scoreMatch(match, variant.excluded, ctx);
+      const output = await scoreMatch(match, variant.excluded, ctx);
       if (!output) continue;
 
       const correct = output.predictedWinnerId === match.winnerId;

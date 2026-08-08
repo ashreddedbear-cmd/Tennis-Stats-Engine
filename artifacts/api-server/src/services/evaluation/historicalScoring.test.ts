@@ -222,25 +222,27 @@ test(
     };
 
     // ── Step 3: score under all four conditions ────────────────────────────────
-    const baseline    = scoreHistoricalMatch(targetMatch, {
-      ...baseCtx,
-      isPointInTimeReplay: undefined,
-    });
-    const replay      = scoreHistoricalMatch(targetMatch, {
-      ...baseCtx,
-      specialistRowsBySegmentKey: SPECIALIST_MAP,
-      isPointInTimeReplay: true,
-    });
-    const wfFalse     = scoreHistoricalMatch(targetMatch, {
-      ...baseCtx,
-      specialistRowsBySegmentKey: SPECIALIST_MAP,
-      isPointInTimeReplay: false,
-    });
-    const wfUndefined = scoreHistoricalMatch(targetMatch, {
-      ...baseCtx,
-      specialistRowsBySegmentKey: SPECIALIST_MAP,
-      isPointInTimeReplay: undefined,
-    });
+    const [baseline, replay, wfFalse, wfUndefined] = await Promise.all([
+      scoreHistoricalMatch(targetMatch, {
+        ...baseCtx,
+        isPointInTimeReplay: undefined,
+      }),
+      scoreHistoricalMatch(targetMatch, {
+        ...baseCtx,
+        specialistRowsBySegmentKey: SPECIALIST_MAP,
+        isPointInTimeReplay: true,
+      }),
+      scoreHistoricalMatch(targetMatch, {
+        ...baseCtx,
+        specialistRowsBySegmentKey: SPECIALIST_MAP,
+        isPointInTimeReplay: false,
+      }),
+      scoreHistoricalMatch(targetMatch, {
+        ...baseCtx,
+        specialistRowsBySegmentKey: SPECIALIST_MAP,
+        isPointInTimeReplay: undefined,
+      }),
+    ]);
 
     // All four must return non-null: each player has 1 prior match in the context,
     // surface="Hard" and matchFormat="BestOf3" are set.

@@ -103,12 +103,12 @@ interface ScoreResult {
 }
 
 /** Scores one historical match with an explicit choice of eloHistory/identity index -- lets the caller compare "before" (no identity) vs "after" (real identity) using the exact same production code path. */
-function scoreMatch(
+async function scoreMatch(
   match: HistoricalMatchRow,
   matchHistory: MatchHistoryIndex,
   eloHistory: EloHistoryIndex,
   identity: PlayerIdentityIndex | undefined,
-): ScoreResult | null {
+): Promise<ScoreResult | null> {
   if (!match.surface || !match.matchFormat) return null;
   const surface = match.surface as Surface;
   const matchFormat = match.matchFormat as MatchFormat;
@@ -121,7 +121,7 @@ function scoreMatch(
   const player2OpponentStrength = resolveOpponentStrengthFromIndex(player2Matches, eloHistory, identity);
   const headToHead = reconstructHeadToHead(matchHistory, match.player1Id, match.player2Id, match.cutoffAt);
 
-  const output = runPredictionEngine({
+  const output = await runPredictionEngine({
     player1: minimalProfile(match.player1Id, match.player1Name),
     player2: minimalProfile(match.player2Id, match.player2Name),
     player1Matches,
@@ -169,7 +169,7 @@ export function cachedHeadToHead(cache: VerificationHistoryCache, matchHistory: 
   return h2h;
 }
 
-function scoreMatchWithVerificationCache(match: HistoricalMatchRow, matchHistory: MatchHistoryIndex, eloHistory: EloHistoryIndex, identity: PlayerIdentityIndex | undefined, cache: VerificationHistoryCache): ScoreResult | null {
+async function scoreMatchWithVerificationCache(match: HistoricalMatchRow, matchHistory: MatchHistoryIndex, eloHistory: EloHistoryIndex, identity: PlayerIdentityIndex | undefined, cache: VerificationHistoryCache): Promise<ScoreResult | null> {
   if (!match.surface || !match.matchFormat) return null;
   const player1Matches = cachedPlayerHistory(cache, matchHistory, match.player1Id, match.cutoffAt);
   const player2Matches = cachedPlayerHistory(cache, matchHistory, match.player2Id, match.cutoffAt);
@@ -178,7 +178,7 @@ function scoreMatchWithVerificationCache(match: HistoricalMatchRow, matchHistory
   const player1OpponentStrength = resolveOpponentStrengthFromIndex(player1Matches, eloHistory, identity);
   const player2OpponentStrength = resolveOpponentStrengthFromIndex(player2Matches, eloHistory, identity);
   const headToHead = cachedHeadToHead(cache, matchHistory, match.player1Id, match.player2Id, match.cutoffAt);
-  const output = runPredictionEngine({
+  const output = await runPredictionEngine({
     player1: minimalProfile(match.player1Id, match.player1Name),
     player2: minimalProfile(match.player2Id, match.player2Name),
     player1Matches,
@@ -325,8 +325,8 @@ async function main() {
   const afterByLevel = new Map<string, Array<{ match: HistoricalMatchRow; result: ScoreResult }>>();
   for (const match of sample) {
     const level = match.tournamentLevel ?? "Unknown";
-    const before = scoreMatch(match, matchHistory, eloHistoryBefore, identityIndex);
-    const after = scoreMatch(match, matchHistory, eloHistoryAfter, identityIndex);
+    const before = await scoreMatch(match, matchHistory, eloHistoryBefore, identityIndex);
+    const after = await scoreMatch(match, matchHistory, eloHistoryAfter, identityIndex);
     if (before) (beforeByLevel.get(level) ?? beforeByLevel.set(level, []).get(level)!).push({ match, result: before });
     if (after) (afterByLevel.get(level) ?? afterByLevel.set(level, []).get(level)!).push({ match, result: after });
   }
@@ -362,10 +362,10 @@ async function main() {
       winnerId: null,
     } as unknown as HistoricalMatchRow;
     const beforeStartedAt = Date.now();
-    const before = scoreMatchWithVerificationCache(syntheticRow, matchHistory, eloHistoryBefore, identityIndex, verificationCache);
+    const before = await scoreMatchWithVerificationCache(syntheticRow, matchHistory, eloHistoryBefore, identityIndex, verificationCache);
     console.log(`[eloRebuild] Six-matchup before score: ${m.label} completed in ${Date.now() - beforeStartedAt}ms`);
     const afterStartedAt = Date.now();
-    const after = scoreMatchWithVerificationCache(syntheticRow, matchHistory, eloHistoryAfter, identityIndex, verificationCache);
+    const after = await scoreMatchWithVerificationCache(syntheticRow, matchHistory, eloHistoryAfter, identityIndex, verificationCache);
     console.log(`[eloRebuild] Six-matchup after score: ${m.label} completed in ${Date.now() - afterStartedAt}ms`);
     sixResults.push({
       label: m.label,

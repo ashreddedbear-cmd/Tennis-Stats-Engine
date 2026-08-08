@@ -35,6 +35,9 @@ import { and, desc, eq, gt, inArray, sql } from "drizzle-orm";
 import { runWalkForwardEvaluation, type WalkForwardSummary } from "../services/evaluation/walkForward";
 import { logger } from "../lib/logger";
 import { CALIBRATION_REFIT_JOB_NAME } from "./calibrationRefitJobName";
+// Task #154: invalidate the in-memory calibration cache immediately after a successful refit
+// so the very first post-refit prediction fetches the newly-activated model, not the stale one.
+import { invalidateCalibrationCache } from "../services/evaluation/calibrationCache.js";
 
 export { CALIBRATION_REFIT_JOB_NAME };
 
@@ -219,6 +222,9 @@ export async function runCalibrationRefitJob(options: CalibrationRefitJobOptions
       summary: outcome.summary,
       errorMessage: null,
     });
+    // Task #154: evict the calibration cache so the next live prediction fetches the freshly-
+    // activated model immediately, without waiting up to 5 minutes for the TTL to expire.
+    invalidateCalibrationCache();
     logger.info({ ...outcome.summary, attempts: outcome.attempts }, "Calibration refit completed");
     return { ok: true };
   }

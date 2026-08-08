@@ -141,7 +141,7 @@ function pct(n: number, total: number): string {
  * mode="historical":  stored calibratedProbability = "without odds" (walk-forward never passes odds).
  *                     Re-run WITH avgWinner/avgLoser = counterfactual.
  */
-function runAblationPair(
+async function runAblationPair(
   rowId: number,
   player1Id: string,
   player1Name: string,
@@ -161,7 +161,7 @@ function runAblationPair(
   mode: "paperTrade" | "historical",
   storedPredictedWinnerId: string,
   storedCalibratedProbability: number,
-): PairResult | null {
+): Promise<PairResult | null> {
   const EXCLUDED_MARKET: ReadonlySet<AblationModelKey> = new Set(["marketOdds"]);
 
   const p1Matches = reconstructPlayerMatchHistory(matchHistory, player1Id, cutoffAt);
@@ -207,7 +207,7 @@ function runAblationPair(
   try {
     if (mode === "paperTrade") {
       // Stored = "with odds" (engine saw real odds at lock). Re-run WITHOUT gives counterfactual.
-      const noOddsOutput = runPredictionEngine({ ...commonInput, excludedModels: EXCLUDED_MARKET });
+      const noOddsOutput = await runPredictionEngine({ ...commonInput, excludedModels: EXCLUDED_MARKET });
       return {
         rowId,
         actualWinnerId,
@@ -221,7 +221,7 @@ function runAblationPair(
       };
     } else {
       // Stored = "without odds" (walk-forward never passes odds). Re-run WITH odds = counterfactual.
-      const withOddsOutput = runPredictionEngine({
+      const withOddsOutput = await runPredictionEngine({
         ...commonInput,
         marketOdds: {
           provider: "replay",
@@ -707,7 +707,7 @@ async function main() {
         engineErrorsB++; continue;
       }
 
-      const result = runAblationPair(
+      const result = await runAblationPair(
         row.id, row.player1Id, row.player1Name, row.player2Id, row.player2Name,
         row.surface, row.matchFormat, row.tournamentName ?? null,
         row.cutoffAt, row.actualWinnerId,
@@ -762,7 +762,7 @@ async function main() {
       const p2Odds = rawOdds?.avgLoser  ?? null;
       if (!p1Odds || !p2Odds || p1Odds <= 1 || p2Odds <= 1) { badOddsC++; continue; }
 
-      const result = runAblationPair(
+      const result = await runAblationPair(
         row.evalId, row.player1Id, row.player1Name, row.player2Id, row.player2Name,
         row.surface, row.matchFormat, row.tournamentName ?? null,
         row.cutoffAt, row.actualWinnerId,

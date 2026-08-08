@@ -13,7 +13,8 @@ import { calibrateProbability } from "./calibration";
 import { applyCalibration } from "../evaluation/calibration";
 import { computeUpsetRisk, type UpsetRiskResult } from "./upsetRisk";
 import { computeRecommendation } from "./recommendation";
-import { deriveServicePointEstimate, runMatchSimulation, deriveMatchSeed, type MatchSimulationResult } from "./simulator";
+import { deriveServicePointEstimate, deriveMatchSeed, type MatchSimulationResult } from "./simulator";
+import { runMatchSimulationAsync } from "./simulatorPool.js";
 import { applyTieBreaker } from "./tieBreakers";
 import { computeEliteTier, voteFavorsPlayer1 } from "./eliteTier";
 import { checkFinalConsistency } from "./finalConsistencyCheck";
@@ -357,7 +358,7 @@ export function predictSetScore(matchFormat: "BestOf3" | "BestOf5", calibratedPr
   return `${winnerSets}-${loserSets}`;
 }
 
-export function runPredictionEngine(input: PredictionEngineInput): EngineOutput {
+export async function runPredictionEngine(input: PredictionEngineInput): Promise<EngineOutput> {
   const player1OpponentElo = input.player1OpponentElo ?? new Map();
   const player2OpponentElo = input.player2OpponentElo ?? new Map();
 
@@ -617,7 +618,7 @@ export function runPredictionEngine(input: PredictionEngineInput): EngineOutput 
   // predicted winner and slip past the ledger's duplicate detector.
   const servicePointEstimate = deriveServicePointEstimate(surfaceElo, serveReturn);
   const simulatorSeed = deriveMatchSeed(input.player1.id, input.player2.id, input.surface, input.matchFormat);
-  const simulation = runMatchSimulation(servicePointEstimate, input.matchFormat, { seed: simulatorSeed });
+  const simulation = await runMatchSimulationAsync(servicePointEstimate, input.matchFormat, { seed: simulatorSeed });
 
   // Prefer the real, Phase-4-fitted isotonic calibration (learned from actual walk-forward
   // validation outcomes) whenever one exists. Only fall back to the hand-tuned dataQuality-shrink

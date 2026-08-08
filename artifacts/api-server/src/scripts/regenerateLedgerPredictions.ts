@@ -150,7 +150,7 @@ async function main(): Promise<void> {
         resolveOpponentStrength(player2Matches),
       ]);
 
-      const output = runPredictionEngine({
+      const output = await runPredictionEngine({
         player1,
         player2,
         player1Matches,

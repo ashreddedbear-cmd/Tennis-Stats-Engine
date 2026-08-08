@@ -323,7 +323,7 @@ export async function runEvaluationBacktest(
         const player1Won = match.winnerId === match.player1Id;
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const scored = scoreHistoricalMatch(match as any, scoringContext);
+        const scored = await scoreHistoricalMatch(match as any, scoringContext);
         const rawProbability = scored?.rawProbability ?? null;
 
         let calibratedProbability = rawProbability;

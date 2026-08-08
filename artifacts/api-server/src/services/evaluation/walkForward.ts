@@ -516,7 +516,7 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
       const isVoid = resultType === "walkover" || resultType === "cancelled";
       const player1Won = match.winnerId === match.player1Id;
 
-      const scored = scoreHistoricalMatch(match, scoringContext);
+      const scored = await scoreHistoricalMatch(match, scoringContext);
       const rawProbability = scored?.rawProbability ?? null;
       const predictedWinnerId = rawProbability !== null ? (rawProbability >= 0.5 ? match.player1Id : match.player2Id) : null;
       const includedInAccuracy = !isVoid && (resultType === "normal" || retirementRule === "included") && rawProbability !== null;

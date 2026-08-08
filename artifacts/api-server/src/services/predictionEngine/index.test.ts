@@ -64,13 +64,13 @@ function baseInput(overrides: Partial<PredictionEngineInput> = {}): PredictionEn
 }
 
 
-test("the final-consistency guard runs automatically on every real engine output and records zero violations for well-formed inputs", () => {
-  const output = runPredictionEngine(baseInput());
+test("the final-consistency guard runs automatically on every real engine output and records zero violations for well-formed inputs", async () => {
+  const output = await runPredictionEngine(baseInput());
   assert.deepEqual(output.engine.consistencyViolations, [], "a normal, well-formed prediction must never trip any contradiction rule");
 });
 
-test("a 'Surface Elo favors X' reason always names whichever player actually holds the HIGHER surface Elo rating, never the lower one", () => {
-  const output = runPredictionEngine(baseInput());
+test("a 'Surface Elo favors X' reason always names whichever player actually holds the HIGHER surface Elo rating, never the lower one", async () => {
+  const output = await runPredictionEngine(baseInput());
   const surfaceEloReason = output.engine.reasons.find((r) => r.startsWith("Surface Elo favors"));
   if (!surfaceEloReason) return; // sample size too thin to have a surfaceElo reason at all -- nothing to check
   const { player1SurfaceElo, player2SurfaceElo } = output.engine.surfaceElo;
@@ -81,8 +81,8 @@ test("a 'Surface Elo favors X' reason always names whichever player actually hol
   void expectedFavored;
 });
 
-test("the predicted winner's projected set score never implies they lose the match, when player 1 is favored", () => {
-  const output = runPredictionEngine(baseInput());
+test("the predicted winner's projected set score never implies they lose the match, when player 1 is favored", async () => {
+  const output = await runPredictionEngine(baseInput());
   assert.equal(output.predictedWinnerId, "p1", "sanity check: this fixture must actually favor player 1");
   const [winnerSets, loserSets] = output.predictedSetScore.split("-").map(Number);
   assert.ok(winnerSets > loserSets, `predictedSetScore "${output.predictedSetScore}" must show the winner (listed first) ahead`);
@@ -95,8 +95,8 @@ test("the predicted winner's projected set score never implies they lose the mat
 // directly under the winner's own name in the UI, with no player labels). This exact case was
 // invisible to the "player 1 favored" test above, which is why it shipped in the first place --
 // always test the swapped-favorite direction explicitly, not just the default/happy path.
-test("the predicted winner's projected set score never implies they lose the match, when player 2 is favored (regression: this exact case shipped a live bug)", () => {
-  const output = runPredictionEngine(
+test("the predicted winner's projected set score never implies they lose the match, when player 2 is favored (regression: this exact case shipped a live bug)", async () => {
+  const output = await runPredictionEngine(
     baseInput({
       player1Matches: Array.from({ length: 8 }, (_, i) => match(`opp1-${i}`, `Opp1-${i}`, i % 3 === 0, "Hard", 12 + i * 10, 52)),
       player2Matches: Array.from({ length: 8 }, (_, i) => match(`opp2-${i}`, `Opp2-${i}`, i % 4 !== 0, "Hard", 10 + i * 10, 65)),
@@ -114,7 +114,7 @@ test("the predicted winner's projected set score never implies they lose the mat
 // the upcoming surface (Hard) but a full recent-form window pooled across all surfaces, so Surface
 // Elo's reliability is thin while Recent Form's is high -- exactly the scope-mismatch profile
 // documented in the investigation doc.
-test("the simulator's per-match blend weight is scaled down when its own signals are far less reliable than a signal it can't see", () => {
+test("the simulator's per-match blend weight is scaled down when its own signals are far less reliable than a signal it can't see", async () => {
   const player1 = player("p1", "Player One");
   const player2 = player("p2", "Player Two");
   const thinHardPlusDeepClay = (prefix: string, winRatio: number) => [
@@ -139,7 +139,7 @@ test("the simulator's per-match blend weight is scaled down when its own signals
     activeCalibration: null,
   };
 
-  const output = runPredictionEngine(input);
+  const output = await runPredictionEngine(input);
   const { surfaceElo, recentForm } = output.engine;
   assert.ok(recentForm.reliability - surfaceElo.reliability >= 30, `fixture must actually reproduce a real reliability gap (surfaceElo=${surfaceElo.reliability}, recentForm=${recentForm.reliability})`);
 
@@ -148,8 +148,8 @@ test("the simulator's per-match blend weight is scaled down when its own signals
   assert.ok(appliedWeight < 0.4, `simulator's per-match weight (${appliedWeight}) must be scaled down below its globally-validated weight (0.4) when it's blind to a much more reliable signal (Recent Form, reliability=${recentForm.reliability}) vs. its own (${surfaceElo.reliability})`);
 });
 
-test("the Monte Carlo simulator's reliability figure is never shown as if it were a passed validation score while the simulator is still unvalidated/display-only", () => {
-  const output = runPredictionEngine(baseInput());
+test("the Monte Carlo simulator's reliability figure is never shown as if it were a passed validation score while the simulator is still unvalidated/display-only", async () => {
+  const output = await runPredictionEngine(baseInput());
   if (!output.engine.simulatorApplied) {
     // Unvalidated/display-only: the note must say so plainly rather than silently showing a
     // reliability number that could be mistaken for "this has been validated".
@@ -175,10 +175,10 @@ test("the Monte Carlo simulator's reliability figure is never shown as if it wer
 // shifts the ensemble probability away from the pure-form direction.  `excludedModels` fully
 // removes RF from the vote, which is a stronger version of the gate firing (100% suppression vs.
 // the gate's ~92% reduction), making it a conservative upper-bound check on the gate's effect.
-test("Form-Elo conflict gate: RF genuinely influences the ensemble and its removal shifts the pick toward the Elo-driven signal", () => {
+test("Form-Elo conflict gate: RF genuinely influences the ensemble and its removal shifts the pick toward the Elo-driven signal", async () => {
   // Use the baseInput fixture where p1 has better form (won 6/8) and similar Elo.
-  const withRF = runPredictionEngine(baseInput());
-  const withoutRF = runPredictionEngine(baseInput({ excludedModels: new Set(["recentForm"]) }));
+  const withRF = await runPredictionEngine(baseInput());
+  const withoutRF = await runPredictionEngine(baseInput({ excludedModels: new Set(["recentForm"]) }));
 
   // RF must be an active voter when present (positive weightUsed).
   const rfModel = withRF.engine.models.find((m) => m.modelName === "Recent Form");
@@ -229,8 +229,8 @@ test("Form-Elo conflict gate: RF genuinely influences the ensemble and its remov
 // Tests that verify global exclusion behavior pass excludedModels: new Set(["marketOdds"]).
 // Tests that verify live activation pass valid odds with no excludedModels override.
 
-test("Market Consensus appears in engine.models when odds are supplied in ablation mode (excludedModels: new Set())", () => {
-  const output = runPredictionEngine(baseInput({
+test("Market Consensus appears in engine.models when odds are supplied in ablation mode (excludedModels: new Set())", async () => {
+  const output = await runPredictionEngine(baseInput({
     marketOdds: {
       provider: "Test Provider",
       player1DecimalOdds: 1.60,
@@ -252,8 +252,8 @@ test("Market Consensus appears in engine.models when odds are supplied in ablati
   );
 });
 
-test("Market Consensus is absent from engine.models when marketOdds is null (no fabricated neutral vote)", () => {
-  const output = runPredictionEngine(baseInput({ marketOdds: null }));
+test("Market Consensus is absent from engine.models when marketOdds is null (no fabricated neutral vote)", async () => {
+  const output = await runPredictionEngine(baseInput({ marketOdds: null }));
 
   const marketVote = output.engine.models.find((m) => m.modelName === "Market Consensus");
   assert.strictEqual(
@@ -263,8 +263,8 @@ test("Market Consensus is absent from engine.models when marketOdds is null (no 
   );
 });
 
-test("Market Consensus is absent when excluded via ablation (excludedModels: Set(['marketOdds']))", () => {
-  const output = runPredictionEngine(baseInput({
+test("Market Consensus is absent when excluded via ablation (excludedModels: Set(['marketOdds']))", async () => {
+  const output = await runPredictionEngine(baseInput({
     marketOdds: {
       provider: "Test Provider",
       player1DecimalOdds: 1.60,
@@ -282,12 +282,12 @@ test("Market Consensus is absent when excluded via ablation (excludedModels: Set
   );
 });
 
-test("Market Consensus appears in live calls (no excludedModels) when valid odds are present — activated 2026-08-08 (documented override, n=174 < 200 threshold)", () => {
+test("Market Consensus appears in live calls (no excludedModels) when valid odds are present — activated 2026-08-08 (documented override, n=174 < 200 threshold)", async () => {
   // marketOdds was removed from EXCLUDED_FROM_ENSEMBLE on 2026-08-08 as a deliberate override
   // of the n≥200 Section B threshold (n=174, both accuracy and log-loss thresholds cleared by
   // wide margins across three independent runs). With marketOdds now active, a live call
   // supplying valid odds must produce a Market Consensus vote in engine.models.
-  const output = runPredictionEngine(baseInput({
+  const output = await runPredictionEngine(baseInput({
     marketOdds: {
       provider: "Test Provider",
       player1DecimalOdds: 1.60,
@@ -308,8 +308,8 @@ test("Market Consensus appears in live calls (no excludedModels) when valid odds
   );
 });
 
-test("vig-normalized symmetric odds (2.0 / 2.0) produce a Market Consensus probability within 1pp of 50 (ablation mode)", () => {
-  const output = runPredictionEngine(baseInput({
+test("vig-normalized symmetric odds (2.0 / 2.0) produce a Market Consensus probability within 1pp of 50 (ablation mode)", async () => {
+  const output = await runPredictionEngine(baseInput({
     marketOdds: {
       provider: "Test Provider",
       player1DecimalOdds: 2.0,
@@ -327,8 +327,8 @@ test("vig-normalized symmetric odds (2.0 / 2.0) produce a Market Consensus proba
   );
 });
 
-test("Market Consensus player1Probability > 50 when player1 is the heavy market favorite (1.20 odds) [ablation mode]", () => {
-  const output = runPredictionEngine(baseInput({
+test("Market Consensus player1Probability > 50 when player1 is the heavy market favorite (1.20 odds) [ablation mode]", async () => {
+  const output = await runPredictionEngine(baseInput({
     marketOdds: {
       provider: "Test Provider",
       player1DecimalOdds: 1.20,
@@ -346,8 +346,8 @@ test("Market Consensus player1Probability > 50 when player1 is the heavy market 
   );
 });
 
-test("Market Consensus trace in decisionTrace.modules is always excludedFromDataQuality and never excludedFromEnsemble [ablation mode]", () => {
-  const output = runPredictionEngine(baseInput({
+test("Market Consensus trace in decisionTrace.modules is always excludedFromDataQuality and never excludedFromEnsemble [ablation mode]", async () => {
+  const output = await runPredictionEngine(baseInput({
     marketOdds: {
       provider: "Test Provider",
       player1DecimalOdds: 1.80,
@@ -378,14 +378,18 @@ test("Market Consensus trace in decisionTrace.modules is always excludedFromData
 // Specialist calibration is disabled for Clay after walk-forward on 196,924 rows found
 // it hurts accuracy by −1.67pp. These tests pin that the gate is always enforced.
 
-test("Clay specialist: specialistApplied=false on Clay even when a fully-qualified segment is provided", () => {
-  const output = runPredictionEngine(
+test("Clay specialist: specialistApplied=false on Clay even when a fully-qualified segment is provided", async () => {
+  const output = await runPredictionEngine(
     baseInput({
       surface: "Clay",
       segment: {
         segmentKey: "ATP-Clay",
         label: "ATP Clay",
         meetsThreshold: true,
+        historicalMatchCount: 100,
+        validationSampleSize: 50,
+        minHistoricalMatches: 50,
+        minValidationSamples: 20,
         calibrationMapping: [
           { x: 0.3, y: 0.26 },
           { x: 0.5, y: 0.48 },
@@ -407,14 +411,18 @@ test("Clay specialist: specialistApplied=false on Clay even when a fully-qualifi
   );
 });
 
-test("Clay specialist: specialistApplied=true on Hard surface with identical segment (control — disable is Clay-only)", () => {
-  const output = runPredictionEngine(
+test("Clay specialist: specialistApplied=true on Hard surface with identical segment (control — disable is Clay-only)", async () => {
+  const output = await runPredictionEngine(
     baseInput({
       surface: "Hard",
       segment: {
         segmentKey: "ATP-Hard",
         label: "ATP Hard",
         meetsThreshold: true,
+        historicalMatchCount: 100,
+        validationSampleSize: 50,
+        minHistoricalMatches: 50,
+        minValidationSamples: 20,
         calibrationMapping: [
           { x: 0.3, y: 0.26 },
           { x: 0.5, y: 0.48 },
@@ -441,8 +449,8 @@ test("Clay specialist: specialistApplied=true on Hard surface with identical seg
 // The ablation script reads engine.formEloConflict to decide Recent Form's weight prior;
 // if the field were missing it would silently default to false and apply the wrong prior.
 
-test("engine.formEloConflict is always present as a boolean in every prediction output", () => {
-  const output = runPredictionEngine(baseInput());
+test("engine.formEloConflict is always present as a boolean in every prediction output", async () => {
+  const output = await runPredictionEngine(baseInput());
   assert.ok(
     typeof output.engine.formEloConflict === "boolean",
     `engine.formEloConflict must be a boolean on every output (got ${typeof output.engine.formEloConflict})`,
@@ -451,11 +459,11 @@ test("engine.formEloConflict is always present as a boolean in every prediction 
 
 // ── Form-Elo conflict gate ────────────────────────────────────────────────────
 
-test("Form-Elo conflict gate: does NOT suppress RF when signals agree — RF retains its normal weight contribution", () => {
+test("Form-Elo conflict gate: does NOT suppress RF when signals agree — RF retains its normal weight contribution", async () => {
   // When both surface Elo and recent form point at the same player, the gate must be quiet.
   // Verify by checking that RF's weightUsed in the agree scenario is > a meaningful fraction
   // of the total ensemble weight (i.e. it was not suppressed to a trivial contribution).
-  const agreeOut = runPredictionEngine(
+  const agreeOut = await runPredictionEngine(
     baseInput({
       surface: "Hard",
       player1Matches: [
@@ -489,14 +497,14 @@ test("Form-Elo conflict gate: does NOT suppress RF when signals agree — RF ret
 // tieBreakerGated.applied is set to false so the recommendation resolves via normal confidence
 // tiers (LOW_CONFIDENCE at narrow margins) rather than being forced to INSUFFICIENT_EDGE.
 
-test("tie-break gate: symmetric (near-50%) players with non-HighDisagreement agreement do NOT get tieBreakerApplied", () => {
+test("tie-break gate: symmetric (near-50%) players with non-HighDisagreement agreement do NOT get tieBreakerApplied", async () => {
   // Identical match history for both players → all module edges ≈ 0 → raw ensemble ≈ 50%
   // (within TIE_BAND=3). Without the gate, tieBreakerApplied would be true → INSUFFICIENT_EDGE.
   // With the gate, Strong/Moderate/Mixed agreement predictions pass through to LOW_CONFIDENCE.
   const symMatch = (side: string, i: number) =>
     match(`${side}-opp-${i}`, `Opp${i}`, i % 2 === 0, "Hard", 10 + i * 10, 60);
 
-  const output = runPredictionEngine(
+  const output = await runPredictionEngine(
     baseInput({
       player1Matches: Array.from({ length: 10 }, (_, i) => symMatch("p1", i)),
       player2Matches: Array.from({ length: 10 }, (_, i) => symMatch("p2", i)),
@@ -525,12 +533,12 @@ test("tie-break gate: symmetric (near-50%) players with non-HighDisagreement agr
   }
 });
 
-test("tie-break gate: HighDisagreement near-50% prediction still gets tieBreakerApplied", () => {
+test("tie-break gate: HighDisagreement near-50% prediction still gets tieBreakerApplied", async () => {
   // Construct inputs where two core modules strongly oppose each other so the ensemble lands
   // near 50% while modelAgreement is HighDisagreement. Surface Elo strongly favors P1 (many old
   // Hard wins) while Serve & Return strongly favors P2 (P2 has much better service points),
   // causing opposing signals that cancel to a near-50% ensemble with genuine disagreement.
-  const output = runPredictionEngine(
+  const output = await runPredictionEngine(
     baseInput({
       player1Matches: [
         // Many old Hard wins → P1 builds high surfaceElo

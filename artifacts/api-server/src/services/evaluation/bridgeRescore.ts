@@ -170,7 +170,7 @@ export async function runBridgeRescore(
         continue;
       }
 
-      const scoredResult = scoreHistoricalMatch(match, scoringContext);
+      const scoredResult = await scoreHistoricalMatch(match, scoringContext);
       const rawProbability = scoredResult?.rawProbability ?? null;
       const predictedWinnerId =
         rawProbability !== null

@@ -1,5 +1,3 @@
-import { db, calibrationModelsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
 import type { EngineOutput } from "../predictionEngine";
 import { runPredictionEngine } from "../predictionEngine";
 import { buildPlayerProfileWarnings } from "../predictionEngine/playerProfileWarnings";
@@ -11,6 +9,22 @@ import { CompositeTennisProvider } from "../tennisData/compositeProvider.js";
 import { resolveSegmentSpecialistInput } from "./specialistWeights";
 import { resolveSimulatorAdoption } from "./simulatorValidation";
 import { fetchMarketOddsWithStatus, type OddsQuote, type OddsStatus } from "../oddsData/index.js";
+import { getActiveCalibration } from "./calibrationCache.js";
+
+// ---------------------------------------------------------------------------
+// Task #154: per-phase timing instrumentation
+// ---------------------------------------------------------------------------
+// Enabled in development (NODE_ENV !== 'production') or whenever PERF_LOG=true.
+// Format: [PERF] <label>: <ms>ms (or TOTAL: <ms>ms for the full request).
+// ---------------------------------------------------------------------------
+const PERF_ENABLED =
+  process.env["NODE_ENV"] !== "production" || process.env["PERF_LOG"] === "true";
+
+function perfPhase(label: string, startMs: number): void {
+  if (!PERF_ENABLED) return;
+  const elapsed = performance.now() - startMs;
+  console.log(`[PERF] ${label}: ${elapsed.toFixed(1)}ms`);
+}
 
 export class PredictionSnapshotResolutionError extends Error {
   readonly missingFields: string[];
@@ -68,10 +82,15 @@ export interface PredictionSnapshotResult {
  * Every caller gets the same profile enrichment, feature assembly, and engine invocation flow.
  */
 export async function predictFromSnapshot(input: PredictionSnapshotInput): Promise<PredictionSnapshotResult> {
+  const totalStart = performance.now();
+
+  // ── Phase: DB player lookup / provider profile resolution ──────────────────
+  const t0 = performance.now();
   const [player1Resolution, player2Resolution] = await Promise.all([
     resolvePlayerProfileForPrediction(input.provider, input.player1Id, input.player1SubmittedName ?? undefined),
     resolvePlayerProfileForPrediction(input.provider, input.player2Id, input.player2SubmittedName ?? undefined),
   ]);
+  perfPhase("DB player lookup", t0);
 
   const player1Raw = player1Resolution.profile;
   const player2Raw = player2Resolution.profile;
@@ -104,10 +123,12 @@ export async function predictFromSnapshot(input: PredictionSnapshotInput): Promi
     }
   }
 
+  const t1 = performance.now();
   const [player1, player2] = await Promise.all([
     enrichPlayerRankFromSearch(input.provider, player1Raw),
     enrichPlayerRankFromSearch(input.provider, player2Raw),
   ]);
+  perfPhase("rank enrichment", t1);
 
   // Guard every provider call: when the circuit breaker is open these throw
   // ProviderUnavailableError.  Falling back to empty match lists / null h2h lets
@@ -122,18 +143,31 @@ export async function predictFromSnapshot(input: PredictionSnapshotInput): Promi
     catch { return { player1Id: id1, player2Id: id2, meetings: [] }; }
   };
 
+  const t2 = performance.now();
   const [player1Matches, player2Matches, headToHead] = await Promise.all([
     safeGetMatches(resolvedPlayer1Id),
     safeGetMatches(resolvedPlayer2Id),
     safeGetH2H(resolvedPlayer1Id, resolvedPlayer2Id),
   ]);
+  perfPhase("H2H + match history fetch", t2);
 
   const matchTour = player1.tour ?? player2.tour;
 
-  const [player1OpponentStrength, player2OpponentStrength, activeCalibrationRow, segment, simulatorAdoption, weather, marketOddsResult] = await Promise.all([
+  // ── Phase: calibration lookup (cached, ~0ms on warm hits) ─────────────────
+  const t3 = performance.now();
+  const [
+    player1OpponentStrength,
+    player2OpponentStrength,
+    calibrationResult,
+    segment,
+    simulatorAdoption,
+    weather,
+    marketOddsResult,
+  ] = await Promise.all([
     resolveOpponentStrength(player1Matches),
     resolveOpponentStrength(player2Matches),
-    db.select().from(calibrationModelsTable).where(eq(calibrationModelsTable.active, true)).limit(1),
+    // Task #154: 5-minute TTL cache replaces a fresh DB SELECT on every prediction call.
+    getActiveCalibration(),
     resolveSegmentSpecialistInput(matchTour, input.surface),
     resolveSimulatorAdoption(),
     input.includeWeather && input.scheduledStartAt
@@ -145,8 +179,11 @@ export async function predictFromSnapshot(input: PredictionSnapshotInput): Promi
     // "outside window" (no odds yet, expected) from "provider_error" (quota/network failure).
     fetchMarketOddsWithStatus(player1.name, player2.name, input.scheduledStartAt ?? null),
   ]);
+  perfPhase("calibration + opponent strength + odds fetch", t3);
 
-  const output = runPredictionEngine({
+  // ── Phase: engine run (includes Monte Carlo on worker thread) ──────────────
+  const t4 = performance.now();
+  const output = await runPredictionEngine({
     player1,
     player2,
     player1Matches,
@@ -156,7 +193,7 @@ export async function predictFromSnapshot(input: PredictionSnapshotInput): Promi
     matchFormat: input.matchFormat,
     player1OpponentElo: player1OpponentStrength.lookup,
     player2OpponentElo: player2OpponentStrength.lookup,
-    activeCalibration: activeCalibrationRow[0]?.mapping ?? null,
+    activeCalibration: calibrationResult.mapping ?? null,
     weather,
     tournamentName: input.tournamentName ?? null,
     tournamentLevel: input.tournamentLevel ?? null,
@@ -164,8 +201,11 @@ export async function predictFromSnapshot(input: PredictionSnapshotInput): Promi
     simulatorAdoption,
     marketOdds: marketOddsResult.quote,
   });
+  perfPhase("prediction engine (incl. Monte Carlo)", t4);
 
   output.engine.warnings.push(...buildPlayerProfileWarnings(player1, player2));
+
+  perfPhase("TOTAL predictFromSnapshot", totalStart);
 
   return {
     player1,
@@ -176,7 +216,7 @@ export async function predictFromSnapshot(input: PredictionSnapshotInput): Promi
     player1OpponentStrength,
     player2OpponentStrength,
     weather,
-    activeCalibrationId: activeCalibrationRow[0]?.id ? String(activeCalibrationRow[0].id) : null,
+    activeCalibrationId: calibrationResult.modelId !== null ? String(calibrationResult.modelId) : null,
     output,
     marketOdds: marketOddsResult.quote,
     marketOddsStatus: marketOddsResult.status,

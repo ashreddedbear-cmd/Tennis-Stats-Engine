@@ -96,11 +96,11 @@ function minimalProfile(id: string, name: string): PlayerProfile {
  * surface/format weren't resolved at import time -- there is no honest probability to produce in
  * either case, so the caller must treat it as "insufficient data" rather than a fabricated guess.
  */
-export function scoreHistoricalMatch(
+export async function scoreHistoricalMatch(
   match: HistoricalMatchRow,
   context: HistoricalScoringContext,
   activeCalibrationOverride?: CalibrationKnot[] | null,
-): {
+): Promise<{
   rawProbability: number;
   calibratedProbability: number;
   snapshot: LiveFeatureSnapshot;
@@ -108,7 +108,7 @@ export function scoreHistoricalMatch(
   upsetRiskTier: string;
   usedFallback: boolean | null;
   fallbackSources: FallbackSource[] | null;
-} | null {
+} | null> {
   if (!match.surface || !match.matchFormat) return null;
   const surface = match.surface as Surface;
   const matchFormat = match.matchFormat as MatchFormat;
@@ -138,7 +138,7 @@ export function scoreHistoricalMatch(
     ? null
     : resolveSegmentSpecialistInputSync(match.tour, surface, context.specialistRowsBySegmentKey);
 
-  const output = runPredictionEngine({
+  const output = await runPredictionEngine({
     player1: minimalProfile(match.player1Id, match.player1Name),
     player2: minimalProfile(match.player2Id, match.player2Name),
     player1Matches,

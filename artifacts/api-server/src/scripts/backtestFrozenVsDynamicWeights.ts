@@ -113,7 +113,7 @@ async function scoreMatchesRaw(
     const resultType = classifyResult(match);
     const isVoid = resultType === "walkover" || resultType === "cancelled";
     const player1Won = match.winnerId === match.player1Id;
-    const scored = scoreHistoricalMatch(match, scoringContext);
+    const scored = await scoreHistoricalMatch(match, scoringContext);
     const rawProbability = scored?.rawProbability ?? null;
     const includedInAccuracy = !isVoid && (resultType === "normal" || retirementRule === "included") && rawProbability !== null;
 

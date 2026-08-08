@@ -77,6 +77,12 @@ export const historicalMatchesTable = pgTable(
   (table) => [
     uniqueIndex("historical_matches_external_id_idx").on(table.provider, table.externalId),
     index("historical_matches_scheduled_start_idx").on(table.scheduledStartAt),
+    // Task #154 performance indexes (H2H + surface-date) are NOT declared here.
+    // They are created with CREATE INDEX CONCURRENTLY IF NOT EXISTS in
+    // lib/db/src/sql/perf-indexes-concurrent.sql, applied by applySqlExtras.ts after
+    // every `pnpm push`.  Declaring them here would cause drizzle-kit push to create
+    // them non-concurrently (blocking lock on a large populated table) before the
+    // concurrent script runs, defeating the no-lock guarantee.
   ],
 );
 

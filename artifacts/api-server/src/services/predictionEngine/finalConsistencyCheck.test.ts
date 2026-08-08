@@ -322,7 +322,7 @@ function match(opponentId: string, opponentName: string, won: boolean, surface: 
   };
 }
 
-test("regression fixture: a Bouchelaghem/Ganesan-shaped near-coin-flip, core-model-split match never surfaces as Elite, and never claims 'no model conflict' while High Disagreement", () => {
+test("regression fixture: a Bouchelaghem/Ganesan-shaped near-coin-flip, core-model-split match never surfaces as Elite, and never claims 'no model conflict' while High Disagreement", async () => {
   const player1 = player("bouchelaghem", "C. Bouchelaghem");
   const player2 = player("ganesan", "A. Ganesan");
 
@@ -362,7 +362,7 @@ test("regression fixture: a Bouchelaghem/Ganesan-shaped near-coin-flip, core-mod
     activeCalibration: null,
   };
 
-  const output = runPredictionEngine(input);
+  const output = await runPredictionEngine(input);
 
   // This is a real, structurally-derived output -- assert on the actual guarantees rather than a
   // pre-decided modelAgreement/upsetRisk, since the exact tier depends on the real weighted
