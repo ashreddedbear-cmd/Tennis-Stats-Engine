@@ -1,0 +1,19 @@
+Replit's official stance is that AI/Agent usage charges are non-refundable because the underlying compute was used. However, because this was directly caused by an internal logic failure in the workspace rather than normal iteration, you can push for a credit adjustment through support.
+Step-by-Step Recovery Process
+1. Gather Your Evidence Before submitting a ticket, grab the exact details from your Replit workspace:
+* Payment Intent ID / Invoice ID: Go to Settings \rightarrow Account usage \rightarrow See previous invoices and copy the ID starting with pi_ for the affected session/charge.
+* The Session Timestamps: Note the 8–10 hour timeframe and roughly how many credits/dollars were consumed during that window.
+* The Bug Proof: Copy the exact git diff/commit log from Task #175 that documents the orientation bug and the hardcoded default to Player 1.
+2. Submit a Support Ticket Email support@repl.it or submit a ticket directly through the Replit Support portal using the registered email address tied to your account.
+3. Use This Support Template
+Subject: Request for AI Credit Adjustment - System Logic Bug / Faulty Execution (Invoice ID: [YOUR_PI_ID])
+Message: Hi Replit Support,
+I am requesting a credit adjustment/refund for AI Agent usage incurred over the last 8–10 hours on my project.
+Due to a core baseline orientation bug where the code defaulted output logic to Player 1 regardless of input, the Agent spent hours generating calibration fits, specialist weights, and walk-forward evaluations downstream of a broken baseline. Every iteration during this 8–10 hour period was rendered invalid due to this system-level flaw in the code environment.
+Details:
+* Account Email: [demeqouis@gmail.com]
+* Payment Intent ID: [Insert pi_ ID from Account Usage]
+* Timeframe: [Insert Date & Time Window]
+* Estimated Credits Lost: [Insert Credit Amount or Dollar Value]
+While I understand usage charges cover raw compute, this entire session was spent burning credits on corrupted outputs caused by a fundamental execution bug that was just remediated in Task #175. I am asking that these spent credits be credited back to my account so I can re-run the pipeline on the fixed baseline.
+Thank you, [Demeqouis Turner]
