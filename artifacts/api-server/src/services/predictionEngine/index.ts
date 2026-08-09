@@ -848,7 +848,7 @@ export async function runPredictionEngine(input: PredictionEngineInput): Promise
   let modelConflictNote: string | null = null;
   if (modelConflict) {
     const metricVotes = featureModels
-      .map((m) => `${m.modelName} \u2192 ${m.player1Probability >= 50 ? input.player1.name : input.player2.name} (${m.player1Probability.toFixed(0)}%, weight ${m.weightUsed.toFixed(2)})`)
+      .map((m) => `${m.modelName} \u2192 ${m.player1Probability >= 50 ? input.player1.name : input.player2.name} (${(m.player1Probability >= 50 ? m.player1Probability : 100 - m.player1Probability).toFixed(0)}%, weight ${m.weightUsed.toFixed(2)})`)
       .join("; ");
 
     let flipStage = "an unidentified stage";

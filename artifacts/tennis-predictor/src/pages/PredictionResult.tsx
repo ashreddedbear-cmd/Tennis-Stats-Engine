@@ -580,7 +580,7 @@ export default function PredictionResultPage() {
                           className="text-sm px-3 py-1.5 font-bold gap-1.5 shadow-md border-success/40 bg-success/10 text-success"
                           title="The parlay builder independently validated this pick. Both the prediction engine and the builder's factor analysis support the same player."
                         >
-                          <CheckCircle2 className="w-3.5 h-3.5" /> MODEL AGREEMENT: YES
+                          <CheckCircle2 className="w-3.5 h-3.5" /> BUILDER CHECK: CONFIRMED
                         </Badge>
                       ) : prediction.crossEngineAgreement === false ? (
                         <Badge
@@ -588,7 +588,7 @@ export default function PredictionResultPage() {
                           className="text-sm px-3 py-1.5 font-bold gap-1.5 shadow-md border-warning/50 bg-warning/10 text-warning"
                           title="The parlay builder found more evidence supporting the opponent. The underlying probability and grade are unchanged — this is an additional signal flag, not a correction."
                         >
-                          <AlertTriangle className="w-3.5 h-3.5" /> MODEL AGREEMENT: NO
+                          <AlertTriangle className="w-3.5 h-3.5" /> BUILDER CHECK: CONFLICT
                         </Badge>
                       ) : prediction.crossEngineAgreement === null ? (
                         <Badge
@@ -596,7 +596,7 @@ export default function PredictionResultPage() {
                           className="text-sm px-3 py-1.5 font-bold gap-1.5 shadow-sm text-muted-foreground border-muted/40"
                           title="The parlay builder did not have enough data to validate this pick. This is not a disagreement — it means coverage is insufficient for a builder decision."
                         >
-                          MODEL AGREEMENT: UNKNOWN
+                          BUILDER CHECK: UNAVAILABLE
                         </Badge>
                       ) : null
                     )}
@@ -627,7 +627,7 @@ export default function PredictionResultPage() {
                   )}
                   {"crossEngineAgreement" in prediction && prediction.crossEngineAgreement === false && (
                     <p className="text-xs text-warning/80 mt-4 max-w-md leading-relaxed font-mono border border-warning/20 bg-warning/5 rounded-lg p-3">
-                      <span className="font-bold">MODEL AGREEMENT: NO</span> — The parlay builder found more evidence supporting the opponent.{" "}
+                      <span className="font-bold">BUILDER CHECK: CONFLICT</span> — The parlay builder found more evidence supporting the opponent.{" "}
                       {crossEngineExpanded ? (
                         <>The prediction engine's probability and grade are unchanged; this is a separate signal flag. Consider reducing position size or treating this as higher-risk.{" "}
                           <button onClick={() => setCrossEngineExpanded(false)} className="underline underline-offset-2 font-bold whitespace-nowrap">less ▲</button>

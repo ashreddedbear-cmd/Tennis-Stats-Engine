@@ -1,0 +1,190 @@
+# Task #172 — Specialist Weight & Calibration Sanity Audit (v2)
+
+> Revised from v1: status tracking added throughout, -1e marked RESOLVED with its finding, -1f marked IN PROGRESS with the identified fix, -1c marked as current focus with a specific priority target, and a new item -1g added for a label-consistency bug found during review.
+
+## Status snapshot
+
+| Item | Status |
+|---|---|
+| -1a Reference-player convention trace | NOT STARTED |
+| -1b Swap-invariance test | NOT STARTED |
+| -1c Isotonic bin inspection | **NEXT — current focus** |
+| -1d No-leakage check | NOT STARTED |
+| -1e Final-blend attribution | **RESOLVED** |
+| -1f Narrative text "favored" bug | IN PROGRESS |
+| -1g Model Agreement label consistency (new) | NOT STARTED |
+| STEP 0 Stratified backtest | NOT STARTED — gated |
+| STEP 1 Apply fix | NOT STARTED |
+| STEP 2 Calibration reversal sanity check | NOT STARTED |
+| STEP 3 Fix model agreement check | NOT STARTED |
+| STEP 4 Calibration overfitting audit | NOT STARTED |
+| STEP 5 Cross-validation fix (conditional) | NOT STARTED |
+| STEP 6 Invariant tests & completion report | NOT STARTED |
+
+**Important:** -1e resolving does not unblock STEP 0 by itself. -1a, -1b, and -1d are independent gates and none have been started yet — don't treat finishing -1c as clearance to jump to STEP 0.
+
+## What & Why
+
+Three reference cases motivate this work:
+
+**Kostyuk/Swiatek (WTA-Hard):** Raw consensus (4/4 signals) → Swiatek ~63%. Specialist 59.8% Kostyuk (weight 85%), General 84.5% Kostyuk (weight 15%). Blend → 64% Kostyuk. Swiatek won. General, not Specialist, was the extreme voice driving the reversal.
+
+**Rinderknech/Nakashima (ATP-Hard):** Raw consensus (4/4) → Nakashima. Specialist 85.9% Rinderknech (weight 70.2%), General 84.5% Rinderknech (weight 29.8%). Blend → 86% Rinderknech. Both calibrators agree against consensus — reweighting between them cannot fix this.
+
+**Pegula/Shnaider (Hard):** All signals agree on Pegula at 93%. No conflict. But General outputs 99.6% — a tail-extreme probability on what may be a thin isotonic bin — creating stake-sizing risk on a pick that was already going to be made.
+
+**Critical arithmetic observation — RESOLVED, see -1e:** on all three matches, (Specialist% × Specialist weight) + (General% × General weight) reproduces the displayed headline exactly. Confirmed in code: raw consensus signals (Elo, Serve/Return, Recent Form, H2H, Market Consensus) feed a single `ensembleProbability`, and once a Specialist is Active, that number — not the raw signals directly — is the only thing both calibrators consume. This is intentional fallback design, not a bug. Full finding under -1e below.
+
+## Done looks like
+
+- STEP -1 orientation audit is complete and any bugs found are fixed first — *IN PROGRESS (-1e done, -1f near-done, -1c next, -1a/-1b/-1d/-1g open)*
+- STEP 0 stratified backtest is run (with ROI against odds, not just win rate) — *NOT STARTED*
+- STEP 1 applies a fix that is proven to actually help each conflict sub-type (B-dominant-Specialist, B-dominant-General, B-concordant) — not just net-positive in aggregate — *NOT STARTED*
+- The narrative text "favored" bug (-1f) is fixed — *IN PROGRESS, fix identified*
+- If -1e finds raw consensus is a designed override: "lower the ceiling" may not be the right category of fix — the more relevant lever may be when to trust the override at all — *RESOLVED: confirmed intentional override, see -1e*
+- All existing 300/300 invariant tests pass; new invariant tests cover any structural changes — *NOT STARTED*
+- Full re-run of all three reference matchups in the completion report — *NOT STARTED*
+- **(new)** -1g's Model Agreement label mismatch is traced and fixed — *NOT STARTED*
+
+## Out of scope
+
+- Changing how individual raw signals (Elo, Serve/Return, Recent Form, Market Consensus) are calculated
+- Applying any cross-validation refit without explicit approval — propose, don't ship
+
+## Steps
+
+### STEP -1 — Calibration Orientation Audit (do first, gates everything) — IN PROGRESS
+
+**-1a. Reference-player convention trace** — *NOT STARTED*
+Trace raw signal → calibration input → calibrated output → "FAVORED" UI label with file/line references. Answer: what player convention is the calibrator's input expressed relative to, and was the same convention used at fit time? A mismatch produces exactly this reversal pattern.
+
+**-1b. Swap-invariance test** — *NOT STARTED*
+Automated, no historical data needed. Run full pipeline twice: (player1=A, player2=B) and (player1=B, player2=A) with correct stats attached either way. Assert predicted winner is identical both ways, and P(A wins) one way = 1−P(A wins) the other way, within tolerance. Run separately for Specialist, General, and final blend. Report N/N pass.
+
+**-1c. Isotonic bin inspection (both calibrators, extended to tail outputs)** — *NEXT — CURRENT FOCUS*
+For both calibrators on each reference match: identify the raw input value, find its pooled isotonic segment, report segment input range, training sample count, empirical win rate in that segment (should equal calibrated output). Flag `LOW_SUPPORT` if count < 30. Also run this check on any calibrated output ≥90% or ≤10% across all predictions — General's 99.6% on Pegula/Shnaider is a tail-calibration stake-sizing risk that only the extended check catches.
+
+*Priority target:* start with the **General calibrator's bin covering the ~37% `ensembleProbability` input** for Kostyuk/Swiatek — that's the bin that maps 37% → 84.5% and is the leading suspect for the reversal. Report its training sample count and empirical win rate before moving to the Specialist's bin or the other two reference matches.
+
+*Decision this feeds:* if the bin is `LOW_SUPPORT`, the fix is a minimum-support floor on calibration bins (a bin below the floor falls back to a wider/coarser bin or to raw consensus). If the bin has healthy support and the 37%→84.5% mapping is genuinely what the historical data shows, the question shifts to what's training the General calibrator — its training population may need restricting (e.g. surface- or tour-specific) rather than the bin edges being the problem. Don't pick between these until the sample count is in hand.
+
+**-1d. No-leakage check** — *NOT STARTED*
+Confirm both calibrators are fit walk-forward (only on matches chronologically before the evaluation point). Extend the existing walk-forward leakage-audit pattern to cover both calibrators' code path — this is a different path from what's been audited before.
+
+**-1e. Final-blend attribution check (gates STEP 0)** — **RESOLVED**
+
+Finding, confirmed in code:
+```
+generalProbability    = applyCalibration(activeCalibration, ensembleProbability/100)
+specialistProbability = applyCalibration(segmentMapping,    ensembleProbability/100)
+blendedProbability    = specialistWeight × specialistProbability + (1 − specialistWeight) × generalProbability
+```
+Both calibrators take the exact same input (`ensembleProbability`, the raw-signal blend) and diverge only in which calibration curve transforms it. `specialistWeight` varies by case (0.85 for Kostyuk/Swiatek, 0.702 for Rinderknech/Nakashima) rather than being fixed. Raw consensus signals only ever influence the outcome by way of `ensembleProbability` — once a Specialist is Active, Specialist+General fully replace the raw blend rather than averaging with it. **This is intentional fallback design, not a meta-weight bug.**
+
+Gate implication (per original spec, now applies): every "disagreement" case in STEP 0 must be narrated as *"does the override disagree with the panel it replaced, and was the override right"* — not *"how does the ensemble resolve internal conflict."* STEP 1's fix options are the override-trust options below, not a raw-blend-weighting problem.
+
+For Kostyuk/Swiatek specifically: `ensembleProbability` ≈ 37% Kostyuk (all raw signals point Swiatek). General calibration maps 37% → 84.5% Kostyuk (the extreme jump). Specialist calibration maps the same 37% → 59.8% Kostyuk (a much milder jump). The Specialist, despite carrying 85% of the blend weight, was moderating the General's more extreme output — confirming the spec's original arithmetic that a lower Specialist ceiling would have pushed the blend to 68.4% Kostyuk, further from consensus, not closer.
+
+**-1f. Narrative text audit (fix on own timeline, doesn't block STEP 0)** — IN PROGRESS
+
+The Model Conflict narrative sentence and the structured Model Votes table are separate code paths. On the Kostyuk screen: "Surface Elo → Iga Swiatek (26%, weight 0.36)... favored Iga Swiatek" — a 26% win probability player cannot be "favored." Root cause found at line 851 — the sentence template displays player1's raw probability regardless of who's favored:
+```
+// Current — shows player1's raw probability even when player2 is favored:
+`${m.player1Probability >= 50 ? input.player1.name : input.player2.name} (${m.player1Probability.toFixed(0)}%...)`
+
+// Fix — show the favored player's own probability:
+`${m.player1Probability >= 50 ? input.player1.name : input.player2.name} (${m.player1Probability >= 50 ? m.player1Probability : 100 - m.player1Probability}.toFixed(0)%...)`
+```
+Remaining: apply the fix, verify against Kostyuk/Swiatek plus at least one other reference match, and confirm no other sentence template shares the same bug pattern.
+
+**-1g. Model Agreement label consistency (NEW)** — NOT STARTED
+
+On the Kostyuk/Swiatek prediction, the top summary card shows **"MODEL AGREEMENT: UNKNOWN,"** while the detail page's Model Agreement section for the *same* prediction shows **"MODERATE"** with a full confidence-spread explanation. Trace whether the summary card and the detail page read the same computed field or two independently derived ones, and fix so they agree.
+
+Worth noting: this same summary card also displayed **"HIGH CONFIDENCE"** next to "MODEL AGREEMENT: UNKNOWN" on a pick where calibration had just reversed unanimous raw consensus — exactly the combination STEP 2 and STEP 3 below are meant to prevent. Investigate -1g alongside -1a (likely shares the same convention-tracing code), and use this exact case as a regression test once STEP 2/3 are implemented.
+
+**Gate:** -1e has resolved as an intentional design decision, not a bug — it no longer blocks STEP 0. **-1a, -1b, and -1d remain open and still gate STEP 0.** -1c `LOW_SUPPORT` labels that stratum's conclusions as low-confidence; it's the current focus, specifically for the Kostyuk/Swiatek General-calibrator bin. -1f and -1g don't block STEP 0, but -1g should be resolved before STEP 2/3 ship, since it's a live example of the inconsistency those steps target.
+
+---
+
+### STEP 0 (revised) — Stratified backtest across both calibrators — NOT STARTED, gated on -1a/-1b/-1c/-1d
+
+**0a. Define raw consensus — report both**
+- Strict: all 4 of {Elo, Serve/Return, Recent Form, Market Consensus} unanimous
+- Loose: ≥3 of 4 agree (Strict will likely be too small; loose gives more power. Report both.)
+
+**0b. Classify every case where raw consensus disagrees with the calibrated blend**
+
+| Type | Specialist vs. raw consensus | General vs. raw consensus |
+|---|---|---|
+| S | disagrees | agrees |
+| G | agrees | disagrees |
+| B | disagrees | disagrees |
+
+Within B, sub-tag:
+- **B-dominant-Specialist** — Specialist sits clearly farther from 50% than General
+- **B-dominant-General** — General sits clearly farther from 50% (Kostyuk case — distance: Specialist 9.8pts, General 34.5pts)
+- **B-concordant** — within ~5pts of each other (Rinderknech case — distance: Specialist 35.9pts, General 34.5pts, spread 1.4pts)
+
+**0c. Per type/sub-type, report four numbers separately**
+- Win rate — blend's pick win rate
+- Model EV — calibrated probability × prediction-time odds − 1 (if only closing odds exist, say so explicitly)
+- Realized ROI — actual profit/stake at prediction-time odds
+- Calibration quality — Brier score, log loss, reliability by probability band, per stratum
+- Also report CLV (prediction-time odds vs. closing no-vig odds) as a market-movement check
+
+Label any stratum with fewer than ~30 cases as directionally suggestive only.
+
+**0d. The check that actually tests the STEP 1 fix**
+
+Simulate ROI/win-rate for each sub-type under the proposed new ceiling (e.g. 65%), separately per sub-type:
+- Kostyuk (B-dominant-General): 59.8%×0.65 + 84.5%×0.35 = 68.4% vs. original 63.5% → more confident in the wrong direction. Ceiling backfires here — General is the extreme voice; capping Specialist hands more relative weight to the more-extreme General.
+- Rinderknech (B-concordant): 85.9%×0.65 + 84.5%×0.35 = 85.4% vs. original 85.5% → functionally unchanged. Reweighting between two agreeing calibrators can't move the pick.
+
+A single global ceiling on Specialist is empirically shown to (a) actively worsen B-dominant-General cases and (b) do nothing for B-concordant cases. Any fix must address these sub-types separately.
+
+---
+
+### STEP 1 — Apply the fix informed by STEP 0d — NOT STARTED
+
+Branch on the per-sub-type stratified result, not the pooled result:
+- **B-dominant-General:** Fix must address General's influence, not Specialist's ceiling. Options: cap General's weight symmetrically, or add a minimum-sample floor before either calibrator can pull the blend more than X points from raw consensus.
+- **B-concordant:** Needs a different mechanism — either blending back toward raw consensus when both calibrators diverge from it together, or resolving why they diverge together (see -1e).
+- **B-dominant-Specialist:** Original ceiling reduction logic applies here — but only here.
+
+Since -1e confirmed raw consensus is a designed override (not a blended input): STEP 1's primary lever is *when the override is trusted*, not how weight is distributed once it's trusted.
+
+### STEP 2 — Calibration reversal sanity check — NOT STARTED
+
+Compare pre-calibration favored player vs. post-calibration favored player. If direction flips, set `calibrationInverted: boolean` on prediction output and decision trace. `CALIBRATION_OVERRIDE` predictions can never grade higher than MODERATE confidence. Expose flag in "Why this pick?" disclosure.
+
+*Use -1g's Kostyuk/Swiatek finding (HIGH CONFIDENCE + MODEL AGREEMENT: UNKNOWN, co-occurring on a reversed pick) as a concrete regression test for this step.*
+
+### STEP 3 — Fix model agreement check — NOT STARTED
+
+Add a second check using only the three non-market raw signals — Elo, Serve/Return, Recent Form. If all three disagree with the final pick direction, block HIGH_CONFIDENCE. Market Consensus is excluded: requiring the market to confirm a contrarian call before granting high confidence is circular — it structurally prevents the model from finding edge against the market.
+
+### STEP 4 — Calibration overfitting audit — NOT STARTED
+
+For the WTA-Hard segment: how many graded outcomes was the calibration fit on, does any regularization/smoothing exist, and is the direction-reversal pattern driven by a thin cluster of outlier results? Add a minimum-sample floor before calibration is allowed to reverse a raw ensemble's direction.
+
+*-1c's bin-support finding for the Kostyuk/Swiatek General-calibrator bucket directly answers this step's core question for one segment — extend the same check WTA-Hard-wide once the single-bin check is done, rather than starting this step from scratch.*
+
+### STEP 5 — Recommend cross-validation fix if overfitting confirmed — NOT STARTED, conditional on STEP 4
+
+Propose a regularized walk-forward refit. Do not apply without explicit approval.
+
+### STEP 6 — Invariant tests and completion report — NOT STARTED
+
+- Assert `CALIBRATION_OVERRIDE` inputs can never produce HIGH_CONFIDENCE or HIGHEST_CONFIDENCE
+- Assert ≥3 non-market raw signals opposing the final pick blocks HIGH_CONFIDENCE
+- Re-run all three reference matchups (Kostyuk/Swiatek, Rinderknech/Nakashima, Pegula/Shnaider) and include results in completion report
+
+## Relevant files
+
+- `artifacts/api-server/src/services/predictionEngine/index.ts` — final blend formula confirmed here (-1e)
+- `artifacts/api-server/src/services/predictionEngine/recommendation.ts`
+- `artifacts/api-server/src/services/evaluation/specialistWeights.ts`
+- `artifacts/api-server/src/services/predictionEngine/invariants/`
+- Calibration fit/refit pipeline
+- Narrative/disclosure text generation — bug confirmed at line 851 (-1f)
