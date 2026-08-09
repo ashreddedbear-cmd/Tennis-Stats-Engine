@@ -9,7 +9,7 @@ import { DataWarning, EmptyDataState } from "@/components/DataWarning"
 import { formatProbability } from "@/lib/utils"
 import { asPercentage, asFraction, formatPercentage, fractionToPercentage, type Percentage } from "@/lib/percentage"
 import { deriveMonteCarloHeadline } from "@/lib/monteCarloHeadline"
-import { buildPredictionCopyText } from "@/lib/predictionCopyText"
+import { buildPredictionCopyText, buildFullPredictionCopyText } from "@/lib/predictionCopyText"
 import { getRecommendationLabel } from "@/lib/recommendationLabels"
 import { Activity, ShieldAlert, CheckCircle2, XCircle, TrendingUp, AlertTriangle, ChevronRight, Dna, ActivitySquare, Database, Vote, Info, Dices, Crown, Scale, Zap, GitBranch, ChevronDown, Copy, Bookmark, BookmarkCheck, FolderOpen } from "lucide-react"
 import { useState, useEffect } from "react"
@@ -322,6 +322,27 @@ export default function PredictionResultPage() {
     }
   }
 
+  const handleCopyFullReport = async () => {
+    const text = buildFullPredictionCopyText(prediction)
+    try {
+      await navigator.clipboard.writeText(text)
+      toast({ title: "✅ Full report copied!" })
+      return
+    } catch {
+      // Fallback for older/blocked clipboard contexts.
+      const textarea = document.createElement("textarea")
+      textarea.value = text
+      textarea.style.position = "fixed"
+      textarea.style.left = "-9999px"
+      document.body.appendChild(textarea)
+      textarea.focus()
+      textarea.select()
+      document.execCommand("copy")
+      document.body.removeChild(textarea)
+      toast({ title: "✅ Full report copied!" })
+    }
+  }
+
   const methodologySections = [
     { title: "Elite Tier", text: engine.eliteTierReason ?? "Elite tier requires every strict model, data-quality, conflict, and risk gate to pass." },
     { title: "Monte Carlo Simulation", text: engine.simulatorNote ?? "The simulator is computed for transparency and only contributes after validation earns it a vote." },
@@ -351,7 +372,15 @@ export default function PredictionResultPage() {
             {isCorrect ? <><CheckCircle2 className="w-4 h-4 mr-1.5" /> PREDICTION CORRECT</> : <><XCircle className="w-4 h-4 mr-1.5" /> PREDICTION INCORRECT</>}
           </Badge>
         )}
-        <MethodologyDetails sections={methodologySections} open={methodologyOpen} onOpenChange={setMethodologyOpen} />
+        <div className="flex items-center gap-2">
+          <MethodologyDetails sections={methodologySections} open={methodologyOpen} onOpenChange={setMethodologyOpen} />
+          {canCopy && (
+            <Button variant="ghost" size="sm" onClick={handleCopyFullReport} className="gap-1.5 font-mono text-xs">
+              <Copy className="w-3.5 h-3.5" />
+              Copy
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* COMPACT SUMMARY HERO */}
