@@ -1,0 +1,76 @@
+# Calibration Fix — STEP -1 (new) and STEP 0 (revised)
+
+This slots in ahead of the existing spec: STEP -1 runs before anything else, STEP 0 replaces the specialist-only version. STEPs 1–3 are unchanged except for one wiring note at the end.
+
+---
+
+## STEP -1 — Calibration Orientation Audit (run first, before trusting any STEP 0 backtest)
+
+Purpose: rule out a plumbing bug before trusting a backtest built on top of the calibrators. If orientation is wrong, STEP 0's ROI numbers measure the bug, not a strategy.
+
+**-1a. Reference-player convention trace**
+Trace the code path from raw signal → calibration input → calibrated output → the "FAVORED" UI label. Document, with file/line references:
+- What player convention is the calibrator's *input* expressed relative to (player1-as-stored, model's favorite, home player, etc.)?
+- What convention was used when *fitting* each calibrator — same question, for the training pipeline?
+- Confirm both match, and confirm the "FAVORED" label is derived from the same convention.
+A mismatch between fit-time and inference-time convention is the most likely bug shape, and it would produce exactly this reversal pattern.
+
+**-1b. Swap-invariance test** (automated, no historical data needed — can run today)
+For a batch of matches, run the full pipeline twice: once as (player1=A, player2=B), once as (player1=B, player2=A), with the same underlying stats attached to the correct player either way. Assert:
+- Predicted winner is identical both ways
+- P(A wins) computed one way equals 1 − P(A wins) computed the other way, within tolerance
+
+Run separately for Specialist, General, and the final blend. Report as N/N pass, same style as the existing suite.
+
+**-1c. Isotonic bin inspection** (Specialist *and* General — missing before)
+For both calibrators, identify the exact raw input value used for this match, then find the pooled isotonic segment it falls into. Report, per calibrator:
+- Input range of the pooled segment
+- Training sample count in that segment
+- Actual empirical win rate in that segment (should equal the calibrated output — if it doesn't, the calibrator isn't being invoked or serialized correctly)
+- Flag `LOW_SUPPORT` if segment count < 30
+
+This directly answers whether 59.8% / 84.5% is backed by real signal or a handful of noisy training points.
+
+**-1d. No-leakage check**
+Confirm both isotonic calibrators are fit walk-forward (only on matches chronologically before the evaluation point), not fit once on the full corpus. Reuse the walk-forward leakage-audit pattern already established elsewhere in this codebase, extended to cover both calibrators specifically — that's a different code path than what's been audited before.
+
+**Gate:** if -1a or -1b fails, stop and fix before running STEP 0. If -1c shows `LOW_SUPPORT` for either calibrator's relevant bin, label STEP 0's results for that calibrator low-confidence regardless of overall sample size.
+
+---
+
+## STEP 0 (revised) — Stratified backtest across both calibrators
+
+Original gap: only queried cases where raw consensus was unanimous *and Specialist* disagreed. Misses General-only reversals, and doesn't distinguish which calibrator is actually driving the blend when both disagree — which is what happened in the Kostyuk/Swiatek case (Specialist mildly disagreed at 59.8%, General strongly disagreed at 84.5%, the blend followed General).
+
+**0a. Define raw consensus — report both**
+- Strict: all 4 of {Elo, Serve/Return, Recent Form, Market Consensus} unanimous
+- Loose: ≥3 of 4 agree
+
+(Strict alone will likely be too small a sample; loose gives more power. Report both so small-N caveats stay honest either way.)
+
+**0b. Classify every case where raw consensus disagrees with the calibrated blend**
+
+| Type | Specialist vs. raw consensus | General vs. raw consensus |
+|---|---|---|
+| S | disagrees | agrees |
+| G | agrees | disagrees |
+| B | disagrees | disagrees |
+
+Within type B, sub-tag by **dominant calibrator** — whichever of Specialist/General sits farther from 50% in the disagreement direction. B-dominant-Specialist and B-dominant-General are different populations that a single "lower the specialist ceiling" rule affects in opposite ways — this split is the one that matters for STEP 1.
+
+**0c. For each type/sub-type, report four separate numbers — don't conflate them**
+- **Win rate** — blend's pick win rate
+- **Model EV** — calibrated probability × odds available at prediction time − 1 (needs prediction-time odds stored; if only closing odds exist historically, say so explicitly rather than substituting silently)
+- **Realized ROI** — actual profit/stake at prediction-time odds
+- **Calibration quality** — Brier score, log loss, reliability by probability band, computed per stratum
+
+Separately, also report **CLV** (prediction-time odds vs. closing no-vig odds) as a market-movement check independent of win/loss.
+
+If fewer than ~30 cases exist in a stratum, report it and label that stratum's conclusions directionally suggestive only — same standard as before, applied per-stratum instead of pooled.
+
+**0d. The check that actually tests the STEP 1 fix**
+Before applying any specialist-ceiling change, simulate what each stratum's ROI/win-rate would have been under the proposed new ceiling (e.g. 65%), computed separately for B-dominant-Specialist and B-dominant-General. If lowering the ceiling improves B-dominant-Specialist but worsens B-dominant-General — which the arithmetic on the Kostyuk case suggests it will (59.8%×0.65 + 84.5%×0.35 = 68.4%, more confident, not less) — a single global ceiling isn't the right fix. It would need to also cap General's influence, or address why General's calibration is so much more extreme than Specialist's on the same raw input, rather than only touching Specialist's weight.
+
+---
+
+**Wiring note for STEP 1:** its decision tree should branch on the STEP 0d stratified result (per dominant-calibrator stratum), not the pooled STEP 0 result. A ceiling change that's net-positive in aggregate but net-negative for B-dominant-General would still ship a fix that makes cases like this one worse.
