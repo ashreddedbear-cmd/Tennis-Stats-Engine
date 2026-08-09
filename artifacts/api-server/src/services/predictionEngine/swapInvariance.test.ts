@@ -1,14 +1,22 @@
 /**
- * -1b Swap-Invariance Test (Task #172 audit)
+ * Swap-Invariance Test
  *
  * If the engine is swap-invariant, calling it with (A, B) and then (B, A)
  * must produce the same predicted winner and mirrored probabilities:
  *   P(A wins | A=player1) ≈ 100 - P(A wins | A=player2)
  *
- * The orientation-bias hypothesis predicts this FAILS for inputs where the
- * raw ensemble falls below the first calibration knot (~45%), because PAVA
- * pooled the entire left-tail of training data (where player1 was the actual
- * winner in 87% of cases due to Sackmann convention).
+ * Calibration orientation fix (2026-08-09): training now uses predicted-winner
+ * space (x = max(raw, 1-raw), outcome = predicted winner won). The
+ * applyCalibrationOriented helper re-orients at inference time, guaranteeing
+ * swap symmetry by construction: for any raw r,
+ *   orientedX = max(r, 1-r)  ←  same for both slot assignments
+ *   calibratedConfidence = applyCalibration(knots, orientedX)
+ *   output = predictedPlayer1 ? calibratedConfidence : 1 - calibratedConfidence
+ * So P(A|A=p1) + P(A|A=p2) = calibratedConfidence + (1 - calibratedConfidence) = 1.
+ *
+ * These tests use placeholder calibration knots in [0.5, 1.0] predicted-winner
+ * space that represent a plausible correctly-oriented calibration. The real
+ * calibration model will be refit by the next walk-forward run.
  */
 
 import test from "node:test";
@@ -17,38 +25,30 @@ import { runPredictionEngine } from "./index.js";
 import type { PredictionEngineInput } from "./types.js";
 import type { PlayerProfile, MatchRecord, HeadToHeadRecord } from "../tennisData/types.js";
 
-// ─── Active calibration knots from DB (calibration_models id=711, fitted 2026-08-08) ─────────────
-// Fetched manually: SELECT mapping FROM calibration_models WHERE id=711
-// PAVA pool spans x=0 → x=0.4506 (entire left tail), y=0.8448.
-// General: 10 knots; ATP-Hard specialist: 10 knots (first real x=0.4315, y=0.8594)
-// Real knots from DB (calibration_models id=711, fitted 2026-08-08):
-// SELECT mapping FROM calibration_models WHERE id=711
-// KEY: first knot is x=0, y=0.8448 — the left-end PAVA anchor sits at 84.48%, NOT at 0.
-// This means ANY raw probability from 0% to 45.06% maps to 84.48%.
-const GENERAL_CALIBRATION: { x: number; y: number }[] = [
-  { x: 0,                    y: 0.8447954055994257 },
-  { x: 0.4505962670495328,   y: 0.8447954055994257 },
-  { x: 0.5736070422535234,   y: 0.9192488262910798 },
-  { x: 0.6236621202727839,   y: 0.9789212647241166 },
-  { x: 0.6724942352036899,   y: 0.9930822444273636 },
-  { x: 0.7224351219512205,   y: 0.9990243902439024 },
-  { x: 0.765800554016619,    y: 1 },
-  { x: 0.8158333333333333,   y: 1 },
-  { x: 0.858,                y: 1 },
-  { x: 1,                    y: 1 },
+// ─── Placeholder calibration knots in predicted-winner space ─────────────────
+// x = model confidence in predicted winner (always in [0.5, 1.0])
+// y = P(predicted winner actually wins | that confidence)
+// These represent a realistic calibration that slightly compresses extremes.
+// The stale wrong-orientation model (id=711, isActive was set false on 2026-08-09)
+// was trained in player1 space and must NOT be used here.
+const PLACEHOLDER_GENERAL_CALIBRATION: { x: number; y: number }[] = [
+  { x: 0,   y: 0.50 }, // anchor — never queried (inference always orients to x>=0.5)
+  { x: 0.5, y: 0.50 }, // at exactly 50/50 raw, calibration is also 50/50
+  { x: 0.6, y: 0.58 },
+  { x: 0.7, y: 0.65 },
+  { x: 0.8, y: 0.72 },
+  { x: 0.9, y: 0.78 },
+  { x: 1.0, y: 0.82 },
 ];
 
-const ATP_HARD_SPECIALIST: { x: number; y: number }[] = [
-  { x: 0, y: 0 },
-  { x: 0.4314560471976406, y: 0.8594395280235988 },
-  { x: 0.5738633540372692, y: 0.906832298136646 },
-  { x: 0.6234083601286173, y: 0.9459270516717325 },
-  { x: 0.6726190476190476, y: 0.9941176470588236 },
-  { x: 0.7225, y: 0.9990476190476191 },
-  { x: 0.7659523809523809, y: 1 },
-  { x: 0.8238095238095238, y: 1 },
-  { x: 0.8738095238095238, y: 1 },
-  { x: 1, y: 1 },
+const PLACEHOLDER_SPECIALIST_CALIBRATION: { x: number; y: number }[] = [
+  { x: 0,   y: 0.50 },
+  { x: 0.5, y: 0.50 },
+  { x: 0.6, y: 0.59 },
+  { x: 0.7, y: 0.66 },
+  { x: 0.8, y: 0.73 },
+  { x: 0.9, y: 0.79 },
+  { x: 1.0, y: 0.83 },
 ];
 
 // ─── Helper: build a player profile ──────────────────────────────────────────
@@ -97,10 +97,6 @@ function makeMatch(
   };
 }
 
-// ─── Scenario A: weakPlayer=player1, strongPlayer=player2 ────────────────────
-// weakPlayer: rank 180, 6 Hard matches — 1 win, 5 losses, all vs opponents ranked 40–60
-// strongPlayer: rank 8, 20 Hard matches — 16 wins, 4 losses, vs opponents ranked 20–50
-// Expected raw ensemble: weakPlayer ~30–40% → hits the PAVA pool (x < 0.4506)
 function buildInput(player1: PlayerProfile, player2: PlayerProfile, p1Matches: MatchRecord[], p2Matches: MatchRecord[]): PredictionEngineInput {
   const h2h: HeadToHeadRecord = { player1Id: player1.id, player2Id: player2.id, meetings: [] };
   return {
@@ -111,7 +107,7 @@ function buildInput(player1: PlayerProfile, player2: PlayerProfile, p1Matches: M
     headToHead: h2h,
     surface: "Hard",
     matchFormat: "Bo3",
-    activeCalibration: GENERAL_CALIBRATION,
+    activeCalibration: PLACEHOLDER_GENERAL_CALIBRATION,
     segment: {
       segmentKey: "ATP-Hard",
       label: "ATP-Hard",
@@ -120,7 +116,7 @@ function buildInput(player1: PlayerProfile, player2: PlayerProfile, p1Matches: M
       validationSampleSize: 18064,
       minHistoricalMatches: 200,
       minValidationSamples: 200,
-      calibrationMapping: ATP_HARD_SPECIALIST,
+      calibrationMapping: PLACEHOLDER_SPECIALIST_CALIBRATION,
       weight: 0.702,
     },
   };
@@ -163,31 +159,28 @@ const strongMatches: MatchRecord[] = [
   makeMatch("opp-u", "Opponent Phi", 31, "L", "Hard", 2025, 20),
 ];
 
-test("-1b forward: weak player as player1 gets a raw prediction that should fall below x=0.4506", async () => {
+test("swap-invariance forward: raw ensemble for weak-as-player1", async () => {
   const input = buildInput(weakPlayer, strongPlayer, weakMatches, strongMatches);
   const output = await runPredictionEngine(input);
 
-  const rawEnsemble = output.rawEnsembleProbability / 100; // EngineOutput is 0-100 scale
+  const rawEnsemble = output.rawEnsembleProbability / 100;
   const calibrated = output.calibratedProbability;
   const predictedWinner = output.predictedWinnerId;
 
-  console.log(`[FORWARD] raw ensemble P(weakPlayer=player1): ${(rawEnsemble * 100).toFixed(2)}%`);
-  console.log(`[FORWARD] calibrated P(weakPlayer=player1): ${calibrated.toFixed(2)}%`);
-  console.log(`[FORWARD] predicted winner: ${predictedWinner} (weakPlayer id = "${weakPlayer.id}")`);
+  console.log(`[FORWARD] raw ensemble P(weak=player1): ${(rawEnsemble * 100).toFixed(2)}%`);
+  console.log(`[FORWARD] calibrated P(weak=player1):   ${calibrated.toFixed(2)}%`);
+  console.log(`[FORWARD] predicted winner: ${predictedWinner}`);
 
-  // Store for the symmetry check below
-  (globalThis as any).__forwardRaw = rawEnsemble;
-  (globalThis as any).__forwardCalibrated = calibrated;
-  (globalThis as any).__forwardWinner = predictedWinner;
+  (globalThis as any).__fwdRaw = rawEnsemble;
+  (globalThis as any).__fwdCalibrated = calibrated;
+  (globalThis as any).__fwdWinner = predictedWinner;
+
+  // Raw should strongly favour the strong player — weak player is rank 180 vs rank 8
+  assert.ok(rawEnsemble < 0.5, `Expected raw to favour strong player, got ${(rawEnsemble * 100).toFixed(1)}% for weak`);
 });
 
-test("-1b swapped: same players with order reversed — assert symmetry", async () => {
-  // Swap: now strongPlayer=player1, weakPlayer=player2
-  const h2hSwapped: HeadToHeadRecord = {
-    player1Id: strongPlayer.id,
-    player2Id: weakPlayer.id,
-    meetings: [],
-  };
+test("swap-invariance swapped: same matchup reversed — assert symmetry ≤ 2pp", async () => {
+  const h2hSwapped: HeadToHeadRecord = { player1Id: strongPlayer.id, player2Id: weakPlayer.id, meetings: [] };
   const swappedInput: PredictionEngineInput = {
     player1: strongPlayer,
     player2: weakPlayer,
@@ -196,7 +189,7 @@ test("-1b swapped: same players with order reversed — assert symmetry", async 
     headToHead: h2hSwapped,
     surface: "Hard",
     matchFormat: "Bo3",
-    activeCalibration: GENERAL_CALIBRATION,
+    activeCalibration: PLACEHOLDER_GENERAL_CALIBRATION,
     segment: {
       segmentKey: "ATP-Hard",
       label: "ATP-Hard",
@@ -205,60 +198,46 @@ test("-1b swapped: same players with order reversed — assert symmetry", async 
       validationSampleSize: 18064,
       minHistoricalMatches: 200,
       minValidationSamples: 200,
-      calibrationMapping: ATP_HARD_SPECIALIST,
+      calibrationMapping: PLACEHOLDER_SPECIALIST_CALIBRATION,
       weight: 0.702,
     },
   };
 
   const output = await runPredictionEngine(swappedInput);
 
-  const rawEnsemble = output.rawEnsembleProbability / 100; // EngineOutput is 0-100 scale
+  const rawEnsemble = output.rawEnsembleProbability / 100;
   const calibrated = output.calibratedProbability;
   const predictedWinner = output.predictedWinnerId;
 
-  console.log(`\n[SWAPPED] raw ensemble P(strongPlayer=player1): ${(rawEnsemble * 100).toFixed(2)}%`);
-  console.log(`[SWAPPED] calibrated P(strongPlayer=player1): ${calibrated.toFixed(2)}%`);
-  console.log(`[SWAPPED] predicted winner: ${predictedWinner} (strongPlayer id = "${strongPlayer.id}")`);
+  console.log(`[SWAPPED] raw ensemble P(strong=player1): ${(rawEnsemble * 100).toFixed(2)}%`);
+  console.log(`[SWAPPED] calibrated P(strong=player1):   ${calibrated.toFixed(2)}%`);
+  console.log(`[SWAPPED] predicted winner: ${predictedWinner}`);
 
-  const forwardRaw: number = (globalThis as any).__forwardRaw ?? NaN;
-  const forwardCalibrated: number = (globalThis as any).__forwardCalibrated ?? NaN;
-  const forwardWinner: string = (globalThis as any).__forwardWinner ?? "?";
+  const fwdRaw: number = (globalThis as any).__fwdRaw ?? NaN;
+  const fwdCalibrated: number = (globalThis as any).__fwdCalibrated ?? NaN;
+  const fwdWinner: string = (globalThis as any).__fwdWinner ?? "?";
 
-  // Raw symmetry: raw(weak as p1) + raw(strong as p1) should ≈ 100
-  const rawSum = forwardRaw * 100 + rawEnsemble * 100;
-  console.log(`\n═══ SWAP SYMMETRY CHECK ═══`);
-  console.log(`Forward  raw: ${(forwardRaw * 100).toFixed(2)}%  (weak as player1)`);
-  console.log(`Swapped  raw: ${(rawEnsemble * 100).toFixed(2)}%  (strong as player1)`);
-  console.log(`Raw sum (should be ~100 if engine is raw-symmetric): ${rawSum.toFixed(2)}`);
-  console.log(``);
-  console.log(`Forward  calibrated: ${forwardCalibrated.toFixed(2)}%  (weak as player1)`);
-  console.log(`Swapped  calibrated: ${calibrated.toFixed(2)}%  (strong as player1)`);
-  const calibSum = forwardCalibrated + calibrated;
-  console.log(`Calibrated sum (should be ~100 if calibration is symmetric): ${calibSum.toFixed(2)}`);
-  console.log(``);
-  console.log(`Forward  predicted winner: ${forwardWinner}`);
-  console.log(`Swapped  predicted winner: ${predictedWinner}`);
-  const sameWinner = forwardWinner === predictedWinner;
-  console.log(`Same winner predicted both directions: ${sameWinner}`);
-  console.log(``);
+  const rawSum = fwdRaw * 100 + rawEnsemble * 100;
+  const calibSum = fwdCalibrated + calibrated;
 
-  if (Math.abs(rawSum - 100) < 2) {
-    console.log(`✓ Raw ensemble IS symmetric (|sum - 100| = ${Math.abs(rawSum - 100).toFixed(2)} < 2pp)`);
-  } else {
-    console.log(`✗ Raw ensemble is NOT symmetric (|sum - 100| = ${Math.abs(rawSum - 100).toFixed(2)})`);
-  }
+  console.log(`\n═══ SWAP SYMMETRY ═══`);
+  console.log(`Raw sum:        ${rawSum.toFixed(2)} (expect ~100)`);
+  console.log(`Calibrated sum: ${calibSum.toFixed(2)} (expect ~100 after orientation fix)`);
+  console.log(`Same winner: fwd=${fwdWinner} swapped=${predictedWinner} → ${fwdWinner === predictedWinner ? "✓" : "✗"}`);
 
-  if (Math.abs(calibSum - 100) < 2) {
-    console.log(`✓ Calibrated output IS symmetric (|sum - 100| = ${Math.abs(calibSum - 100).toFixed(2)} < 2pp)`);
-  } else {
-    console.log(`✗ Calibrated output is NOT symmetric (|sum - 100| = ${Math.abs(calibSum - 100).toFixed(2)})`);
-    console.log(`  → Orientation bias confirmed: the calibration maps differently depending on`);
-    console.log(`    which player is in the player1 slot, producing a ${Math.abs(calibSum - 100).toFixed(1)}pp asymmetry.`);
-  }
+  // Raw ensemble is always symmetric (confirmed pre-fix)
+  assert.ok(Math.abs(rawSum - 100) < 2,
+    `Raw ensemble symmetry broken: sum=${rawSum.toFixed(2)}, expected ~100`);
 
-  // The test DOCUMENTS the current behavior — it does not assert symmetry,
-  // because the orientation bias means symmetry is currently BROKEN.
-  // The test passes regardless so CI stays green while the bug is being fixed.
-  // Once the re-orientation fix (STEP 1) ships, calibSum should be within 2pp of 100.
-  assert.ok(true, "swap test is informational — see console for symmetry measurements");
+  // Calibrated output must now be symmetric after the orientation fix.
+  // Mathematically guaranteed: applyCalibrationOriented(knots, r) + applyCalibrationOriented(knots, 1-r) = 1
+  // Tolerance is 2pp to account for rounding in the 0.1%-precision output rounding.
+  assert.ok(Math.abs(calibSum - 100) < 2,
+    `Calibrated swap asymmetry = ${Math.abs(calibSum - 100).toFixed(1)}pp (limit 2pp). ` +
+    `Orientation fix may not have reached all applyCalibration call sites.`);
+
+  // The predicted winner must be the same player regardless of slot assignment
+  assert.strictEqual(fwdWinner, predictedWinner,
+    `Predicted winner flipped on slot swap: fwd=${fwdWinner}, swapped=${predictedWinner}. ` +
+    `Orientation fix may not have reached all applyCalibration call sites.`);
 });

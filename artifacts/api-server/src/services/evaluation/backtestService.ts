@@ -16,7 +16,7 @@ import { db, historicalMatchesTable, calibrationModelsTable, backtestRunsTable, 
 import { asc, and, gte, lte, eq, isNull } from "drizzle-orm";
 import { scoreHistoricalMatch, type HistoricalScoringContext } from "./historicalScoring";
 import { computeSegmentMetrics, computeCalibrationBuckets } from "./metrics";
-import { applyCalibration } from "./calibration";
+import { applyCalibrationOriented } from "./calibration";
 import { getPredictionSettings } from "./settle";
 import { buildMatchHistoryIndex } from "../historicalData/matchRecordReconstruction";
 import { buildEloHistoryIndex } from "../predictionEngine/opponentStrength";
@@ -328,7 +328,7 @@ export async function runEvaluationBacktest(
 
         let calibratedProbability = rawProbability;
         if (rawProbability !== null && calibrationKnots && calibrationKnots.length > 0) {
-          calibratedProbability = applyCalibration(calibrationKnots as Array<{ x: number; y: number }>, rawProbability);
+          calibratedProbability = applyCalibrationOriented(calibrationKnots as Array<{ x: number; y: number }>, rawProbability);
         }
 
         const predictedWinnerId = calibratedProbability !== null ? (calibratedProbability >= 0.5 ? match.player1Id : match.player2Id) : null;

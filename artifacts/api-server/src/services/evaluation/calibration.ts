@@ -308,6 +308,29 @@ export function applyCalibration(mapping: CalibrationKnot[], rawProbability: num
   return x;
 }
 
+/**
+ * Orientation-safe calibration lookup for mappings trained in predicted-winner space.
+ *
+ * After the orientation fix (2026-08-09), calibration models are trained with:
+ *   x       = max(raw, 1-raw)   — model confidence in its own pick, always in [0.5, 1.0]
+ *   outcome = 1 if predicted winner actually won
+ *
+ * This helper re-orients a player1-perspective raw probability before the lookup and
+ * de-orients the result, so the output is always a player1-perspective calibrated
+ * probability (same format as the stored calibratedProbability column).
+ *
+ * Use this everywhere a production inference path calls applyCalibration with a raw
+ * player1 probability. Do NOT use it inside fitting/scoring loops where the points are
+ * already in predicted-winner space (i.e. specialistWeights scoringPoints comparisons).
+ */
+export function applyCalibrationOriented(mapping: CalibrationKnot[], player1RawProbability: number): number {
+  const raw = Math.max(0, Math.min(1, player1RawProbability));
+  const predictedPlayer1 = raw >= 0.5;
+  const orientedX = predictedPlayer1 ? raw : 1 - raw; // always in [0.5, 1.0]
+  const calibratedConfidence = applyCalibration(mapping, orientedX); // P(predicted winner wins)
+  return predictedPlayer1 ? calibratedConfidence : 1 - calibratedConfidence; // back to P(player1 wins)
+}
+
 export function logLoss(points: CalibrationPoint[]): number | null {
   if (points.length === 0) return null;
   const eps = 1e-9;

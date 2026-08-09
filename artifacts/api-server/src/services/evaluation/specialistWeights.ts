@@ -2,6 +2,9 @@ import { db, evaluationPredictionsTable, historicalMatchesTable, specialistModel
 import { and, eq, sql, gte } from "drizzle-orm";
 import { logger } from "../../lib/logger";
 import { fitBestCalibration, splitForCalibrationHoldout, applyCalibration, logLoss, brierScore, isKnownBadCascadeRow, CASCADE_CUTOFF_DATE, type CalibrationPoint } from "./calibration";
+// Note: applyCalibration (not applyCalibrationOriented) is correct in the scoringPoints
+// comparison loops below — those points are already in predicted-winner space (x in [0.5,1.0])
+// after the training fix, so no re-orientation is needed for the internal log-loss comparison.
 import { listCandidateSegments, resolveSegment, type SegmentDefinition } from "../predictionEngine/segments";
 import type { CalibrationKnot } from "./types";
 import type { SegmentSpecialistInput } from "../predictionEngine/types";
@@ -160,7 +163,18 @@ async function computeOneSegment(segment: SegmentDefinition, generalMapping: Cal
   const points: CalibrationPoint[] = rows
     .filter((r) => r.rawProbability !== null && r.actualWinnerId !== null)
     .filter((r) => !isKnownBadCascadeRow(r.lockedAt, r.tieBreakerApplied ?? false))
-    .map((r) => ({ rawProbability: (r.rawProbability as number) / 100, outcome: (r.actualWinnerId === r.player1Id ? 1 : 0) as 0 | 1 }));
+    .map((r) => {
+      // Orientation fix (2026-08-09): train in predicted-winner space, not player1 space.
+      // x = max(raw01, 1-raw01): model's confidence in its own pick, always in [0.5, 1.0].
+      // outcome = 1 if the predicted winner actually won.
+      const raw = (r.rawProbability as number) / 100; // normalize DB 0-100 → 0-1
+      const predictedPlayer1 = raw >= 0.5;
+      const actualPlayer1Won = r.actualWinnerId === r.player1Id;
+      return {
+        rawProbability: predictedPlayer1 ? raw : 1 - raw,
+        outcome: (predictedPlayer1 === actualPlayer1Won ? 1 : 0) as 0 | 1,
+      };
+    });
 
   if (points.length < MIN_VALIDATION_SAMPLES_FOR_SEGMENT) {
     return {

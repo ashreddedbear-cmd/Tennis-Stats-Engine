@@ -39,7 +39,7 @@ import { getActiveSpecialistSegments } from "./specialistWeights";
 import { buildMatchHistoryIndex } from "../historicalData/matchRecordReconstruction";
 import { buildEloHistoryIndex } from "../predictionEngine/opponentStrength";
 import { buildPlayerIdentityIndex } from "../tennisData/playerIdentity";
-import { applyCalibration } from "./calibration";
+import { applyCalibrationOriented } from "./calibration";
 import { defaultPredictionMode, derivePredictionStrategyIdentity } from "./strategyIdentity";
 import { eloFallbackTracker } from "../predictionEngine/fallbackTracking";
 import { HISTORICAL_MODEL_VERSION, type RetirementRule } from "./types";
@@ -194,7 +194,7 @@ export async function runBridgeRescore(
       let calibratedProbability: number | null = null;
       if (rawProbability !== null) {
         calibratedProbability = calibrationMapping
-          ? applyCalibration(calibrationMapping, rawProbability) * 100
+          ? applyCalibrationOriented(calibrationMapping, rawProbability) * 100
           : rawProbability * 100;
       }
 

@@ -10,7 +10,7 @@ import { computeDataQuality, computeSurfaceSampleDepth, MODULE_IMPORTANCE, ENSEM
 import { buildEnsemble, edgeToProbability, worseAgreement, type ModelVote } from "./ensemble";
 import { computeWeightedDisagreement, computeMatchupCloseness, buildDisagreementNote, AGREEMENT_ORDER, type MatchupCloseness } from "./disagreement";
 import { calibrateProbability } from "./calibration";
-import { applyCalibration } from "../evaluation/calibration";
+import { applyCalibrationOriented } from "../evaluation/calibration";
 import { computeUpsetRisk, type UpsetRiskResult } from "./upsetRisk";
 import { computeRecommendation } from "./recommendation";
 import { deriveServicePointEstimate, deriveMatchSeed, type MatchSimulationResult } from "./simulator";
@@ -631,7 +631,7 @@ export async function runPredictionEngine(input: PredictionEngineInput): Promise
   const generalProbability = generalEnsembleExcluded
     ? ensembleProbability
     : input.activeCalibration && input.activeCalibration.length > 0
-      ? Math.round(applyCalibration(input.activeCalibration, ensembleProbability / 100) * 1000) / 10
+      ? Math.round(applyCalibrationOriented(input.activeCalibration, ensembleProbability / 100) * 1000) / 10
       : calibrateProbability(ensembleProbability, dataQuality);
 
   // Phase 6: blend in a tour/surface segment specialist -- literally the same ensemble
@@ -654,7 +654,7 @@ export async function runPredictionEngine(input: PredictionEngineInput): Promise
   let specialistProbability: number | null = null;
   let specialistWeight = 0;
   if (specialistApplied && segment) {
-    specialistProbability = Math.round(applyCalibration(segment.calibrationMapping!, ensembleProbability / 100) * 1000) / 10;
+    specialistProbability = Math.round(applyCalibrationOriented(segment.calibrationMapping!, ensembleProbability / 100) * 1000) / 10;
     specialistWeight = segment.weight!;
   }
 

@@ -1,7 +1,7 @@
 import { db, evaluationPredictionsTable, evaluationRunsTable, calibrationModelsTable, historicalMatchesTable } from "@workspace/db";
 import { and, asc, eq, inArray, isNotNull } from "drizzle-orm";
 import { logger } from "../../lib/logger";
-import { fitBestCalibration, applyCalibration, isKnownBadCascadeRow, type CalibrationPoint } from "./calibration";
+import { fitBestCalibration, applyCalibration, applyCalibrationOriented, isKnownBadCascadeRow, type CalibrationPoint } from "./calibration";
 import { scoreHistoricalMatch, type HistoricalScoringContext } from "./historicalScoring";
 import { getPredictionSettings } from "./settle";
 import { computeAndStoreSpecialistSegments, getActiveSpecialistSegments } from "./specialistWeights";
@@ -323,7 +323,19 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
       }
       const foldValidationPoints: CalibrationPoint[] = foldEligible
         .filter((r) => !isKnownBadCascadeRow(r.lockedAt, r.tieBreakerApplied))
-        .map((r) => ({ rawProbability: r.rawProbability as number, outcome: r.player1Won ? 1 : 0 }));
+        .map((r) => {
+          // Orientation fix (2026-08-09): train in predicted-winner space, not player1 space.
+          // Sackmann stores the winner as player1 in ~90% of rows, so player1-space training
+          // learned "player1 wins ~85% of the time regardless of raw signals" — not a tennis fact.
+          // x = max(raw, 1-raw): model's confidence in its own pick, always in [0.5, 1.0].
+          // outcome = 1 if the predicted winner actually won.
+          const raw = r.rawProbability as number; // 0-1 in-memory scale
+          const predictedPlayer1 = raw >= 0.5;
+          return {
+            rawProbability: predictedPlayer1 ? raw : 1 - raw,
+            outcome: (predictedPlayer1 === r.player1Won ? 1 : 0) as 0 | 1,
+          };
+        });
       mapping = fitBestCalibration(foldValidationPoints).knots;
       allValidationPoints.push(...foldValidationPoints);
     }
@@ -629,7 +641,7 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
 
     for (const row of rows) {
       if (row.rawProbability === null) continue;
-      const calibrated = applyCalibration(mapping, row.rawProbability / 100) * 100;
+      const calibrated = applyCalibrationOriented(mapping, row.rawProbability / 100) * 100;
       await db
         .update(evaluationPredictionsTable)
         .set({ calibratedProbability: calibrated })
