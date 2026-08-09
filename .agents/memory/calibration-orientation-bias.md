@@ -77,6 +77,32 @@ documenting the asymmetry. The test will fail if the orientation bug regresses.
 3. After any change to the calibration training code, re-run
    `prediction-engine-invariants` and confirm `calibSum ≈ 100`.
 
+## Flat-zone characterisation correction (confirmed 2026-08-09)
+
+"Zero training support" was wrong. There are 6,073 training rows in bins 15–50%.
+
+The correct characterisation: **perverse training signal**. Folds 243, 244, 245 are pure
+Sackmann data where player1 wins 100% of every row (4,551/4,551 each) — not by coincidence,
+but because Sackmann stores the winner as player1 without exception. Fold 246 (mixed sources)
+is 61.2%. PAVA sees a decreasing win-rate sequence at low x (violates monotone increasing) and
+merges all of x=0.17→0.47 into one flat block at y≈84.5%.
+
+## B-concordant confirmation (Rinderknech/Nakashima, 2026-08-08)
+
+Rinderknech vs Nakashima (live #8006): raw ensemble 40.6% for Rinderknech (all 4 signals favour
+Nakashima). General at x=0.406 → flat zone → 84.5%. ATP-Hard specialist at x=0.406 → flat zone
+→ 85.9%. Final: 85.5% for Rinderknech (wrong direction). Both calibrators in flat zone
+simultaneously — specialist does not moderate General. Confirmed B-concordant same root cause as
+Kostyuk/Swiatek.
+
+## Pegula/Shnaider tail confirmation (2026-08-08)
+
+Live #8010: raw 69.6% for Pegula. General at x=0.6963 interpolates between right-tail knots
+(x=0.6725, y=99.31%) and (x=0.7224, y=99.90%) → 99.6%. WTA-Hard specialist: 91.3%. Final:
+92.5%. **Different mechanism from flat zone** — interpolation zone overconfidence in the correct
+direction. Pegula won. Right-tail knots near 100% are inflated because model-correctly-favours
+player1 compounds with Sackmann-stores-winner-as-player1.
+
 ## Walk-Forward Refit Required
 
 The next step is triggering a walk-forward run to generate a correctly-oriented
