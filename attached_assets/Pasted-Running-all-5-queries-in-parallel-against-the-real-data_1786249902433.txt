@@ -1,0 +1,196 @@
+Running all 5 queries in parallel against the real data now.
+Got the real Rinderknech (rawEnsemble=40.6) and Pegula (rawEnsemble=69.6, General=99.6%, final=92.5%) data. Schema columns are wrong — let me fix them and run the real queries.
+Good — column is fold_id and historical_match_id. Running all corrected queries in parallel plus reading the -1d source lines.
+Now I have the actual numbers. Let me get the remaining pieces — full Kostyuk/Swiatek modules and the specialist training code — then compose the answer.
+All the real data is in. Now I can close every gap with actual numbers, not reconstruction.
+
+Closed gaps — Q1 through Q5 with actual DB results
+
+1 · Training rows below the flat-zone thresholds
+
+The zones are fully populated. Zero-support / extrapolation is not what's happening.
+
+General calibration (id=711, fold_id 243–246, segment=validation):
+
+Metric	Value
+Total training rows	16,760
+Rows with x < 0.4506	3,753 (22.4%)
+Empirical p1 win rate in that zone	86.84%
+Rows with x < 0.50	6,073
+Empirical p1 win rate x < 0.50	84.67%
+Bin-by-bin left tail:
+
+Bin	n	p1 win rate
+[15–20%)	5	100.0%
+[20–25%)	56	100.0%
+[25–30%)	312	97.1%
+[30–35%)	539	95.2%
+[35–40%)	1,022	89.9%
+[40–45%)	1,774	80.6% ← local minimum
+[45–50%)	2,365	81.0% ← barely rises
+[50–55%)	2,634	84.1% ← forces backward pool
+PAVA requires a non-decreasing sequence. The trough at [40–45%] = 80.6% followed by [45–50%] = 81.0% (a 0.4pp rise) then [50–55%] = 84.1% causes PAVA to pool everything from [15%] through [50–55%] into one flat block. The entire region from x=0 to x=0.4506 gets y=0.8448 because the algorithm can't produce a monotone curve from those bins without merging them.
+
+ATP-Hard specialist (all historical_test validation rows, tour=ATP, surface=Hard):
+
+Metric	Value
+Total training rows	18,064
+Rows with x < 0.4315	3,802 (21.0%)
+Empirical p1 win rate in that zone	90.48%
+Left-tail bins for ATP-Hard:
+
+Bin	n	p1 win rate
+[15–20%)	8	100.0%
+[20–25%)	108	98.2%
+[25–30%)	522	97.7%
+[30–35%)	906	93.7%
+[35–40%)	1,245	88.8%
+[40–45%)	1,659	83.8%
+[45–50%)	1,954	81.6% ← inverts
+[50–55%)	2,073	83.7%
+Same U-shape structure, same PAVA logic. The win rate at [40–45%] = 83.8% decreases to 81.6% at [45–50%] — the PAVA pool for ATP-Hard spans up to x=0.4315, which is precisely where the U-shape trough falls.
+
+Why are win rates so high at low x, given -1a ruled out a scale bug?
+
+The scale is correct (0–1). The orientation is the issue. In these rows, outcome = (actualWinnerId === player1Id) ? 1 : 0. In the Sackmann-sourced historical data, the match winner is stored as player1. So "model gives player1 only 25% probability" means the model opposed the stored winner — yet the stored winner (player1) still won 97% of the time, because they literally are the winner in the training format. This is real, well-populated data with a systematic labeling convention mismatch versus inference time.
+
+Implication for the "minimum-support floor" hypothesis (leading hypothesis for 0d): The floor would not remove the orientation bias — 3,753 rows back the General flat zone and 3,802 rows back the ATP-Hard flat zone. The hypothesis needs a different framing for 0d: it should test whether a floor on the output (e.g., don't allow calibrated output > raw + N pp) rather than on training support reduces conflict-case error rates. Keep it as a testable hypothesis, not a settled fix.
+
+2 · Rinderknech/Nakashima actual ensembleProbability
+
+Found in predictions table, id=8006, created 2026-08-08.
+
+Pipeline stage	Value
+rawEnsemble	40.6%
+afterCalibration (General)	84.5%
+afterSpecialist (ATP-Hard, weight=0.702)	85.5%
+afterSimulator	85.5%
+calibrated_probability (stored)	85.5%
+raw=40.6% < 43.15% (ATP-Hard first knot) and < 45.06% (General first knot). Both flat zones triggered simultaneously.
+
+General: isotonic(0.406) → y=0.8448 → 84.5%
+ATP-Hard: isotonic(0.406) → y=0.8594 → 85.9% → blend: 0.702×85.9 + 0.298×84.5 = 85.5%
+B-concordant confirmed with real numbers, not reconstruction. Both calibrators are in their respective flat PAVA pools for raw=40.6. All four raw signals (Surface Elo 35.3%, Serve & Return 44.5%, Recent Form 45.7%, Market Consensus 34.5%) favored Nakashima. The calibration overrode all of them and output 85.5% for Rinderknech. Nakashima won.
+
+3 · Pegula/Shnaider right-tail check
+
+Found in predictions table, id=8010, created 2026-08-08.
+
+Correction from my earlier response: the final output is 92.5%, not 99.6%. The 99.6% is the General calibration step only. The WTA-Hard specialist (weight=0.85) pulls it down to 92.5%.
+
+Pipeline stage	Value
+rawEnsemble	69.6%
+afterCalibration (General)	99.6%
+afterSpecialist (WTA-Hard, weight=0.85)	92.5%
+afterSimulator	92.5%
+calibrated_probability (stored)	92.5%
+General 99.6% at raw=69.6% — bin breakdown confirms this is real training data, not extrapolation:
+
+Bin	n	p1 win rate
+[55–60%)	2,662	92.0%
+[60–65%)	2,016	97.8%
+[65–70%)	1,627	99.1%
+[70–75%)	1,281	99.9%
+[75–80%)	451	100.0% ← right flat begins
+[80–85%)	15	100.0%
+[85–90%)	1	100.0%
+At raw=69.6%, the General calibration interpolates between the knots anchored on the [65–70%] bin (avgY≈99.1%) and [70–75%] bin (avgY≈99.9%), producing 99.6%. 467 rows (451+15+1) with 100% win rate back the right-tail flat zone (x≥0.766). This flat region exists and is populated, but it is the mirror-image manifestation of the same orientation bias: when the model gives player1 75%+, player1 is the stored Sackmann winner virtually 100% of the time — correctly identified and correctly winning.
+
+Right-tail flat is NOT symmetric in the mathematical sense. Left flat: x∈[0, 0.4506] → y=0.8448 (84.5%). Right flat: x≥0.766 → y=1.0 (100%). An unbiased, orientation-correct calibration would have the right tail approach 1.0 (correct) but the left tail approach 0.0, not 0.845.
+
+WTA-Hard specialist reducing from 99.6% to 92.5%: The WTA-Hard first real knot is at x=0.5357, y=0.274 — meaning the WTA-Hard left tail is at 27.4% (not 84%). This implies the WTA-Hard training data has fewer Sackmann rows or a different orientation mix. At x=0.696, the WTA-Hard specialist is in its right zone but its knots are steeper/different than General. The blend at weight=0.85 produces the 92.5% output. The specialist is partially correcting the General's over-inflation here — which is directionally useful but not by design.
+
+4 · Actual shipped -1f diff and rendered narrative
+
+Exact code at line 851 (confirmed from source):
+
+.map((m) =>
+  `${m.modelName} \u2192 ${m.player1Probability >= 50 ? input.player1.name : input.player2.name} ` +
+  `(${(m.player1Probability >= 50 ? m.player1Probability : 100 - m.player1Probability).toFixed(0)}%, ` +
+  `weight ${m.weightUsed.toFixed(2)})`
+)
+Change: m.player1Probability.toFixed(0) → (m.player1Probability >= 50 ? m.player1Probability : 100 - m.player1Probability).toFixed(0). Only the probability token changed; name selection and weight are unchanged.
+
+Rinderknech/Nakashima (id=8006) — modelConflict=true, flipStage=General calibration.
+
+Module votes (from stored decision_trace, ensemble contributors only):
+
+Module	p1Prob	votes for	shown prob
+Surface Elo	35.3%	Nakashima	100−35.3=64.7 → "65%"
+Serve & Return	44.5%	Nakashima	100−44.5=55.5 → "56%"
+Recent Form	45.7%	Nakashima	100−45.7=54.3 → "54%"
+Head-to-Head	50.0%	Rinderknech	50 → "50%"
+Market Consensus	34.5%	Nakashima	100−34.5=65.5 → "66%"
+Before fix (p1Prob always, regardless of direction):
+
+Surface Elo → Brandon Nakashima (35%, weight 0.36); Serve & Return → Brandon Nakashima (45%, weight 0.22); Recent Form → Brandon Nakashima (46%, weight 0.32); Head-to-Head → Arthur Rinderknech (50%, weight 0.01); Market Consensus → Brandon Nakashima (35%, weight 0.10)
+After fix (shipped):
+
+Surface Elo → Brandon Nakashima (65%, weight 0.36); Serve & Return → Brandon Nakashima (56%, weight 0.22); Recent Form → Brandon Nakashima (54%, weight 0.32); Head-to-Head → Arthur Rinderknech (50%, weight 0.01); Market Consensus → Brandon Nakashima (66%, weight 0.10)
+Full rendered conflict note:
+
+"The raw, reliability-weighted evidence (Surface Elo → Brandon Nakashima (65%, weight 0.36); Serve & Return → Brandon Nakashima (56%, weight 0.22); Recent Form → Brandon Nakashima (54%, weight 0.32); Head-to-Head → Arthur Rinderknech (50%, weight 0.01); Market Consensus → Brandon Nakashima (66%, weight 0.10)) favored Brandon Nakashima, but the fitted probability calibration (isotonic mapping learned from real graded outcomes) shifted the final pick to Arthur Rinderknech. This is a real statistical adjustment, not an error — but treat the edge with extra caution."
+Kostyuk/Swiatek (id=8034) — modelConflict=true, flipStage=General calibration (rawEnsemble=37.1%, afterGeneral=84.5% → flip happens at General step).
+
+Module votes:
+
+Module	p1Prob	votes for	shown prob
+Surface Elo	26.3%	Swiatek	100−26.3=73.7 → "74%"
+Serve & Return	42.8%	Swiatek	100−42.8=57.2 → "57%"
+Recent Form	42.8%	Swiatek	100−42.8=57.2 → "57%"
+Head-to-Head	50.0%	Kostyuk	50 → "50%"
+Market Consensus	45.4%	Swiatek	100−45.4=54.6 → "55%"
+After fix (shipped):
+
+Surface Elo → Iga Swiatek (74%, weight 0.36); Serve & Return → Iga Swiatek (57%, weight 0.22); Recent Form → Iga Swiatek (57%, weight 0.32); Head-to-Head → Marta Kostyuk (50%, weight 0.01); Market Consensus → Iga Swiatek (55%, weight 0.10)
+Full conflict note:
+
+"The raw, reliability-weighted evidence (...) favored Iga Swiatek, but the fitted probability calibration (isotonic mapping learned from real graded outcomes) shifted the final pick to Marta Kostyuk. This is a real statistical adjustment, not an error — but treat the edge with extra caution."
+Both narratives are correct. The pre-fix version would have shown 35%/45%/46%/35% for Nakashima's modules and 26%/43%/43%/45% for Swiatek's — the favored player's confidence looking far lower than it actually was in every conflict case.
+
+5 · -1d file/line citations, both paths
+
+General calibration — walkForward.ts:
+
+Line 302: const validationRows = await scoreAndInsert(validationMatches, "validation", ...) — validation segment scored first in each fold, before test rows are touched.
+Lines 316–317: const foldEligible = validationRows.filter(r => r.includedInAccuracy && r.rawProbability !== null) + cascade-bad filter.
+Line 324–326: CalibrationPoint construction:
+.map((r) => ({ rawProbability: r.rawProbability as number, outcome: r.player1Won ? 1 : 0 }))
+rawProbability here is the in-memory 0–1 float produced by scoreAndInsert (never the 0–100 DB column). r.player1Won is set as match.winnerId === match.player1Id at score time.
+Line 328: allValidationPoints.push(...foldValidationPoints) — accumulated across all folds.
+Line 384: const liveFit = fitBestCalibration(allValidationPoints) — pooled fit on all four folds' validation rows, training mode only.
+Scope: fold_id IN (243, 244, 245, 246) — current run only. Test rows (scoreAndInsert at line 334) are never in allValidationPoints.
+Leakage: none. scoreAndInsert(testMatches, "test", ...) runs at line 334, after the fold's calibration has already been fit at line 327.
+Specialist calibration — specialistWeights.ts:
+
+Lines 140–150:
+.from(evaluationPredictionsTable)
+.innerJoin(historicalMatchesTable,
+  eq(evaluationPredictionsTable.historicalMatchId, historicalMatchesTable.id))
+.where(and(
+  eq(evaluationPredictionsTable.runKind, "historical_test"),
+  eq(evaluationPredictionsTable.segment, "validation"),
+  eq(evaluationPredictionsTable.includedInAccuracy, true),
+  eq(historicalMatchesTable.tour, segment.tour),
+  eq(historicalMatchesTable.surface, segment.surface),
+))
+No fold_id filter — this pulls ALL historical_test validation rows ever stored for the matching tour+surface.
+Line 163:
+.map((r) => ({
+  rawProbability: (r.rawProbability as number) / 100,
+  outcome: (r.actualWinnerId === r.player1Id ? 1 : 0) as 0 | 1
+}))
+Divides DB column (0–100 scale) by 100. outcome formula is identical to General's — same orientation bias applies.
+Line 198: const fitResult = fitBestCalibration(points) — same fitBestCalibration pipeline as General (isotonic vs. Platt, holdout-validated).
+Scope: corpus-wide. Confirmed: 18,064 rows for ATP-Hard. Includes rows from runs earlier than 243–246.
+Leakage: none at fold level. Validation rows were always scored prospectively within their own fold before test rows ran. However, the specialist may include validation rows from earlier runs whose own test rows have since been graded — this isn't classical leakage (the model never saw those test outcomes at fit time) but does mean the specialist trains on a much larger and temporally broader corpus than the General.
+Key asymmetry between paths: General trains on 16,760 rows from the current run's folds (2007–2024 sampled). Specialist trains on 18,064 rows (ATP-Hard) drawn from all runs ever — broader time range, same orientation bias. Both compute outcome = player1Id === actualWinnerId. The orientation bug lives in both training paths identically.
+
+-1b is already run (reported last turn)
+
+Results for the record:
+
+Raw sum: 99.90% → engine is swap-symmetric at the raw level ✓
+Calibrated sum: 159.40% → 59.4pp asymmetry ✗
+Predicted winner changes with slot assignment — weak player wins when weak=player1 (60%), strong player wins when strong=player1 (99.4%)
+STEP 0 is now unblocked. All five gaps closed with actual DB values. The "minimum-support floor" remains the leading hypothesis for 0d — the test should now be framed as: does capping the calibrated output's deviation from the raw ensemble reduce conflict-case error rates on the backtest stratification, given that the flat zones are populated (not zero-support)?
