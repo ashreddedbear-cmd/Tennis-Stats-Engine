@@ -189,6 +189,9 @@ export default function PredictionResultPage() {
   const [savedCardId, setSavedCardId] = useState<number | null>(null)
   const [saving, setSaving] = useState(false)
   const [methodologyOpen, setMethodologyOpen] = useState(false)
+  const [eliteExpanded, setEliteExpanded] = useState(false)
+  const [forceSignalExpanded, setForceSignalExpanded] = useState(false)
+  const [crossEngineExpanded, setCrossEngineExpanded] = useState(false)
 
   // On mount (or when prediction changes), check whether this card is already saved.
   // Initialises `saved` and `savedCardId` so the toggle starts in the correct state.
@@ -353,7 +356,7 @@ export default function PredictionResultPage() {
   ];
 
   return (
-    <div className="space-y-12 animate-in fade-in duration-500 max-w-6xl mx-auto pb-24">
+    <div className="space-y-8 animate-in fade-in duration-500 max-w-6xl mx-auto pb-24">
       <div className="pt-2">
         <p className="text-center text-sm sm:text-base font-display font-bold tracking-[0.18em] uppercase text-primary">
           {COMPANY_NAME}
@@ -429,10 +432,10 @@ export default function PredictionResultPage() {
         <div className="absolute right-0 top-0 w-96 h-96 bg-primary/10 rounded-full blur-3xl -mr-32 -mt-32 pointer-events-none" />
         <div className="absolute left-0 bottom-0 w-64 h-64 bg-accent/5 rounded-full blur-3xl -ml-20 -mb-20 pointer-events-none" />
         
-        <CardContent className="p-8 md:p-12 relative z-10">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-12 items-center">
+        <CardContent className="p-5 md:p-8 relative z-10">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8 items-center">
             
-            <div className="space-y-8">
+            <div className="space-y-5">
               {engine.tieBreakerApplied && !forceSignal ? (
                 /* ── TOO CLOSE TO CALL hero ─────────────────────────────────── */
                 <div>
@@ -455,7 +458,7 @@ export default function PredictionResultPage() {
                       <span className="text-lg font-mono text-muted-foreground tabular-nums">{(100 - rawEnsemble).toFixed(1)}%</span>
                     </div>
                   </div>
-                  <div className="mt-6 flex flex-wrap gap-3">
+                  <div className="mt-3 flex flex-wrap gap-3">
                     <Badge variant="outline" className="text-sm px-3 py-1.5 font-bold shadow-md gap-1.5">
                       <Scale className="w-3.5 h-3.5" /> NO STRONG SIGNAL
                     </Badge>
@@ -524,7 +527,7 @@ export default function PredictionResultPage() {
                       </TooltipProvider>
                     )}
                   </div>
-                  <div className="mt-6 flex flex-wrap gap-3">
+                  <div className="mt-3 flex flex-wrap gap-3">
                     <Badge
                       variant={
                         // v2 tiers (current engine output)
@@ -612,12 +615,26 @@ export default function PredictionResultPage() {
                   </div>
                   {engine.tieBreakerApplied && forceSignal && (
                     <p className="text-xs text-warning/80 mt-4 max-w-md leading-relaxed font-mono border border-warning/20 bg-warning/5 rounded-lg p-3">
-                      Raw ensemble was within 3% of 50/50. Force Signal mode is active — this pick was forced at your request. Backtesting shows calls in this range perform at or below chance.
+                      Raw ensemble was within 3% of 50/50.{" "}
+                      {forceSignalExpanded ? (
+                        <>Force Signal mode is active — this pick was forced at your request. Backtesting shows calls in this range perform at or below chance.{" "}
+                          <button onClick={() => setForceSignalExpanded(false)} className="underline underline-offset-2 font-bold whitespace-nowrap">less ▲</button>
+                        </>
+                      ) : (
+                        <button onClick={() => setForceSignalExpanded(true)} className="underline underline-offset-2 font-bold whitespace-nowrap">more ▼</button>
+                      )}
                     </p>
                   )}
                   {"crossEngineAgreement" in prediction && prediction.crossEngineAgreement === false && (
                     <p className="text-xs text-warning/80 mt-4 max-w-md leading-relaxed font-mono border border-warning/20 bg-warning/5 rounded-lg p-3">
-                      <span className="font-bold">MODEL AGREEMENT: NO</span> — The parlay builder's factor analysis found more evidence supporting the opponent when validating this pick. The prediction engine's probability and grade are unchanged; this is a separate signal flag. Consider reducing position size or treating this as higher-risk.
+                      <span className="font-bold">MODEL AGREEMENT: NO</span> — The parlay builder found more evidence supporting the opponent.{" "}
+                      {crossEngineExpanded ? (
+                        <>The prediction engine's probability and grade are unchanged; this is a separate signal flag. Consider reducing position size or treating this as higher-risk.{" "}
+                          <button onClick={() => setCrossEngineExpanded(false)} className="underline underline-offset-2 font-bold whitespace-nowrap">less ▲</button>
+                        </>
+                      ) : (
+                        <button onClick={() => setCrossEngineExpanded(true)} className="underline underline-offset-2 font-bold whitespace-nowrap">more ▼</button>
+                      )}
                     </p>
                   )}
                   {prediction.recommendation === 'STRONG_RECOMMENDATION' && (
@@ -630,15 +647,23 @@ export default function PredictionResultPage() {
                   )}
                   {engine.isEliteTier && (
                     <p className="text-xs text-muted-foreground mt-4 max-w-md leading-relaxed font-mono flex items-center gap-2 flex-wrap">
-                      <span>Not yet statistically validated — early-stage, small sample.</span>
-                      <button onClick={() => setMethodologyOpen(true)} className="text-primary underline underline-offset-2 font-bold whitespace-nowrap text-[11px]">ⓘ Details</button>
+                      <span>Not yet statistically validated.</span>{" "}
+                      {eliteExpanded ? (
+                        <>
+                          <span>Early-stage, small sample.</span>{" "}
+                          <button onClick={() => setMethodologyOpen(true)} className="text-primary underline underline-offset-2 font-bold whitespace-nowrap text-[11px]">ⓘ Details</button>{" "}
+                          <button onClick={() => setEliteExpanded(false)} className="underline underline-offset-2 font-bold whitespace-nowrap">less ▲</button>
+                        </>
+                      ) : (
+                        <button onClick={() => setEliteExpanded(true)} className="underline underline-offset-2 font-bold whitespace-nowrap">more ▼</button>
+                      )}
                     </p>
                   )}
                 </div>
               )}
 
               {(!engine.tieBreakerApplied || forceSignal) && (
-                <div className="space-y-3 bg-secondary/30 p-5 rounded-2xl border border-border/50">
+                <div className="space-y-3 bg-secondary/30 p-3 rounded-xl border border-border/50">
                   <div className="flex justify-between font-mono text-sm items-center">
                     <span className="font-bold text-muted-foreground tracking-widest">WIN PROBABILITY</span>
                     <span className="font-bold text-xl tabular-nums">{formatProbability(asPercentage(prediction.predictedWinnerProbability))}</span>
@@ -650,7 +675,7 @@ export default function PredictionResultPage() {
               )}
 
               {engine.tieBreakerApplied && !forceSignal && (
-                <div className="space-y-3 bg-secondary/30 p-5 rounded-2xl border border-border/50">
+                <div className="space-y-3 bg-secondary/30 p-3 rounded-xl border border-border/50">
                   <div className="flex justify-between font-mono text-sm items-center">
                     <span className="font-bold text-muted-foreground tracking-widest">RAW PROBABILITY SPLIT</span>
                     <span className="font-mono text-sm text-muted-foreground tabular-nums">{rawEnsemble.toFixed(1)} / {(100 - rawEnsemble).toFixed(1)}</span>
@@ -670,14 +695,14 @@ export default function PredictionResultPage() {
               )}
             </div>{/* end left column */}
 
-            <div className="space-y-6 md:pl-10 md:border-l border-border/50">
+            <div className="space-y-4 md:pl-10 md:border-l border-border/50">
               <div className="grid grid-cols-2 gap-4">
-                <div className="p-5 bg-background rounded-2xl border border-border shadow-sm">
+                <div className="p-3 sm:p-4 bg-background rounded-2xl border border-border shadow-sm">
                   <p className="text-[10px] font-mono font-bold text-muted-foreground mb-2 tracking-widest uppercase">DATA QUALITY</p>
-                  <p className="text-3xl font-display font-bold text-primary tabular-nums">{prediction.dataQuality}%</p>
+                  <p className="text-2xl font-display font-bold text-primary tabular-nums">{prediction.dataQuality}%</p>
                   <p className="text-xs mt-2 text-muted-foreground/80 leading-snug">{prediction.dataQualityLabel}</p>
                 </div>
-                <div className="p-5 bg-background rounded-2xl border border-border shadow-sm flex flex-col">
+                <div className="p-3 sm:p-4 bg-background rounded-2xl border border-border shadow-sm flex flex-col">
                   <p className="text-[10px] font-mono font-bold text-muted-foreground mb-2 tracking-widest uppercase">UPSET RISK</p>
                   <div className={`text-2xl font-display font-bold tabular-nums mb-2 ${UPSET_RISK_TEXT_CLASS[prediction.upsetRisk] ?? "text-accent"}`}>
                     {UPSET_RISK_SHORT_LABEL[prediction.upsetRisk] ?? prediction.upsetRisk}
@@ -699,15 +724,15 @@ export default function PredictionResultPage() {
                   <p className="text-[10px] font-mono font-bold text-muted-foreground tracking-widest uppercase">
                     WHY THIS PICK?
                   </p>
-                  <div className="space-y-2.5 bg-secondary/30 p-4 rounded-xl border border-border/50">
+                  <div className="space-y-1.5 bg-secondary/30 p-3 rounded-xl border border-border/50">
                     {engine.reasons?.map((r, i) => (
-                      <div key={i} className="flex gap-3 text-sm text-foreground/80">
+                      <div key={i} className="flex gap-2 text-sm text-foreground/80">
                         <CheckCircle2 className="w-5 h-5 text-success shrink-0 mt-0.5" />
                         <span className="leading-snug">{r}</span>
                       </div>
                     ))}
                     {engine.risks?.map((r, i) => (
-                      <div key={i} className="flex gap-3 text-sm text-foreground/80">
+                      <div key={i} className="flex gap-2 text-sm text-foreground/80">
                         <ShieldAlert className="w-5 h-5 text-warning shrink-0 mt-0.5" />
                         <span className="leading-snug">{r}</span>
                       </div>
@@ -756,7 +781,7 @@ export default function PredictionResultPage() {
       </Card>
 
       {/* MODEL VOTES & SEGMENT SPECIALIST (Phase 6) */}
-      <div className="pt-8">
+      <div className="pt-6">
         <h3 className="text-2xl font-display font-bold flex items-center gap-3 mb-6">
           <div className="p-2 bg-primary/10 rounded-lg">
             <Vote className="w-5 h-5 text-primary" />
@@ -930,7 +955,7 @@ export default function PredictionResultPage() {
         });
 
         return (
-          <div className="pt-8">
+          <div className="pt-6">
             <h3 className="text-2xl font-display font-bold flex items-center gap-3 mb-6">
               <div className="p-2 bg-primary/10 rounded-lg">
                 <Dices className="w-5 h-5 text-primary" />
@@ -1034,7 +1059,7 @@ export default function PredictionResultPage() {
       })()}
 
       {/* FULL ENGINE BREAKDOWN */}
-      <div className="pt-8">
+      <div className="pt-6">
         <h3 className="text-2xl font-display font-bold flex items-center gap-3 mb-6">
           <div className="p-2 bg-primary/10 rounded-lg">
             <Database className="w-5 h-5 text-primary" />
@@ -1408,7 +1433,7 @@ function DecisionTracePanel({ trace, player1Name, player2Name }: { trace: any; p
   const excludedModules = modules.filter((m) => m.excludedFromEnsemble || m.excludedByAblation);
 
   return (
-    <div className="pt-8">
+    <div className="pt-6">
       <h3 className="text-2xl font-display font-bold flex items-center gap-3 mb-6">
         <div className="p-2 bg-primary/10 rounded-lg">
           <GitBranch className="w-5 h-5 text-primary" />
