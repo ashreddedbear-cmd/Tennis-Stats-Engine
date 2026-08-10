@@ -4,7 +4,7 @@ import { logger } from "../../lib/logger";
 import { fitBestCalibration, applyCalibration, applyCalibrationOriented, isKnownBadCascadeRow, type CalibrationPoint } from "./calibration";
 import { scoreHistoricalMatch, type HistoricalScoringContext } from "./historicalScoring";
 import { getPredictionSettings } from "./settle";
-import { computeAndStoreSpecialistSegments, getActiveSpecialistSegments } from "./specialistWeights";
+import { computeAndStoreSpecialistSegments, getActiveSpecialistSegments, type SpecialistComputedData } from "./specialistWeights";
 import { buildMatchHistoryIndex } from "../historicalData/matchRecordReconstruction";
 import { buildEloHistoryIndex } from "../predictionEngine/opponentStrength";
 import { buildPlayerIdentityIndex } from "../tennisData/playerIdentity";
@@ -50,6 +50,19 @@ export interface WalkForwardOptions {
    * Must be paired with startDate. See startDate for full semantics.
    */
   endDate?: string;
+  /**
+   * Task #198: when true, a training-mode walk-forward stores the newly-fit calibration model
+   * with active=false and pendingActivation=true instead of auto-activating it. The computed
+   * specialist segment data is stored as JSONB on the pending model row rather than written
+   * directly to specialist_models. An admin must then explicitly call
+   * POST /evaluation/walk-forward/activate/:modelId to review the quality-gate summary and
+   * approve the swap.
+   *
+   * Has no effect when evaluationOnly=true (evaluation-only runs never write a new model).
+   * Defaults to false for backward compatibility; the public /run and /full-refit endpoints
+   * both default it to true so every admin-triggered training run requires approval.
+   */
+  requireApproval?: boolean;
 }
 
 export interface WalkForwardSummary {
@@ -62,6 +75,13 @@ export interface WalkForwardSummary {
   warnings: string[];
   /** Task #12: true when this run was evaluation-only (frozen calibration/specialist weights), false when it was a full optimizer/training run. */
   evaluationOnly: boolean;
+  /**
+   * Task #198: set when requireApproval=true and quality gates passed — the id of the
+   * calibration_models row stored with pendingActivation=true. Admin must activate via
+   * POST /evaluation/walk-forward/activate/:modelId. Undefined when evaluationOnly=true,
+   * when quality gates failed, or when requireApproval=false (auto-activated).
+   */
+  pendingModelId?: number;
 }
 
 function classifyResult(match: { winnerId: string | null; retired: boolean; walkover: boolean; cancelled: boolean }): ResultType {
@@ -195,6 +215,7 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
   const foldCount = options.foldCount ?? 4;
   const warmupFraction = options.warmupFraction ?? 0.4;
   const evaluationOnly = options.evaluationOnly ?? false;
+  const requireApproval = options.requireApproval ?? false;
   const optimizerRunId = options.optimizerRunId ?? null;
   const scopedMatchIds = options.matchIds && options.matchIds.length > 0 ? options.matchIds : null;
   // Task #127: optional date-range filter. Both must be provided together or neither.
@@ -445,6 +466,10 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
     foldIds.push(insertedFold.id);
   }
 
+  // Task #198: tracks the calibration_models.id of a pending-activation row when
+  // requireApproval=true and quality gates pass. Undefined in all other cases.
+  let pendingModelId: number | undefined;
+
   if (evaluationOnly) {
     // Task #12: evaluation-only -- calibration_models and specialist_models are frozen.
     // No writes to either table. The run's purpose is purely to produce fresh metrics against
@@ -537,49 +562,122 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
 
     const fitsPassesQualityGate = gate1_nonDegenerate && gate2_aboveFloor && gate3_notWorseThanCurrent;
 
-    if (fitsPassesQualityGate) {
-      await db.update(calibrationModelsTable).set({ active: false }).where(eq(calibrationModelsTable.active, true));
-    } else {
-      const rejectionReason = !gate1_nonDegenerate
-        ? `holdoutSampleSize === 0 (degenerate fit — too few validation points)`
-        : !gate2_aboveFloor
-          ? `holdoutSampleSize ${liveFit.holdoutSampleSize} < floor ${MIN_HOLDOUT_SAMPLE_SIZE_TO_ACTIVATE} (eligible set too sparse)`
-          : `new holdout log-loss ${newLL?.toFixed(4) ?? "null"} > active model ${activeLL?.toFixed(4) ?? "null"} (new fit is worse)`;
-      logger.warn(
-        {
-          fitSampleSize: liveFit.fitSampleSize,
-          holdoutSampleSize: liveFit.holdoutSampleSize,
-          newIsotonicHoldoutLogLoss: newLL,
-          activeModelId: currentActiveModel?.id ?? null,
-          activeIsotonicHoldoutLogLoss: activeLL,
-          pooledValidationPoints: allValidationPoints.length,
-          gate1_nonDegenerate,
-          gate2_aboveFloor,
-          gate3_notWorseThanCurrent,
-        },
-        `Calibration refit: new model stored inactive — ${rejectionReason}; previous active model kept`,
-      );
-    }
-    await db.insert(calibrationModelsTable).values({
-      method: liveFit.method,
-      mapping: liveMapping,
-      validationSampleSize: allValidationPoints.length,
-      validationDateRangeStart: minDate !== null ? new Date(minDate) : null,
-      validationDateRangeEnd: maxDate !== null ? new Date(maxDate) : null,
-      active: fitsPassesQualityGate,
-      isotonicHoldoutLogLoss: liveFit.isotonicHoldoutLogLoss,
-      plattHoldoutLogLoss: liveFit.plattHoldoutLogLoss,
-      holdoutSampleSize: liveFit.holdoutSampleSize,
-    });
+    // Shared rejection-reason builder (used in both paths for logging).
+    const rejectionReason = !fitsPassesQualityGate
+      ? (!gate1_nonDegenerate
+          ? `holdoutSampleSize === 0 (degenerate fit — too few validation points)`
+          : !gate2_aboveFloor
+            ? `holdoutSampleSize ${liveFit.holdoutSampleSize} < floor ${MIN_HOLDOUT_SAMPLE_SIZE_TO_ACTIVATE} (eligible set too sparse)`
+            : `new holdout log-loss ${newLL?.toFixed(4) ?? "null"} > active model ${activeLL?.toFixed(4) ?? "null"} (new fit is worse)`)
+      : null;
 
-    // Phase 6: recompute every tour/surface specialist segment from the fold's freshly-written
-    // validation-reference data, comparing each against this SAME newly-fit general/pooled mapping.
-    // Only run when the fit passes the quality gate — specialist models calibrated against a
-    // degenerate mapping would produce equally broken per-segment overrides.
-    if (fitsPassesQualityGate) {
-      await computeAndStoreSpecialistSegments(liveMapping);
+    if (requireApproval) {
+      // ── Task #198: require-approval path ──────────────────────────────────────
+      // Never auto-activate. If quality gates pass, compute specialist segments
+      // (without writing to specialist_models) and store the model as
+      // pendingActivation=true with the specialist data as JSONB. An admin must
+      // call POST /evaluation/walk-forward/activate/:modelId to approve the swap.
+      //
+      // If quality gates fail, store the model inactive and non-pending — no admin
+      // action is needed or useful because the model is worse than the current one.
+
+      const pendingSpecialists: SpecialistComputedData[] | null = fitsPassesQualityGate
+        ? await computeAndStoreSpecialistSegments(liveMapping, { skipWrite: true })
+        : null;
+
+      if (!fitsPassesQualityGate) {
+        logger.warn(
+          {
+            fitSampleSize: liveFit.fitSampleSize,
+            holdoutSampleSize: liveFit.holdoutSampleSize,
+            newIsotonicHoldoutLogLoss: newLL,
+            activeModelId: currentActiveModel?.id ?? null,
+            activeIsotonicHoldoutLogLoss: activeLL,
+            gate1_nonDegenerate,
+            gate2_aboveFloor,
+            gate3_notWorseThanCurrent,
+          },
+          `Calibration refit (require-approval): quality gates failed — ${rejectionReason}; model stored inactive, no admin action needed`,
+        );
+      }
+
+      const [pendingRow] = await db.insert(calibrationModelsTable).values({
+        method: liveFit.method,
+        mapping: liveMapping,
+        validationSampleSize: allValidationPoints.length,
+        validationDateRangeStart: minDate !== null ? new Date(minDate) : null,
+        validationDateRangeEnd: maxDate !== null ? new Date(maxDate) : null,
+        active: false,
+        pendingActivation: fitsPassesQualityGate,
+        pendingSpecialistData: pendingSpecialists,
+        isotonicHoldoutLogLoss: liveFit.isotonicHoldoutLogLoss,
+        plattHoldoutLogLoss: liveFit.plattHoldoutLogLoss,
+        holdoutSampleSize: liveFit.holdoutSampleSize,
+      }).returning({ id: calibrationModelsTable.id });
+
+      if (fitsPassesQualityGate && pendingRow) {
+        pendingModelId = pendingRow.id;
+        logger.info(
+          {
+            pendingModelId,
+            method: liveFit.method,
+            holdoutSampleSize: liveFit.holdoutSampleSize,
+            isotonicHoldoutLogLoss: newLL,
+            activeModelId: currentActiveModel?.id ?? null,
+            activeLL,
+            specialistSegments: pendingSpecialists?.length ?? 0,
+          },
+          "Task #198: training walk-forward complete — new model stored as PENDING. " +
+          "Admin must review and activate via POST /evaluation/walk-forward/activate/:modelId",
+        );
+      }
     } else {
-      logger.warn({ fitSampleSize: liveFit.fitSampleSize }, "Calibration refit: skipping specialist segment recompute because quality gate failed");
+      // ── Original auto-activation path (requireApproval=false) ─────────────────
+      // Kept for backward compatibility with the optimizer and any programmatic callers
+      // that explicitly opt out of the approval step.
+
+      if (fitsPassesQualityGate) {
+        await db.update(calibrationModelsTable).set({ active: false }).where(eq(calibrationModelsTable.active, true));
+      } else {
+        logger.warn(
+          {
+            fitSampleSize: liveFit.fitSampleSize,
+            holdoutSampleSize: liveFit.holdoutSampleSize,
+            newIsotonicHoldoutLogLoss: newLL,
+            activeModelId: currentActiveModel?.id ?? null,
+            activeIsotonicHoldoutLogLoss: activeLL,
+            pooledValidationPoints: allValidationPoints.length,
+            gate1_nonDegenerate,
+            gate2_aboveFloor,
+            gate3_notWorseThanCurrent,
+          },
+          `Calibration refit: new model stored inactive — ${rejectionReason}; previous active model kept`,
+        );
+      }
+
+      await db.insert(calibrationModelsTable).values({
+        method: liveFit.method,
+        mapping: liveMapping,
+        validationSampleSize: allValidationPoints.length,
+        validationDateRangeStart: minDate !== null ? new Date(minDate) : null,
+        validationDateRangeEnd: maxDate !== null ? new Date(maxDate) : null,
+        active: fitsPassesQualityGate,
+        pendingActivation: false,
+        pendingSpecialistData: null,
+        isotonicHoldoutLogLoss: liveFit.isotonicHoldoutLogLoss,
+        plattHoldoutLogLoss: liveFit.plattHoldoutLogLoss,
+        holdoutSampleSize: liveFit.holdoutSampleSize,
+      });
+
+      // Phase 6: recompute every tour/surface specialist segment from the fold's freshly-written
+      // validation-reference data, comparing each against this SAME newly-fit general/pooled mapping.
+      // Only run when the fit passes the quality gate — specialist models calibrated against a
+      // degenerate mapping would produce equally broken per-segment overrides.
+      if (fitsPassesQualityGate) {
+        await computeAndStoreSpecialistSegments(liveMapping);
+      } else {
+        logger.warn({ fitSampleSize: liveFit.fitSampleSize }, "Calibration refit: skipping specialist segment recompute because quality gate failed");
+      }
     }
   }
 
@@ -604,7 +702,7 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
     logger.warn({ fallbackRate: fallbackStats.fallbackRate, fallbackCount: fallbackStats.fallbackCount, totalAttempts: fallbackStats.totalAttempts }, fallbackWarning);
   }
 
-  return { foldsRun: foldIds.length, foldIds, skippedNoEligibleMatches: false, fallbackRate: fallbackStats.fallbackRate, warnings, evaluationOnly };
+  return { foldsRun: foldIds.length, foldIds, skippedNoEligibleMatches: false, fallbackRate: fallbackStats.fallbackRate, warnings, evaluationOnly, pendingModelId };
 
   // --- helpers (closures over allMatches context) ---
 

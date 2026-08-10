@@ -388,6 +388,9 @@ const STATEMENTS: string[] = [
   `ALTER TABLE calibration_models ADD COLUMN IF NOT EXISTS validation_date_range_end TIMESTAMPTZ`,
   `ALTER TABLE calibration_models ADD COLUMN IF NOT EXISTS isotonic_holdout_log_loss REAL`,
   `ALTER TABLE calibration_models ADD COLUMN IF NOT EXISTS platt_holdout_log_loss REAL`,
+  // Task #198: explicit admin approval gate before walk-forward calibration goes live.
+  `ALTER TABLE calibration_models ADD COLUMN IF NOT EXISTS pending_activation BOOLEAN NOT NULL DEFAULT false`,
+  `ALTER TABLE calibration_models ADD COLUMN IF NOT EXISTS pending_specialist_data JSONB`,
   `ALTER TABLE specialist_models ADD COLUMN IF NOT EXISTS accuracy REAL`,
   `ALTER TABLE specialist_models ADD COLUMN IF NOT EXISTS log_loss REAL`,
   `ALTER TABLE specialist_models ADD COLUMN IF NOT EXISTS brier REAL`,

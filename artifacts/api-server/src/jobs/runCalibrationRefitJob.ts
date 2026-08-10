@@ -182,7 +182,11 @@ async function runWithRetry(options: { bypassGradeCountGuard?: boolean } = {}): 
         }
       }
 
-      const summary = await runWalkForwardEvaluation();
+      // Task #198: calibration-refit walks forward with requireApproval=true so the result
+      // is stored as pending rather than auto-activating, same as the admin /run endpoint.
+      // The calibration cache is only invalidated below when the new model actually goes
+      // active (i.e. pendingModelId is absent), not when it is waiting for admin approval.
+      const summary = await runWalkForwardEvaluation({ requireApproval: true });
       return { attempts: attempt, summary };
     } catch (err) {
       lastError = err;
@@ -222,9 +226,13 @@ export async function runCalibrationRefitJob(options: CalibrationRefitJobOptions
       summary: outcome.summary,
       errorMessage: null,
     });
-    // Task #154: evict the calibration cache so the next live prediction fetches the freshly-
-    // activated model immediately, without waiting up to 5 minutes for the TTL to expire.
-    invalidateCalibrationCache();
+    // Task #154: evict the calibration cache only when the new model is actually active.
+    // Task #198: when requireApproval=true the new model is stored as pending — no active
+    // model changed, so there is nothing stale to evict. Cache invalidation happens in the
+    // activation endpoint once the admin approves via POST /evaluation/walk-forward/activate/:id.
+    if (!outcome.summary.pendingModelId) {
+      invalidateCalibrationCache();
+    }
     logger.info({ ...outcome.summary, attempts: outcome.attempts }, "Calibration refit completed");
     return { ok: true };
   }

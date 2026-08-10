@@ -31,9 +31,9 @@ import {
   type CalibrationPoint,
 } from "./calibration";
 import type { CalibrationKnot } from "./types";
-
-/** Minimum holdout sample required to activate the refitted model (matches walk-forward gate). */
-const MIN_HOLDOUT_TO_ACTIVATE = 200;
+// Use the same threshold as the activation endpoint so every pending model produced here
+// can actually be approved via POST /evaluation/walk-forward/activate/:id.
+import { MIN_HOLDOUT_SAMPLE_SIZE_TO_ACTIVATE as MIN_HOLDOUT_TO_ACTIVATE } from "./walkForward";
 
 export interface RefitReferenceCase {
   label: string;
@@ -68,8 +68,14 @@ export interface RefitCalibrationReport {
   isotonicHoldoutLogLoss: number | null;
   plattHoldoutLogLoss: number | null;
 
-  /** Whether the new model met the quality gates and was activated. */
-  activated: boolean;
+  /**
+   * Task #198: this path now stores the new model as pending (pendingActivation=true) rather
+   * than auto-activating. `activated` is always false; the admin must call
+   * POST /evaluation/walk-forward/activate/:pendingModelId to activate it.
+   */
+  activated: false;
+  /** ID of the pending calibration_models row when quality gates passed; undefined otherwise. */
+  pendingModelId?: number;
   activationBlockedReason?: string;
 
   /** Fitted knots (for diagnostic inspection). */
@@ -299,32 +305,33 @@ export async function refitCalibrationFromExistingEvaluationData(minDate?: strin
     ? `new model LL (${newLL?.toFixed(4)}) > active model LL (${activeLL?.toFixed(4)})`
     : undefined;
 
-  let activated = false;
+  // Task #198: store the new model as pending (never auto-activate).
+  // Admin must approve via POST /evaluation/walk-forward/activate/:pendingModelId.
+  // This path is calibration-only (no specialist data), so pendingSpecialistData stays null.
+  let pendingModelId: number | undefined;
 
   if (!activationBlockedReason) {
-    // Deactivate current model and insert new one
-    await db
-      .update(calibrationModelsTable)
-      .set({ active: false })
-      .where(eq(calibrationModelsTable.active, true));
-
-    await db.insert(calibrationModelsTable).values({
-      method: fitResult.method,
-      mapping: newMapping as any,
-      validationSampleSize: fitResult.fitSampleSize,
-      active: true,
-      isotonicHoldoutLogLoss: fitResult.isotonicHoldoutLogLoss ?? undefined,
-      plattHoldoutLogLoss: fitResult.plattHoldoutLogLoss ?? undefined,
-      holdoutSampleSize: fitResult.holdoutSampleSize,
-    });
-
-    activated = true;
+    // Insert as pending — do NOT deactivate the current active model yet.
+    const [inserted] = await db
+      .insert(calibrationModelsTable)
+      .values({
+        method: fitResult.method,
+        mapping: newMapping as any,
+        validationSampleSize: fitResult.fitSampleSize,
+        active: false,
+        pendingActivation: true,
+        isotonicHoldoutLogLoss: fitResult.isotonicHoldoutLogLoss ?? undefined,
+        plattHoldoutLogLoss: fitResult.plattHoldoutLogLoss ?? undefined,
+        holdoutSampleSize: fitResult.holdoutSampleSize,
+      })
+      .returning({ id: calibrationModelsTable.id });
+    pendingModelId = inserted?.id;
     logger.info(
-      { method: fitResult.method, fitSampleSize: fitResult.fitSampleSize, holdoutSampleSize: fitResult.holdoutSampleSize },
-      "calibration-refit-from-existing: new model activated",
+      { method: fitResult.method, fitSampleSize: fitResult.fitSampleSize, holdoutSampleSize: fitResult.holdoutSampleSize, pendingModelId },
+      "calibration-refit-from-existing: new model stored as pending — activate via POST /evaluation/walk-forward/activate/:pendingModelId",
     );
   } else {
-    logger.warn({ activationBlockedReason }, "calibration-refit-from-existing: quality gate failed, model not activated");
+    logger.warn({ activationBlockedReason }, "calibration-refit-from-existing: quality gate failed, model not stored");
   }
 
   const durationMs = Date.now() - startMs;
@@ -337,7 +344,8 @@ export async function refitCalibrationFromExistingEvaluationData(minDate?: strin
     method: fitResult.method,
     isotonicHoldoutLogLoss: fitResult.isotonicHoldoutLogLoss,
     plattHoldoutLogLoss: fitResult.plattHoldoutLogLoss,
-    activated,
+    activated: false,
+    pendingModelId,
     activationBlockedReason,
     knots: newMapping,
     referenceCases: { before: referenceBefore, after: referenceAfter },

@@ -460,24 +460,67 @@ export async function runOptimizerRun(
   // - Refit specialist_models
   // - Run runPatternAnalysis() automatically at the end
   options.onPhase?.("walk-forward");
-  const wfSummary = await runWalkForwardEvaluation({ foldCount: options.foldCount, warmupFraction: options.warmupFraction, evaluationOnly: false, optimizerRunId });
+  // Task #198: requireApproval=true stores the new model as pending rather than auto-activating.
+  // The optimizer snapshot below reads from the pending row (by pendingModelId) when present,
+  // so the candidate config always reflects the newly-fitted model rather than the prior active one.
+  const wfSummary = await runWalkForwardEvaluation({ foldCount: options.foldCount, warmupFraction: options.warmupFraction, evaluationOnly: false, optimizerRunId, requireApproval: true });
 
   // Snapshot the newly-fitted calibration and specialists (proposed config).
-  const [activeCalibrationAfter] = await db.select().from(calibrationModelsTable).where(eq(calibrationModelsTable.active, true)).limit(1);
+  // When requireApproval=true, the new calibration is pending (active=false) and its specialist
+  // data is stored as JSONB on the pending row rather than written to specialist_models.
+  // Use pendingModelId to read the pending row directly so the snapshot is accurate.
+  let pendingCalibrationAfter: (typeof calibrationModelsTable.$inferSelect) | undefined;
+  if (wfSummary.pendingModelId) {
+    const [row] = await db
+      .select()
+      .from(calibrationModelsTable)
+      .where(eq(calibrationModelsTable.id, wfSummary.pendingModelId))
+      .limit(1);
+    pendingCalibrationAfter = row;
+  }
+
+  // When a pending model exists, specialists are in its JSONB blob (not yet in specialist_models).
+  // Fall back to the live specialist_models table only when there is no pending model.
+  type SpecialistSnapshot = { segmentKey: string; weight: number | null; meetsThreshold: boolean | null; validationSampleSize: number | null; logLoss: number | null; accuracy: number | null };
+  let specialistsForSnapshot: SpecialistSnapshot[];
+  if (pendingCalibrationAfter?.pendingSpecialistData) {
+    const blob = pendingCalibrationAfter.pendingSpecialistData as Record<string, unknown>[];
+    specialistsForSnapshot = blob.map((s) => ({
+      segmentKey: String(s["segmentKey"] ?? ""),
+      weight: typeof s["weight"] === "number" ? s["weight"] : null,
+      meetsThreshold: typeof s["meetsThreshold"] === "boolean" ? s["meetsThreshold"] : null,
+      validationSampleSize: typeof s["validationSampleSize"] === "number" ? s["validationSampleSize"] : null,
+      logLoss: typeof s["logLoss"] === "number" ? s["logLoss"] : null,
+      accuracy: typeof s["accuracy"] === "number" ? s["accuracy"] : null,
+    }));
+  } else {
+    const rows = await db.select().from(specialistModelsTable);
+    specialistsForSnapshot = rows.map((s) => ({
+      segmentKey: s.segmentKey,
+      weight: s.weight,
+      meetsThreshold: s.meetsThreshold,
+      validationSampleSize: s.validationSampleSize,
+      logLoss: s.logLoss,
+      accuracy: s.accuracy,
+    }));
+  }
+
+  // For weight-diff, compare against the live specialist_models (unchanged until approval).
   const activeSpecialistsAfter = await db.select().from(specialistModelsTable);
 
+  const snapshotCalibration = pendingCalibrationAfter ?? undefined;
   const proposedConfig = {
-    calibration: activeCalibrationAfter
+    calibration: snapshotCalibration
       ? {
-          id: activeCalibrationAfter.id,
-          method: activeCalibrationAfter.method,
-          validationSampleSize: activeCalibrationAfter.validationSampleSize,
-          knots: activeCalibrationAfter.mapping,
-          isotonicHoldoutLogLoss: activeCalibrationAfter.isotonicHoldoutLogLoss,
-          plattHoldoutLogLoss: activeCalibrationAfter.plattHoldoutLogLoss,
+          id: snapshotCalibration.id,
+          method: snapshotCalibration.method,
+          validationSampleSize: snapshotCalibration.validationSampleSize,
+          knots: snapshotCalibration.mapping,
+          isotonicHoldoutLogLoss: snapshotCalibration.isotonicHoldoutLogLoss,
+          plattHoldoutLogLoss: snapshotCalibration.plattHoldoutLogLoss,
         }
       : null,
-    specialistSegments: activeSpecialistsAfter.map((s) => ({
+    specialistSegments: specialistsForSnapshot.map((s) => ({
       segmentKey: s.segmentKey,
       weight: s.weight,
       meetsThreshold: s.meetsThreshold,
@@ -487,11 +530,19 @@ export async function runOptimizerRun(
     })),
   };
 
-  // Compute weight diff (proposed vs base specialist weights)
+  // Compute weight diff (proposed vs base specialist weights).
+  // Use specialistsForSnapshot (pending JSONB data or live table fallback) as the "after"
+  // source so the diff reflects the newly-fitted weights, not the unchanged live table.
   const weightDiff: Record<string, unknown> = {};
-  for (const after of activeSpecialistsAfter) {
+  for (const after of specialistsForSnapshot) {
     const before = activeSpecialistsBefore.find((b) => b.segmentKey === after.segmentKey);
     weightDiff[after.segmentKey] = { from: before?.weight ?? null, to: after.weight };
+  }
+  // Also record segments that existed before but are absent from the proposed snapshot.
+  for (const before of activeSpecialistsBefore) {
+    if (!specialistsForSnapshot.find((s) => s.segmentKey === before.segmentKey)) {
+      weightDiff[before.segmentKey] = { from: before.weight, to: null };
+    }
   }
 
   // Compute validation + holdout metrics from the freshly-written fold data
@@ -612,8 +663,8 @@ export async function runOptimizerRun(
     },
     {
       check: "calibration_fitted",
-      passed: activeCalibrationAfter !== null,
-      detail: activeCalibrationAfter ? `Method: ${activeCalibrationAfter.method}` : "No calibration row written",
+      passed: snapshotCalibration !== undefined,
+      detail: snapshotCalibration ? `Method: ${snapshotCalibration.method}` : "No calibration row written",
     },
     {
       check: "no_skipped_matches",
@@ -720,10 +771,10 @@ export async function runOptimizerRun(
           },
         } as unknown as Record<string, unknown>,
         holdoutMetrics: {
-          calibrationMethod: activeCalibrationAfter?.method ?? null,
-          isotonicHoldoutLogLoss: activeCalibrationAfter?.isotonicHoldoutLogLoss ?? null,
-          plattHoldoutLogLoss: activeCalibrationAfter?.plattHoldoutLogLoss ?? null,
-          holdoutSampleSize: activeCalibrationAfter?.holdoutSampleSize ?? null,
+          calibrationMethod: snapshotCalibration?.method ?? null,
+          isotonicHoldoutLogLoss: snapshotCalibration?.isotonicHoldoutLogLoss ?? null,
+          plattHoldoutLogLoss: snapshotCalibration?.plattHoldoutLogLoss ?? null,
+          holdoutSampleSize: snapshotCalibration?.holdoutSampleSize ?? null,
           objectiveProfile: draft.strategySpec.objectiveProfile,
         } as unknown as Record<string, unknown>,
         acceptanceChecksPassed: acceptanceChecks.every((c) => c.passed),

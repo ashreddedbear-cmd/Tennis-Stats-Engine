@@ -33,6 +33,12 @@ export function startWalkForwardJob(opts: {
   startDate?: string;
   /** Task #127: optional inclusive end date (YYYY-MM-DD) for the date-range backfill mode. */
   endDate?: string;
+  /**
+   * Task #198: when true, a training-mode walk-forward stores the result as pending rather than
+   * auto-activating. Admin must approve via POST /evaluation/walk-forward/activate/:modelId.
+   * The public /run and /full-refit endpoints default this to true for training runs.
+   */
+  requireApproval?: boolean;
 }): { started: boolean; reason?: string } {
   if (currentJob.state === "running") {
     return { started: false, reason: "A walk-forward run is already in progress." };
@@ -53,10 +59,10 @@ export function startWalkForwardJob(opts: {
 async function runJob(
   startedAt: string,
   evaluationOnly: boolean,
-  opts: { foldCount?: number; evaluationOnly?: boolean; matchIds?: number[]; startDate?: string; endDate?: string },
+  opts: { foldCount?: number; evaluationOnly?: boolean; matchIds?: number[]; startDate?: string; endDate?: string; requireApproval?: boolean },
 ): Promise<void> {
   try {
-    const result = await runWalkForwardEvaluation(opts);
+    const result = await runWalkForwardEvaluation({ ...opts, requireApproval: opts.requireApproval });
 
     currentJob = {
       state: "done",

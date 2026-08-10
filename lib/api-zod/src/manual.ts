@@ -140,11 +140,38 @@ export const StartWalkForwardResponse = zod.object({
 });
 
 /**
+ * Task #198: summary of a pending calibration model awaiting admin activation.
+ * Returned by GET /evaluation/walk-forward/status whenever pendingActivation=true exists in DB.
+ */
+export const PendingCalibrationModelSummary = zod.object({
+  modelId: zod.number(),
+  fittedAt: zod.string(),
+  method: zod.string(),
+  isotonicHoldoutLogLoss: zod.number().nullable(),
+  holdoutSampleSize: zod.number(),
+  validationSampleSize: zod.number(),
+  specialistSegments: zod.array(
+    zod.object({
+      segmentKey: zod.string(),
+      meetsThreshold: zod.boolean(),
+      logLoss: zod.number().nullable(),
+      generalLogLoss: zod.number().nullable(),
+      weight: zod.number(),
+    }),
+  ),
+});
+export type PendingCalibrationModelSummary = zod.infer<typeof PendingCalibrationModelSummary>;
+
+/**
  * Response from GET /evaluation/walk-forward/status.
  * Mirrors the ablation job pattern (startAblationJob / getAblationJobStatus).
  */
 export const WalkForwardJobStatusResponse = zod.discriminatedUnion("state", [
-  zod.object({ state: zod.literal("idle") }),
+  zod.object({
+    state: zod.literal("idle"),
+    /** Task #198: present when a model is awaiting admin activation (persists across server restarts). */
+    pendingModel: PendingCalibrationModelSummary.optional(),
+  }),
   zod.object({
     state: zod.literal("running"),
     startedAt: zod.string(),
@@ -163,7 +190,11 @@ export const WalkForwardJobStatusResponse = zod.discriminatedUnion("state", [
       fallbackRate: zod.number(),
       warnings: zod.array(zod.string()),
       evaluationOnly: zod.boolean(),
+      /** Task #198: id of the pending calibration_models row when requireApproval=true and quality gates passed. */
+      pendingModelId: zod.number().optional(),
     }),
+    /** Task #198: present when a training run stored a pending model. Populated from DB so it survives server restarts. */
+    pendingModel: PendingCalibrationModelSummary.optional(),
   }),
   zod.object({
     state: zod.literal("error"),
@@ -171,8 +202,21 @@ export const WalkForwardJobStatusResponse = zod.discriminatedUnion("state", [
     finishedAt: zod.string(),
     evaluationOnly: zod.boolean(),
     error: zod.string(),
+    /** Task #198: present when a pending model exists despite the error (e.g. from a prior run). */
+    pendingModel: PendingCalibrationModelSummary.optional(),
   }),
 ]);
+
+/**
+ * Task #198: response from POST /evaluation/walk-forward/activate/:modelId.
+ */
+export const ActivateWalkForwardResponse = zod.object({
+  activated: zod.boolean(),
+  modelId: zod.number(),
+  activatedAt: zod.string().optional(),
+  /** Human-readable reason when activated=false (quality gate rejection). */
+  reason: zod.string().optional(),
+});
 
 /** Response from POST /evaluation/optimizer/run (fires in background). */
 export const StartOptimizerResponse = zod.object({

@@ -116,6 +116,15 @@ export const MIN_SPECIALIST_ACCURACY = 55;
 export interface SpecialistSegmentSummary extends SpecialistModelRow {}
 
 /**
+ * Task #198: Pre-insert shape for specialist segment data — the fields `computeOneSegment`
+ * produces before the DB assigns `id` and `computedAt`. Stored as JSONB in
+ * `calibration_models.pending_specialist_data` when a training walk-forward runs with
+ * `requireApproval=true`, then written to `specialist_models` atomically when an admin
+ * approves via POST /evaluation/walk-forward/activate/:modelId.
+ */
+export type SpecialistComputedData = Omit<SpecialistModelRow, "id" | "computedAt">;
+
+/**
  * Recomputes every candidate tour/surface specialist segment from the walk-forward runner's own
  * validation-segment output and persists the result. Must be called only after
  * `runWalkForwardEvaluation` has finished writing its historical_test rows for this run -- this
@@ -134,30 +143,66 @@ export interface SpecialistSegmentSummary extends SpecialistModelRow {}
  *    (when the segment has enough points to hold one back) -- the fair, apples-to-apples,
  *    non-overfit baseline. The specialist's blend weight is derived only from that measured
  *    improvement (or lack of it), never hand-picked.
+ *
+ * @param opts.skipWrite - When true, compute but do NOT write to `specialist_models`. Returns
+ *   the same pre-insert data that would have been written. Used by the require-approval
+ *   walk-forward path (Task #198) so results can be stored as JSONB in
+ *   `calibration_models.pending_specialist_data` and written only when an admin activates.
  */
-export async function computeAndStoreSpecialistSegments(generalMapping: CalibrationKnot[]): Promise<SpecialistSegmentSummary[]> {
+export async function computeAndStoreSpecialistSegments(
+  generalMapping: CalibrationKnot[],
+  opts?: { skipWrite?: boolean },
+): Promise<SpecialistComputedData[]> {
   const segments = listCandidateSegments();
-  const results: SpecialistSegmentSummary[] = [];
+  const results: SpecialistComputedData[] = [];
 
   for (const segment of segments) {
     const summary = await computeOneSegment(segment, generalMapping);
-    const [upserted] = await db
+    results.push(summary);
+    if (!opts?.skipWrite) {
+      await db
+        .insert(specialistModelsTable)
+        .values(summary)
+        .onConflictDoUpdate({
+          target: specialistModelsTable.segmentKey,
+          set: { ...summary, computedAt: new Date() },
+        });
+    }
+  }
+
+  logger.info(
+    {
+      segments: results.map((r) => ({ key: r.segmentKey, meetsThreshold: r.meetsThreshold, weight: r.weight, n: r.validationSampleSize })),
+      skipWrite: opts?.skipWrite ?? false,
+    },
+    opts?.skipWrite
+      ? "Computed (not yet stored) Phase 6 specialist segment weights — pending admin activation"
+      : "Recomputed Phase 6 specialist segment weights",
+  );
+
+  return results;
+}
+
+/**
+ * Task #198: Write pre-computed specialist segment data to `specialist_models`.
+ * Called by the activation endpoint (POST /evaluation/walk-forward/activate/:modelId) to
+ * apply results that were stored as JSONB in `calibration_models.pending_specialist_data`
+ * when the admin approves the pending model.
+ */
+export async function writeSpecialistSegments(data: SpecialistComputedData[]): Promise<void> {
+  for (const summary of data) {
+    await db
       .insert(specialistModelsTable)
       .values(summary)
       .onConflictDoUpdate({
         target: specialistModelsTable.segmentKey,
         set: { ...summary, computedAt: new Date() },
-      })
-      .returning();
-    results.push(upserted);
+      });
   }
-
   logger.info(
-    { segments: results.map((r) => ({ key: r.segmentKey, meetsThreshold: r.meetsThreshold, weight: r.weight, n: r.validationSampleSize })) },
-    "Recomputed Phase 6 specialist segment weights",
+    { segments: data.map((r) => ({ key: r.segmentKey, meetsThreshold: r.meetsThreshold, weight: r.weight, n: r.validationSampleSize })) },
+    "Task #198: wrote pre-computed Phase 6 specialist segments to specialist_models (admin activation)",
   );
-
-  return results;
 }
 
 async function computeOneSegment(segment: SegmentDefinition, generalMapping: CalibrationKnot[]) {

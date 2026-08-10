@@ -1,7 +1,8 @@
 import { Router, type IRouter } from "express";
 import { resolve as resolvePath, join as joinPath } from "path";
 import { and, desc, eq, inArray, isNull, isNotNull, sql } from "drizzle-orm";
-import { db, evaluationPredictionsTable, evaluationRunsTable, calibrationModelsTable, jobRunsTable, historicalMatchesTable } from "@workspace/db";
+import { db, evaluationPredictionsTable, evaluationRunsTable, calibrationModelsTable, specialistModelsTable, jobRunsTable, historicalMatchesTable } from "@workspace/db";
+import { invalidateCalibrationCache } from "../services/evaluation/calibrationCache";
 import { logger } from "../lib/logger";
 import {
   ListEvaluationPredictionsQueryParams,
@@ -30,7 +31,8 @@ import {
 } from "@workspace/api-zod";
 import { PAPER_TRADING_JOB_NAME } from "../jobs/paperTradingJobName";
 import { CALIBRATION_REFIT_JOB_NAME } from "../jobs/calibrationRefitJobName";
-import { runWalkForwardEvaluation } from "../services/evaluation/walkForward";
+import { runWalkForwardEvaluation, MIN_HOLDOUT_SAMPLE_SIZE_TO_ACTIVATE } from "../services/evaluation/walkForward";
+import { type SpecialistComputedData } from "../services/evaluation/specialistWeights";
 import { runPaperTradingCycle } from "../services/evaluation/paperTrading";
 import { getPredictionSettings } from "../services/evaluation/settle";
 import {
@@ -79,6 +81,8 @@ import {
   OptimizerJobStatusResponse,
   GetOptimizerAccuracySummaryResponse,
   GetEvaluationPredictionStatsQueryParams,
+  ActivateWalkForwardResponse,
+  type PendingCalibrationModelSummary,
 } from "@workspace/api-zod";
 import { runRankingVerification } from "../services/historicalData/rankingVerification";
 import { startWalkForwardJob, getWalkForwardJobStatus } from "../services/evaluation/walkForwardJob";
@@ -186,6 +190,10 @@ router.post("/evaluation/walk-forward/run", async (req, res): Promise<void> => {
   const result = await startWalkForwardJob({
     ...parsed.data,
     ...(hasStart ? { startDate: dateRangeRaw.startDate as string, endDate: dateRangeRaw.endDate as string } : {}),
+    // Task #198: training-mode runs require admin approval before the model goes live.
+    // evaluationOnly=true runs never write a model, so requireApproval is a no-op for them.
+    // Read from rawBody because RunWalkForwardBody Zod schema does not include evaluationOnly.
+    requireApproval: rawBody["evaluationOnly"] === false,
   });
   res.json(StartWalkForwardResponse.parse(result));
 });
@@ -264,6 +272,40 @@ router.post("/evaluation/calibration-refit/run", async (_req, res): Promise<void
     });
 });
 
+/**
+ * Task #198: query DB for any pending model and return a summary for the status response.
+ * Called for all non-running states — survives server restarts because it reads from DB.
+ */
+async function queryPendingModelSummary(): Promise<PendingCalibrationModelSummary | undefined> {
+  const [pendingRow] = await db
+    .select()
+    .from(calibrationModelsTable)
+    .where(eq(calibrationModelsTable.pendingActivation, true))
+    .limit(1);
+  if (!pendingRow) return undefined;
+
+  const rawSpecialists = (pendingRow.pendingSpecialistData as Array<{
+    segmentKey: string; meetsThreshold: boolean; logLoss: number | null;
+    generalLogLoss: number | null; weight: number;
+  }> | null) ?? [];
+
+  return {
+    modelId: pendingRow.id,
+    fittedAt: pendingRow.fittedAt.toISOString(),
+    method: pendingRow.method,
+    isotonicHoldoutLogLoss: pendingRow.isotonicHoldoutLogLoss ?? null,
+    holdoutSampleSize: pendingRow.holdoutSampleSize,
+    validationSampleSize: pendingRow.validationSampleSize,
+    specialistSegments: rawSpecialists.map((s) => ({
+      segmentKey: s.segmentKey,
+      meetsThreshold: s.meetsThreshold,
+      logLoss: s.logLoss ?? null,
+      generalLogLoss: s.generalLogLoss ?? null,
+      weight: s.weight,
+    })),
+  };
+}
+
 router.get("/evaluation/walk-forward/status", async (_req, res): Promise<void> => {
   try {
     const status = getWalkForwardJobStatus();
@@ -283,10 +325,127 @@ router.get("/evaluation/walk-forward/status", async (_req, res): Promise<void> =
       res.json(WalkForwardJobStatusResponse.parse({ ...status, matchesScored: count ?? 0 }));
       return;
     }
-    res.json(WalkForwardJobStatusResponse.parse(status));
+    // Task #198: surface any pending model so admin knows approval is outstanding.
+    // Queried from DB so the status survives server restarts.
+    const pendingModel = await queryPendingModelSummary();
+    res.json(WalkForwardJobStatusResponse.parse({ ...status, pendingModel }));
   } catch (err) {
     logger.warn({ err }, "Walk-forward status query failed, returning current in-memory state");
     res.json(WalkForwardJobStatusResponse.parse(getWalkForwardJobStatus()));
+  }
+});
+
+/**
+ * Task #198: Admin-only endpoint to explicitly activate a pending calibration model.
+ *
+ * A training walk-forward with requireApproval=true stores the new calibration model with
+ * pendingActivation=true instead of auto-activating it. This endpoint allows an admin to
+ * review the quality-gate summary shown in GET /evaluation/walk-forward/status and then
+ * approve the swap. On success:
+ *  1. The currently-active model is deactivated.
+ *  2. The pending model is activated (active=true, pendingActivation=false).
+ *  3. The pending specialist segment data (stored as JSONB on the pending model row) is
+ *     written to specialist_models, atomically replacing the live specialist weights.
+ *
+ * If the three quality gates fail at activation time (e.g. the active model improved since
+ * the pending one was fit), the endpoint returns HTTP 422 with activated=false and the
+ * rejection reason. The pending model is NOT cleared — the admin can investigate and
+ * optionally trigger a fresh walk-forward instead.
+ */
+router.post("/evaluation/walk-forward/activate/:modelId", requireAdmin, async (req, res): Promise<void> => {
+  const modelId = parseInt((req.params["modelId"] as string) ?? "", 10);
+  if (isNaN(modelId)) {
+    res.status(400).json({ error: "modelId must be an integer" });
+    return;
+  }
+
+  // Find and validate the pending model
+  const [pendingModel] = await db
+    .select()
+    .from(calibrationModelsTable)
+    .where(and(eq(calibrationModelsTable.id, modelId), eq(calibrationModelsTable.pendingActivation, true)))
+    .limit(1);
+
+  if (!pendingModel) {
+    res.status(404).json({
+      error: `No pending calibration model found with id=${modelId}. Either it does not exist or it has already been activated.`,
+    });
+    return;
+  }
+
+  // Re-check quality gates using stored values (same three gates as walk-forward.ts)
+  const [currentActiveModel] = await db
+    .select({ id: calibrationModelsTable.id, isotonicHoldoutLogLoss: calibrationModelsTable.isotonicHoldoutLogLoss })
+    .from(calibrationModelsTable)
+    .where(eq(calibrationModelsTable.active, true))
+    .limit(1);
+
+  const gate1 = pendingModel.holdoutSampleSize > 0;
+  const gate2 = pendingModel.holdoutSampleSize >= MIN_HOLDOUT_SAMPLE_SIZE_TO_ACTIVATE;
+  const activeLL = currentActiveModel?.isotonicHoldoutLogLoss ?? null;
+  const newLL = pendingModel.isotonicHoldoutLogLoss ?? null;
+  const gate3 =
+    currentActiveModel === undefined || activeLL === null || (newLL !== null && newLL <= activeLL);
+
+  if (!gate1 || !gate2 || !gate3) {
+    const reason = !gate1
+      ? `holdoutSampleSize === 0 (degenerate model — too few validation points)`
+      : !gate2
+        ? `holdoutSampleSize ${pendingModel.holdoutSampleSize} < floor ${MIN_HOLDOUT_SAMPLE_SIZE_TO_ACTIVATE} (eligible set too sparse)`
+        : `pending model holdout log-loss ${newLL?.toFixed(4) ?? "null"} > current active ${activeLL?.toFixed(4) ?? "null"} (pending model is now worse)`;
+    logger.warn({ modelId, gate1, gate2, gate3, reason }, "Task #198: admin walk-forward activation rejected — quality gates failed");
+    res.status(422).json(ActivateWalkForwardResponse.parse({ activated: false, modelId, reason }));
+    return;
+  }
+
+  const specialistData = pendingModel.pendingSpecialistData as SpecialistComputedData[] | null;
+
+  try {
+    // All three writes run inside a single transaction so a mid-flight failure can never
+    // leave the system without an active calibration model or with partially-written
+    // specialist weights.  `invalidateCalibrationCache` is called only AFTER the commit
+    // so the cache is never evicted for a transaction that rolled back.
+    await db.transaction(async (tx) => {
+      // 1. Deactivate the currently-active model (if any).
+      await tx.update(calibrationModelsTable).set({ active: false }).where(eq(calibrationModelsTable.active, true));
+
+      // 2. Activate the pending model and clear its pending flag.
+      await tx
+        .update(calibrationModelsTable)
+        .set({ active: true, pendingActivation: false })
+        .where(eq(calibrationModelsTable.id, modelId));
+
+      // 3. Write specialist segments from the JSONB blob inside the same transaction so
+      //    calibration_models and specialist_models are always consistent with each other.
+      if (specialistData && specialistData.length > 0) {
+        for (const summary of specialistData) {
+          await tx
+            .insert(specialistModelsTable)
+            .values(summary)
+            .onConflictDoUpdate({
+              target: specialistModelsTable.segmentKey,
+              set: { ...summary, computedAt: new Date() },
+            });
+        }
+      } else {
+        logger.warn({ modelId }, "Task #198: pending model has no stored specialist data — specialist_models not updated within transaction");
+      }
+    });
+
+    // Evict the in-memory calibration cache so the next live prediction immediately fetches
+    // the newly-active model.  Called after the transaction commits — never on a rollback.
+    invalidateCalibrationCache();
+
+    const activatedAt = new Date().toISOString();
+    logger.info(
+      { modelId, activatedAt, specialistSegments: specialistData?.length ?? 0, newLL, previousActiveModelId: currentActiveModel?.id ?? null },
+      "Task #198: admin activated walk-forward calibration model and specialist segments",
+    );
+    res.json(ActivateWalkForwardResponse.parse({ activated: true, modelId, activatedAt }));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error({ err, modelId }, "Task #198: admin walk-forward activation failed");
+    res.status(500).json({ error: message });
   }
 });
 
@@ -753,7 +912,8 @@ router.post("/evaluation/calibration-refit", requireAdmin, async (_req, res): Pr
  * would. Use POST /evaluation/calibration-refit for the cooldown-guarded admin calibration path.
  */
 router.post("/evaluation/walk-forward/full-refit", requireAdmin, async (_req, res): Promise<void> => {
-  const result = startWalkForwardJob({ evaluationOnly: false });
+  // Task #198: training runs must always go through admin approval — same behaviour as /run.
+  const result = startWalkForwardJob({ evaluationOnly: false, requireApproval: true });
   res.json(result);
 });
 

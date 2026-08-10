@@ -258,6 +258,19 @@ export const calibrationModelsTable = pgTable("calibration_models", {
   plattHoldoutLogLoss: real("platt_holdout_log_loss"),
   holdoutSampleSize: integer("holdout_sample_size").notNull().default(0),
   fittedAt: timestamp("fitted_at", { withTimezone: true }).notNull().defaultNow(),
+  /**
+   * Task #198: when true, the model was stored by a training-mode walk-forward but has NOT
+   * yet been activated. An admin must explicitly call POST /evaluation/walk-forward/activate/:id
+   * to review the quality-gate summary and approve the swap. The auto-activation path (used by
+   * non-admin-triggered runs) sets this to false and activates immediately if quality gates pass.
+   */
+  pendingActivation: boolean("pending_activation").notNull().default(false),
+  /**
+   * Task #198: when pendingActivation=true, stores the computed specialist segment summaries
+   * (pre-insert data for specialist_models) so they can be written atomically at activation time
+   * without re-running the expensive computation. Null when pendingActivation=false.
+   */
+  pendingSpecialistData: jsonb("pending_specialist_data"),
 });
 
 export const insertCalibrationModelSchema = createInsertSchema(calibrationModelsTable).omit({ id: true, fittedAt: true });
