@@ -45,6 +45,5 @@ harmful. See Task #163 for the tracked fix; the full breakdown and reproduction 
 
 ### Runtime rerun status (this environment)
 
-- Attempted fresh `evaluationOnly:false` walk-forward and `test:evaluation` reruns with
-	`DATABASE_URL=postgresql://postgres:password@helium/heliumdb?sslmode=disable`.
-- Both still fail in Codespaces with `getaddrinfo ENOTFOUND helium` (host only resolvable in Replit runtime), so a new same-day corpus-level before/after measurement could not be produced here.
+- Attempted fresh `evaluationOnly:false` walk-forward and `test:evaluation` reruns from outside the Replit runtime.
+- Both fail because the `helium` DB host is only resolvable inside Replit, so a same-day corpus-level before/after measurement could not be produced here.

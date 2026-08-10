@@ -67,11 +67,9 @@ Conclusion: Methodology is operationally sound. Real-data validation (in Replit 
 
 ## Replit execution command
 
-Run in Replit shell where `helium` resolves:
+Run in Replit shell (DATABASE_URL is set via Replit secret):
 
 ```bash
-cd /workspaces/Tennis-Stats-Engine
-DATABASE_URL='postgresql://postgres:password@helium/heliumdb?sslmode=disable' \
 pnpm --filter @workspace/api-server exec tsx src/scripts/validateMatchupDifficultySignal.ts
 ```
 
