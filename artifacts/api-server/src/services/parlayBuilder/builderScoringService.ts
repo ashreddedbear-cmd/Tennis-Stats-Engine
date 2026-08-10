@@ -2265,8 +2265,9 @@ export async function __TEST_writeBuilderDecisionRow(
     `INSERT INTO builder_decision_log
        (historical_match_id, player_one_id, player_two_id, match_scheduled_at,
         builder_picked_player_id, builder_calibrated_probability,
-        builder_decision, caller_selected_player_id, caller_agrees_with_engine)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        builder_decision, caller_selected_player_id, caller_agrees_with_engine,
+        source)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'live')`,
     [
       historicalMatchId,
       opts.selectedPlayerId ?? "",

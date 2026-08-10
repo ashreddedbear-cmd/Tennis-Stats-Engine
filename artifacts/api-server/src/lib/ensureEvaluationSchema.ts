@@ -612,6 +612,13 @@ const STATEMENTS: string[] = [
     caller_agrees_with_engine      BOOLEAN NOT NULL,
     actual_winner_id               TEXT,
     included_in_accuracy           BOOLEAN,
+    -- 'live'            = written by a real /validate request (full accurate engine outputs)
+    -- 'backfill'        = written by the /backfill loop after Task #216 (accurate engine outputs)
+    -- 'backfill_approx' = retroactively seeded from pre-existing parlay_leg_outcomes rows;
+    --                     builder_picked_player_id and builder_calibrated_probability are
+    --                     approximated (model pick used as proxy). #34/#63 must filter or
+    --                     weight these rows separately from live/backfill rows.
+    source                         TEXT NOT NULL DEFAULT 'live',
     created_at                     TIMESTAMPTZ NOT NULL DEFAULT now()
   )
   `,
@@ -619,6 +626,7 @@ const STATEMENTS: string[] = [
   `ALTER TABLE builder_decision_log ADD COLUMN IF NOT EXISTS player_one_id TEXT NOT NULL DEFAULT ''`,
   `ALTER TABLE builder_decision_log ADD COLUMN IF NOT EXISTS player_two_id TEXT NOT NULL DEFAULT ''`,
   `ALTER TABLE builder_decision_log ADD COLUMN IF NOT EXISTS match_scheduled_at TIMESTAMPTZ`,
+  `ALTER TABLE builder_decision_log ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'live'`,
   `CREATE INDEX IF NOT EXISTS builder_decision_log_created_at_idx ON builder_decision_log (created_at)`,
   `CREATE INDEX IF NOT EXISTS builder_decision_log_historical_match_id_idx ON builder_decision_log (historical_match_id)`,
   `CREATE INDEX IF NOT EXISTS builder_decision_log_players_idx ON builder_decision_log (player_one_id, player_two_id)`,

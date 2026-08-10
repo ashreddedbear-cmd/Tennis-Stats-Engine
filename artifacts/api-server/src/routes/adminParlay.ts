@@ -932,8 +932,8 @@ router.post("/admin/parlay/backfill", requireAdmin, (req, res): void => {
                  (historical_match_id, player_one_id, player_two_id, match_scheduled_at,
                   builder_picked_player_id, builder_calibrated_probability,
                   builder_decision, caller_selected_player_id, caller_agrees_with_engine,
-                  actual_winner_id, included_in_accuracy)
-               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true)`,
+                  actual_winner_id, included_in_accuracy, source)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,'backfill')`,
               [match.id, selectedPlayerId, opponentId, asOfDate.toISOString(),
                result.builderPickedPlayerId, result.builderCalibratedProbability,
                result.decision, selectedPlayerId, result.callerAgreesWithEngine,
@@ -983,7 +983,7 @@ router.post("/admin/parlay/backfill/seed-decision-log", requireAdmin, async (_re
         (historical_match_id, player_one_id, player_two_id, match_scheduled_at,
          builder_picked_player_id, builder_calibrated_probability,
          builder_decision, caller_selected_player_id, caller_agrees_with_engine,
-         actual_winner_id, included_in_accuracy)
+         actual_winner_id, included_in_accuracy, source)
       SELECT
         plo.backfill_match_id,
         plo.selected_player_id,          -- player_one_id
@@ -995,7 +995,8 @@ router.post("/admin/parlay/backfill/seed-decision-log", requireAdmin, async (_re
         plo.selected_player_id,          -- caller_selected_player_id
         true,                             -- caller_agrees_with_engine (approx: see route comment)
         plo.actual_winner_id,
-        true                              -- included_in_accuracy: actual_winner_id already known
+        true,                             -- included_in_accuracy: actual_winner_id already known
+        'backfill_approx'                 -- source: flags approximated rows for #34/#63 filtering
       FROM parlay_leg_outcomes plo
       WHERE plo.backfill_match_id IS NOT NULL
         AND plo.actual_winner_id IS NOT NULL
