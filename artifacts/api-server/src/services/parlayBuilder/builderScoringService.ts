@@ -2133,6 +2133,73 @@ function emptyAccuracyStats(): BuilderAccuracyStats {
 }
 
 // ---------------------------------------------------------------------------
+// Pure accuracy aggregation mirror — for unit tests
+// ---------------------------------------------------------------------------
+//
+// Replicates the DISTINCT ON + UNION ALL SQL logic from computeBuilderAccuracyStats
+// in plain TypeScript so tests can exercise dedup behaviour without a real database.
+// This function MUST stay in sync with the SQL query whenever it changes.
+// @internal — never import in production code.
+
+export interface __TEST_AccuracyRow {
+  historical_match_id: number | null;
+  player_one_id: string;
+  player_two_id: string;
+  match_scheduled_at: Date | null;
+  builder_picked_player_id: string;
+  actual_winner_id: string | null;
+  /** null = pending grading; true = graded+included; false = abstained (only valid for linked rows if set externally) */
+  included_in_accuracy: boolean | null;
+  created_at: Date;
+}
+
+/**
+ * Pure JS mirror of computeBuilderAccuracyStats' SQL dedup logic.
+ *
+ * Mirrors:
+ *   latest_linked — DISTINCT ON (historical_match_id), ORDER BY created_at ASC
+ *   abstained     — DISTINCT ON (player_one_id, player_two_id, match_scheduled_at::date), ORDER BY created_at ASC
+ *   UNION ALL     — combined, then COUNT aggregation
+ *
+ * @internal exported as __TEST_computeAccuracyFromRows
+ */
+export function __TEST_computeAccuracyFromRows(rows: __TEST_AccuracyRow[]): BuilderAccuracyStats {
+  // Sort ascending once — both CTEs use earliest-wins semantics
+  const sortedAsc = [...rows].sort((a, b) => a.created_at.getTime() - b.created_at.getTime());
+
+  // latest_linked: one row per resolvable fixture, earliest created_at wins
+  const linkedByMatchId = new Map<number, __TEST_AccuracyRow>();
+  for (const row of sortedAsc) {
+    if (row.historical_match_id !== null && !linkedByMatchId.has(row.historical_match_id)) {
+      linkedByMatchId.set(row.historical_match_id, row);
+    }
+  }
+  const linked = Array.from(linkedByMatchId.values());
+
+  // abstained: one row per unresolvable fixture, deduped by player pair + match date
+  // Rows with null match_scheduled_at collapse to one per player pair (conservative under-count).
+  const dateKey = (d: Date | null): string => d ? d.toISOString().slice(0, 10) : "__null__";
+  const abstainedKeys = new Set<string>();
+  for (const row of sortedAsc) {
+    if (row.historical_match_id === null) {
+      abstainedKeys.add(`${row.player_one_id}|${row.player_two_id}|${dateKey(row.match_scheduled_at)}`);
+    }
+  }
+  const totalAbstained = abstainedKeys.size;
+
+  // Mirrors SELECT from combined (abstained rows project actual_winner_id=null, included_in_accuracy=false)
+  const totalEligible = linked.filter(r => r.actual_winner_id !== null).length;
+  const totalPicked   = linked.filter(r => r.included_in_accuracy === true).length;
+  const correctPicks  = linked.filter(r => r.included_in_accuracy === true && r.builder_picked_player_id === r.actual_winner_id).length;
+
+  const coveragePct     = totalEligible > 0 ? Math.round((totalPicked / totalEligible) * 100) : 0;
+  const accuracyPct     = totalPicked   > 0 ? Math.round((correctPicks / totalPicked)   * 100) : 0;
+  const coverageWarning = coveragePct < 30 ? "COVERAGE_WARNING: below minimum threshold" : null;
+
+  return { totalEligible, totalPicked, coveragePct, correctPicks, accuracyPct, totalAbstained, coverageWarning };
+}
+
+// ---------------------------------------------------------------------------
 // Builder decision log — request-critical write helper
 // ---------------------------------------------------------------------------
 //

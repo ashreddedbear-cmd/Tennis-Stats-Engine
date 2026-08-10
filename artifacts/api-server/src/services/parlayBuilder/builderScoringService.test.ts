@@ -32,6 +32,7 @@ import assert from "node:assert/strict";
 
 import {
   __TEST_computeScoring,
+  __TEST_computeAccuracyFromRows,
   __TEST_isStaleResult,
   __TEST_applyStalenessSupplementIfNeeded,
   __TEST_filterRowsByCeiling,
@@ -49,6 +50,7 @@ import {
   type PlayerStats,
   type __TEST_ScoringResult,
   type BuilderAccuracyStats,
+  type __TEST_AccuracyRow,
 } from "./builderScoringService.js";
 
 // ─── Fixture helpers ────────────────────────────────────────────────────────
@@ -1824,5 +1826,119 @@ describe("calibration — raw score fallback when no active model", () => {
     assert.strictEqual(builderCalibratedProbability, 62, "calibrated probability is stored separately");
     assert.notStrictEqual(rawValidationScore, builderCalibratedProbability,
       "raw and calibrated can differ (this validates that both are stored)");
+  });
+});
+
+// ── __TEST_computeAccuracyFromRows — pure dedup logic tests ──────────────────
+//
+// These tests exercise the JS mirror of the DISTINCT ON + UNION ALL SQL query in
+// computeBuilderAccuracyStats. They cover the three dedup behaviors that were
+// identified as untested in review:
+//   1. A fixture validated N times counts once (first validation wins)
+//   2. "First" means earliest created_at — later correct re-validations cannot
+//      retroactively fix an incorrect first pick
+//   3. Abstained rows (null historical_match_id) survive the UNION ALL and are
+//      counted in total_abstained, deduplicated by player pair + match date
+
+describe("__TEST_computeAccuracyFromRows — dedup and aggregation invariants", () => {
+  // Offset-based Date factory: base epoch + offsetMs so ordering is explicit
+  const t = (offsetMs: number): Date => new Date(1_700_000_000_000 + offsetMs);
+
+  const settledBase: __TEST_AccuracyRow = {
+    historical_match_id: 42,
+    player_one_id: "p1",
+    player_two_id: "p2",
+    match_scheduled_at: new Date("2024-06-15T14:00:00Z"),
+    builder_picked_player_id: "player-A",
+    actual_winner_id: "player-A",
+    included_in_accuracy: true,
+    created_at: t(0),
+  };
+
+  it("three validations of the same fixture — only the first (earliest created_at) counts toward accuracy", () => {
+    // Row 1 (earliest): picks A, winner is B → WRONG
+    // Rows 2 and 3: pick B correctly, but arrive later
+    // DISTINCT ON created_at ASC means row 1 wins → correctPicks = 0
+    const rows: __TEST_AccuracyRow[] = [
+      { ...settledBase, historical_match_id: 42, builder_picked_player_id: "player-A", actual_winner_id: "player-B", created_at: t(0) },
+      { ...settledBase, historical_match_id: 42, builder_picked_player_id: "player-B", actual_winner_id: "player-B", created_at: t(1000) },
+      { ...settledBase, historical_match_id: 42, builder_picked_player_id: "player-B", actual_winner_id: "player-B", created_at: t(2000) },
+    ];
+    const stats = __TEST_computeAccuracyFromRows(rows);
+    assert.strictEqual(stats.totalEligible, 1, "one fixture — one eligible row regardless of re-validation count");
+    assert.strictEqual(stats.totalPicked, 1, "one pick recorded (first validation only)");
+    assert.strictEqual(stats.correctPicks, 0,
+      "first validation was wrong — later correct re-validations must not retroactively fix it");
+  });
+
+  it("first validation correct, later re-validation wrong — accuracy reflects the first pick, not the last", () => {
+    // Row 1 (earliest): picks A, winner is A → correct
+    // Row 2 (later): picks B → wrong — must NOT override row 1
+    const rows: __TEST_AccuracyRow[] = [
+      { ...settledBase, historical_match_id: 55, builder_picked_player_id: "player-A", actual_winner_id: "player-A", created_at: t(0) },
+      { ...settledBase, historical_match_id: 55, builder_picked_player_id: "player-B", actual_winner_id: "player-A", created_at: t(5000) },
+    ];
+    const stats = __TEST_computeAccuracyFromRows(rows);
+    assert.strictEqual(stats.totalPicked, 1, "one pick recorded");
+    assert.strictEqual(stats.correctPicks, 1, "first validation was correct and must be the one counted");
+    assert.strictEqual(stats.accuracyPct, 100, "100% accuracy: the only counted pick was correct");
+  });
+
+  it("abstained row (null historical_match_id) appears in total_abstained, not in total_eligible or total_picked", () => {
+    const rows: __TEST_AccuracyRow[] = [
+      {
+        historical_match_id: null,
+        player_one_id: "p1", player_two_id: "p2",
+        match_scheduled_at: new Date("2024-07-01T12:00:00Z"),
+        builder_picked_player_id: "p1",
+        actual_winner_id: null,
+        included_in_accuracy: null,
+        created_at: t(0),
+      },
+    ];
+    const stats = __TEST_computeAccuracyFromRows(rows);
+    assert.strictEqual(stats.totalAbstained, 1, "unresolvable fixture must appear in total_abstained");
+    assert.strictEqual(stats.totalEligible, 0, "abstained row must not contribute to total_eligible");
+    assert.strictEqual(stats.totalPicked, 0, "abstained row must not contribute to total_picked");
+  });
+
+  it("three re-validations of the same unresolvable fixture → total_abstained = 1, not 3", () => {
+    const abstainedBase: __TEST_AccuracyRow = {
+      historical_match_id: null,
+      player_one_id: "p1", player_two_id: "p2",
+      match_scheduled_at: new Date("2024-07-10T10:00:00Z"),
+      builder_picked_player_id: "p1",
+      actual_winner_id: null,
+      included_in_accuracy: null,
+      created_at: t(0),
+    };
+    const rows: __TEST_AccuracyRow[] = [
+      { ...abstainedBase, created_at: t(0) },
+      { ...abstainedBase, created_at: t(1000) },
+      { ...abstainedBase, created_at: t(2000) },
+    ];
+    const stats = __TEST_computeAccuracyFromRows(rows);
+    assert.strictEqual(stats.totalAbstained, 1,
+      "same unresolvable fixture validated 3× must be deduped to total_abstained = 1");
+  });
+
+  it("mixed linked + abstained rows: abstained rows do not inflate total_eligible or total_picked", () => {
+    // One settled linked fixture + one unresolvable abstained fixture
+    const rows: __TEST_AccuracyRow[] = [
+      { ...settledBase, historical_match_id: 99, builder_picked_player_id: "player-A", actual_winner_id: "player-A", created_at: t(0) },
+      {
+        historical_match_id: null,
+        player_one_id: "px", player_two_id: "py",
+        match_scheduled_at: new Date("2024-08-01T09:00:00Z"),
+        builder_picked_player_id: "px",
+        actual_winner_id: null, included_in_accuracy: null,
+        created_at: t(100),
+      },
+    ];
+    const stats = __TEST_computeAccuracyFromRows(rows);
+    assert.strictEqual(stats.totalEligible, 1, "only the settled linked row is eligible — abstained row must not inflate");
+    assert.strictEqual(stats.totalAbstained, 1, "unresolvable fixture counted once");
+    assert.strictEqual(stats.totalPicked, 1, "one pick from the linked row");
+    assert.strictEqual(stats.correctPicks, 1, "linked pick was correct");
   });
 });
