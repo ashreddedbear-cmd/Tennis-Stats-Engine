@@ -454,6 +454,11 @@ interface HistoricalIdValidationCacheRow {
 }
 
 const HISTORICAL_ID_VALIDATION_TTL_MS = 6 * 60 * 60 * 1000;
+// Separate short TTL for null ("not in live standings") results — #67.
+// Positive results use the full 6-hr TTL.  Null results are re-queried after 15 min
+// so a newly-ranked player is picked up quickly, but rapid re-validation within that
+// window returns from cache rather than hitting the provider quota again.
+const SPARSE_PLAYER_NULL_TTL_MS = 15 * 60 * 1000;
 const historicalIdValidationCache = new Map<string, HistoricalIdValidationCacheRow>();
 
 // Short-TTL cache for transient provider failures (circuit open, MatchStat timeout, etc.).
@@ -472,20 +477,30 @@ async function validateHistoricalPlayerId(provider: TennisDataProvider, playerId
   }
 
   const cached = historicalIdValidationCache.get(playerId);
-  if (cached && Date.now() - cached.checkedAt < HISTORICAL_ID_VALIDATION_TTL_MS) {
-    return cached.profile;
+  if (cached) {
+    if (cached.profile) {
+      // Positive hit: use the full 6-hr TTL.
+      if (Date.now() - cached.checkedAt < HISTORICAL_ID_VALIDATION_TTL_MS) return cached.profile;
+    } else {
+      // Null hit (player not in live standings at time of last query) — #67.
+      // Within the short window: return `undefined` rather than `null` so the
+      // historical-fallback path still activates (prevents quota drain without
+      // blocking the historical path).  Past the short window: evict and re-query
+      // so a newly-ranked player gets picked up on the next call.
+      if (Date.now() - cached.checkedAt < SPARSE_PLAYER_NULL_TTL_MS) return undefined;
+      historicalIdValidationCache.delete(playerId);
+    }
   }
 
   try {
     const profile = await provider.getPlayer(playerId);
-    // `null` means "player not in provider's current index" (e.g. ITF / WTA 125K players absent
-    // from live standings) — NOT "explicitly stale/invalid". Returning `undefined` here instead of
-    // `null` lets the historical-fallback path in `searchKnownPlayers` include them rather than
-    // silently dropping them (which the `validated === null` guard does for `null`).
-    // We only cache the result if it's a real profile (truthy) — caching `null` as a permanent
-    // "not found" would prevent ITF players from appearing via the historical path even after they
-    // enter the provider's standings.
-    if (profile) historicalIdValidationCache.set(playerId, { profile, checkedAt: Date.now() });
+    // Cache both positive results (evicted after HISTORICAL_ID_VALIDATION_TTL_MS) and
+    // null results (evicted after SPARSE_PLAYER_NULL_TTL_MS by the read path above).
+    // Caching null prevents repeated provider calls for sparse/ITF players validated in
+    // quick succession (quota drain).  We return `undefined` on null cache-hits — not
+    // `null` — so the historical-fallback path still activates.  `null` here only means
+    // "not in live standings right now", not "definitely invalid".
+    historicalIdValidationCache.set(playerId, { profile: profile ?? null, checkedAt: Date.now() });
     return profile ?? undefined;
   } catch (err) {
     logger.warn({ err, playerId }, "Historical ID provider validation failed; keeping historical player fallback for this search");

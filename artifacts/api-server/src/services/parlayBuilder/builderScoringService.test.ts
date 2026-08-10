@@ -2235,3 +2235,45 @@ describe("thin-data risk floor — riskScore raised when favorable signals push 
     assert.strictEqual(thinDataRiskFloor(10), 0, "n=10: no floor     (well-established)");
   });
 });
+
+// ─── #97 Thin-data floor regression guard ────────────────────────────────────
+//
+// The existing riskScore assertions above use THIN_DATA_RISK_FLOOR as a variable,
+// so they would PASS even if the constant were accidentally reduced (e.g., 45→20).
+// These tests assert the constant's value directly — they catch a source-level change
+// before it silently corrupts live scoring for sparse players.
+describe("builderScoringService — #97 thin-data floor constant regression guard", () => {
+  it("THIN_DATA_RISK_FLOOR constant is at least 45", () => {
+    // Walk-forward data: n=1-2 players win ~54.7% (near coin-flip).
+    // A floor below 45 would let those near-coin-flip picks pass through
+    // risk scoring without adequate penalty.
+    assert.ok(
+      THIN_DATA_RISK_FLOOR >= 45,
+      `THIN_DATA_RISK_FLOOR is ${THIN_DATA_RISK_FLOOR} — must be ≥ 45. ` +
+      `Existing riskScore tests compare against the variable so they pass even when ` +
+      `the constant is reduced; this test catches the constant change at the source.`,
+    );
+  });
+
+  it("thinDataRiskFloor(4) is positive — 4-match players must carry a risk penalty", () => {
+    // n=4 players win ~61.5% in walk-forward data — not enough to score without penalty.
+    // This guards against the ramp formula being changed so the floor drops to 0 at n=4.
+    const floor = thinDataRiskFloor(4);
+    assert.ok(
+      floor > 0,
+      `thinDataRiskFloor(4) returned ${floor} — must be > 0. ` +
+      `4-match players win ~61.5%; removing the floor entirely at n=4 would ` +
+      `let them reach full-confidence scoring territory.`,
+    );
+  });
+
+  it("thinDataRiskFloor(5) is zero — 5+ match players are not penalised", () => {
+    // Regression in the other direction: ensure the floor doesn't creep above n=5
+    // and start penalising players with adequate history.
+    assert.strictEqual(
+      thinDataRiskFloor(5),
+      0,
+      "thinDataRiskFloor(5) must be 0 — players with ≥5 matches should not carry a thin-data penalty",
+    );
+  });
+});
