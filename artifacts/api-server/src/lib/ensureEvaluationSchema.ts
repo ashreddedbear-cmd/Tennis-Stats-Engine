@@ -622,6 +622,28 @@ const STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS builder_decision_log_created_at_idx ON builder_decision_log (created_at)`,
   `CREATE INDEX IF NOT EXISTS builder_decision_log_historical_match_id_idx ON builder_decision_log (historical_match_id)`,
   `CREATE INDEX IF NOT EXISTS builder_decision_log_players_idx ON builder_decision_log (player_one_id, player_two_id)`,
+  // Partial index covering both grading query shapes in gradeBuilderDecisions():
+  //   Step 1: WHERE historical_match_id IS NULL AND included_in_accuracy IS NULL
+  //   Step 2: WHERE historical_match_id IS NOT NULL AND actual_winner_id IS NULL AND included_in_accuracy IS NULL
+  // A full-table scan on these queries becomes expensive as the log grows; restricting
+  // to ungraded rows keeps both scans near-instant regardless of table size.
+  `CREATE INDEX IF NOT EXISTS builder_decision_log_ungraded_idx ON builder_decision_log (historical_match_id) WHERE actual_winner_id IS NULL AND included_in_accuracy IS NULL`,
+  // FK with ON DELETE SET NULL so cleanup jobs can delete evaluation_predictions rows
+  // without being blocked by graded builder log entries pointing at them.
+  // Default RESTRICT would silently prevent those deletes.
+  // Wrapped in a DO block because ALTER TABLE ADD CONSTRAINT has no IF NOT EXISTS
+  // guard in Postgres — the block is safe to re-run on every server start.
+  `DO $$ BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint WHERE conname = 'builder_decision_log_historical_match_id_fk'
+    ) THEN
+      ALTER TABLE builder_decision_log
+        ADD CONSTRAINT builder_decision_log_historical_match_id_fk
+        FOREIGN KEY (historical_match_id)
+        REFERENCES evaluation_predictions(id)
+        ON DELETE SET NULL;
+    END IF;
+  END $$`,
 ];
 
 let ensured = false;

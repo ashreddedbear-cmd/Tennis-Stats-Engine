@@ -2071,12 +2071,44 @@ export async function computeBuilderAccuracyStats(): Promise<BuilderAccuracyStat
       correct_picks: string;
       total_abstained: string;
     }>(`
+      WITH latest_linked AS (
+        -- One row per resolvable fixture (historical_match_id IS NOT NULL).
+        -- Earliest validation (created_at ASC) wins so accuracy is not inflated by
+        -- re-validations that may have benefited from later odds or news arriving
+        -- closer to match time.
+        SELECT DISTINCT ON (historical_match_id)
+          builder_picked_player_id,
+          actual_winner_id,
+          included_in_accuracy
+        FROM builder_decision_log
+        WHERE historical_match_id IS NOT NULL
+        ORDER BY historical_match_id, created_at ASC
+      ),
+      abstained AS (
+        -- One row per unresolvable fixture (historical_match_id IS NULL), deduped by
+        -- player pair + match date so the same never-settling fixture does not inflate
+        -- total_abstained across re-validations. Rows with NULL match_scheduled_at
+        -- collapse to one per player pair — conservative under-count, not over-count.
+        SELECT DISTINCT ON (player_one_id, player_two_id, match_scheduled_at::date)
+          NULL::text     AS builder_picked_player_id,
+          NULL::text     AS actual_winner_id,
+          false::boolean AS included_in_accuracy
+        FROM builder_decision_log
+        WHERE historical_match_id IS NULL
+        ORDER BY player_one_id, player_two_id, match_scheduled_at::date, created_at ASC
+      ),
+      combined AS (
+        -- Both branches project the same 3 columns in the same order.
+        SELECT builder_picked_player_id, actual_winner_id, included_in_accuracy FROM latest_linked
+        UNION ALL
+        SELECT builder_picked_player_id, actual_winner_id, included_in_accuracy FROM abstained
+      )
       SELECT
-        COUNT(*) FILTER (WHERE actual_winner_id IS NOT NULL)::text AS total_eligible,
-        COUNT(*) FILTER (WHERE included_in_accuracy = true)::text AS total_picked,
+        COUNT(*) FILTER (WHERE actual_winner_id IS NOT NULL)::text                                              AS total_eligible,
+        COUNT(*) FILTER (WHERE included_in_accuracy = true)::text                                               AS total_picked,
         COUNT(*) FILTER (WHERE included_in_accuracy = true AND builder_picked_player_id = actual_winner_id)::text AS correct_picks,
-        COUNT(*) FILTER (WHERE included_in_accuracy = false)::text AS total_abstained
-      FROM builder_decision_log
+        COUNT(*) FILTER (WHERE included_in_accuracy = false)::text                                              AS total_abstained
+      FROM combined
     `);
     const row = result.rows[0];
     if (!row) return emptyAccuracyStats();
