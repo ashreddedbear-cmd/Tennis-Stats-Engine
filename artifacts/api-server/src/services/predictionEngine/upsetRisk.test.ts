@@ -147,3 +147,59 @@ test("modelConflict note falls back to an accurate agreement-band label when the
   // never falsely claim a direction conflict. Acceptable phrases for the agreement-band case:
   assert.match(bandOnly.note, /partial model disagreement|overall agreement is less than strong/);
 });
+
+// ── Calibrated vs raw probability invariant (Task #179 / Task #172 Step 3) ───────────────────
+//
+// After the applyCalibrationOriented orientation fix (Task #175), the calibrated probability can
+// differ substantially from the raw ensemble — e.g. a raw ensemble of 48% (slightly favoring
+// player 2 in raw space) maps to ~84% for player 1 after calibration (the PAVA flat-zone effect
+// documented in specialist-calibration-audit-and-fix.md). The favoriteWeakness component of
+// upsetRisk MUST use the calibrated margin (34 pts, comfortably away from 50%), not the raw
+// margin (2 pts, near coin-flip), to correctly reflect actual post-calibration risk.
+//
+// The separate rawVsCalibratedConflict flag (fed from index.ts's `modelConflict`) captures that
+// calibration sent the pick in a different direction — that adds to the `uncertainty` component,
+// not to favoriteWeakness. These are two distinct signals; this test verifies they're not confused.
+
+test("calibrated vs raw — favoriteWeakness uses calibratedProbability margin, not raw ensemble margin", () => {
+  // Scenario: raw feature modules straddle 50% (HighDisagreement — some favor player 1, some
+  // player 2), raw ensemble probability lands near 48%. After applyCalibrationOriented the
+  // calibrated probability maps to 84% (the Sackmann flat-zone documented in Task #172).
+  //
+  // favoriteWeakness with calibrated margin=34 (>=13) → 0 (no favoriteWeakness penalty).
+  // favoriteWeakness with raw margin=2 (<3) → would be 45 (maximum penalty, extreme).
+  // The test proves upsetRisk correctly reads the CALIBRATED margin.
+  const highConfidenceAfterCalibration = computeUpsetRisk(
+    input({
+      calibratedProbability: 84, // post-orientation calibration (was ~48% raw)
+      disagreement: disagreement({
+        modelAgreement: "HighDisagreement", // raw modules straddled 50% — correct to reflect raw module state
+        coreModelsConflict: false,
+      }),
+      rawVsCalibratedConflict: true, // calibration flipped the pick direction from raw → reflected in uncertainty
+    }),
+  );
+  assert.equal(
+    highConfidenceAfterCalibration.components.favoriteWeakness, 0,
+    "margin=34 from calibratedProbability should give zero favoriteWeakness — using raw ~48% would mistakenly score 45",
+  );
+  // rawVsCalibratedConflict adds 5 to uncertainty, HighDisagreement band adds 8 to modelConflict.
+  // Total score: 0 (favoriteWeakness) + 8 (modelConflict band) + 5 (uncertainty) = 13 → LOW.
+  assert.equal(highConfidenceAfterCalibration.upsetRisk, "LOW",
+    "even with HighDisagreement and a raw↔calibrated flip, a 34-point calibrated margin should be LOW risk");
+});
+
+test("calibrated vs raw — inverse: a near-coin-flip calibrated probability registers high favoriteWeakness regardless of any raw ensemble value", () => {
+  // Belt-and-suspenders: the function takes calibratedProbability as a named argument, so this is
+  // trivially enforced by the interface. Spelled out explicitly so any future refactor that tries
+  // to pass rawEnsembleProbability instead fails loudly.
+  const nearCoinFlip = computeUpsetRisk(
+    input({
+      calibratedProbability: 51, // coin-flip calibrated — high risk regardless of raw value
+      disagreement: disagreement({ modelAgreement: "Strong" }), // models agree in raw space
+      rawVsCalibratedConflict: false,
+    }),
+  );
+  assert.equal(nearCoinFlip.components.favoriteWeakness, 45,
+    "calibrated margin=1 must give maximum favoriteWeakness (45) even when raw models agree strongly");
+});

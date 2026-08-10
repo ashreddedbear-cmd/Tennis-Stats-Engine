@@ -258,3 +258,56 @@ test("catch-all-gap guard: margin 9–12 with Strong agreement must be at least 
     );
   }
 });
+
+// ── Calibrated vs raw probability invariant (Task #179 / Task #172 Step 3) ───────────────────
+//
+// After the applyCalibrationOriented orientation fix (Task #175), the calibrated probability can
+// differ substantially from the raw ensemble — e.g. a raw ensemble of 48% maps to ~84% after
+// calibration (the Sackmann flat-zone effect). The recommendation margin MUST use
+// calibratedProbability (34 pts from 50% here), not the raw ensemble value (2 pts from 50%).
+//
+// The critical failure mode this guards: if recommendation.ts used rawEnsembleProbability for
+// its margin calculation, a calibrated 84% pick with HighDisagreement (from raw modules
+// straddling 50%) would incorrectly fire the "margin < 8 AND HighDisagreement → INSUFFICIENT_EDGE"
+// gate (raw margin ≈ 2). Calibrated margin = 34 is well above that gate, so INSUFFICIENT_EDGE
+// must NOT fire and the result should be MODERATE_CONFIDENCE or better.
+
+test("calibrated vs raw — recommendation uses calibratedProbability for margin, not raw ensemble probability", () => {
+  // Scenario: raw feature modules straddle 50% (HighDisagreement — some favor player 1, some
+  // player 2). The raw ensemble probability lands near 48% (margin ≈ 2 from 50%). After
+  // applyCalibrationOriented the calibrated probability maps to 84% (margin = 34 from 50%).
+  //
+  // If recommendation.ts mistakenly used raw probability for margin:
+  //   → margin ≈ 2, HighDisagreement → INSUFFICIENT_EDGE (via the margin < 8 gate)
+  // Correctly using calibratedProbability:
+  //   → margin = 34, HighDisagreement → MODERATE_CONFIDENCE (margin >= 12 fallthrough)
+  const result = computeRecommendation(
+    84,              // calibratedProbability — post-applyCalibrationOriented (was ~48% raw)
+    70,              // dataQuality — well above the Poor gate
+    "Strong",        // dataQualityLabel
+    "HighDisagreement", // raw feature modules straddled 50%; featureAgreement reflects raw module votes
+  );
+  // The INSUFFICIENT_EDGE gate (margin < 8 AND HighDisagreement) must NOT fire when
+  // calibratedProbability is 84 — the margin is 34, not 2.
+  assert.notEqual(
+    result, "INSUFFICIENT_EDGE",
+    "recommendation must use calibrated margin (34pts), not raw (≈2pts) — using raw would incorrectly fire INSUFFICIENT_EDGE",
+  );
+  // With calibrated margin=34 and HighDisagreement, the result should be MODERATE_CONFIDENCE.
+  assert.equal(result, "MODERATE_CONFIDENCE");
+});
+
+test("calibrated vs raw — inverse: near-coin-flip calibrated probability fires INSUFFICIENT_EDGE even when raw ensemble was high", () => {
+  // Belt-and-suspenders for the inverse direction: calibrated near 50% with Mixed agreement
+  // must fire INSUFFICIENT_EDGE regardless of any hypothetical raw ensemble value.
+  // The function takes calibratedProbability as a named argument, so this is trivially enforced
+  // by the interface. Spelled out so any future refactor that swaps in rawEnsembleProbability fails.
+  const result = computeRecommendation(
+    56,    // calibratedProbability near 50 (margin = 6, below the 8-point gate)
+    70,    // dataQuality
+    "Strong",
+    "HighDisagreement", // Mixed models at a thin margin → no reliable edge
+  );
+  assert.equal(result, "INSUFFICIENT_EDGE",
+    "calibrated margin=6 with HighDisagreement must be INSUFFICIENT_EDGE — calibrated margin drives the gate, not a hypothetical raw value");
+});
