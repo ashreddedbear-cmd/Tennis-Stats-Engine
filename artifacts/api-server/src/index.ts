@@ -3,6 +3,7 @@ import { logger } from "./lib/logger";
 import { runPaperTradingJob } from "./jobs/runPaperTradingJob";
 import { runHistoricalBackfillJob } from "./jobs/runHistoricalBackfillJob";
 import { runDegradedPredictionRecomputeJob } from "./jobs/runDegradedPredictionRecomputeJob";
+import { runCalibrationRefitJob } from "./jobs/runCalibrationRefitJob";
 import { ensureEvaluationSchema } from "./lib/ensureEvaluationSchema";
 
 const rawPort = process.env["PORT"];
@@ -85,15 +86,32 @@ async function bootstrap(): Promise<void> {
   // restart doesn't add up to 15 minutes of extra silent gap on top of its own downtime.
   setTimeout(triggerPaperTradingCycle, 10_000);
 
-  // Likewise, the live probability calibration model (the isotonic mapping predictions prefer
-  // over the dataQuality-shrink fallback -- see predictionEngine/calibration.ts) only gets
-  // refreshed when someone runs a walk-forward evaluation. It now has its own standalone job
-  // (`src/jobs/runCalibrationRefitJob.ts`, built to dist/jobs/runCalibrationRefitJob.mjs) intended
-  // for a Replit Scheduled Deployment running `pnpm --filter @workspace/api-server run
-  // job:calibration-refit` once daily, so the active model can't silently go stale or never exist.
-  // See GET /evaluation/calibration-refit/job-runs for the durable run history. That job is out
-  // of scope for Task #121 (it does not block paper trading from recording/grading -- it only
-  // controls whether calibration is refreshed) and is left as documented follow-up work.
+  // Likewise, the live probability calibration model gets refreshed by a daily in-process
+  // fallback as well as its standalone Scheduled Deployment entry. The refit job's
+  // MIN_NEW_GRADED_FOR_REFIT guard makes frequent checks safe: it records a visible skip until
+  // enough new graded predictions justify training. See GET
+  // /evaluation/calibration-refit/job-runs for the durable run history.
+  const CALIBRATION_REFIT_INTERVAL_MS = 24 * 60 * 60_000;
+  let calibrationRefitInFlight = false;
+
+  function triggerCalibrationRefitCycle(): void {
+    if (calibrationRefitInFlight) {
+      logger.warn("Skipping calibration-refit cycle tick: previous cycle is still running");
+      return;
+    }
+    calibrationRefitInFlight = true;
+    runCalibrationRefitJob()
+      .catch((err) => {
+        logger.error({ err }, "Calibration-refit cycle threw unexpectedly outside its own error handling");
+      })
+      .finally(() => {
+        calibrationRefitInFlight = false;
+      });
+  }
+
+  setInterval(triggerCalibrationRefitCycle, CALIBRATION_REFIT_INTERVAL_MS);
+  // Fire after paper trading, but before historical backfill, to stagger provider work on startup.
+  setTimeout(triggerCalibrationRefitCycle, 15_000);
 
   // Task #144: `historical_matches` -- the canonical record backtesting, calibration, and
   // canonical player-identity lookup all depend on -- used to only advance when someone manually
