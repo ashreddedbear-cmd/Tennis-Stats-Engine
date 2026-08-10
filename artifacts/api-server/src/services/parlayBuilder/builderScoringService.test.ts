@@ -1853,6 +1853,7 @@ describe("__TEST_computeAccuracyFromRows — dedup and aggregation invariants", 
     actual_winner_id: "player-A",
     included_in_accuracy: true,
     created_at: t(0),
+    source: "live",
   };
 
   it("three validations of the same fixture — only the first (earliest created_at) counts toward accuracy", () => {
@@ -1894,6 +1895,7 @@ describe("__TEST_computeAccuracyFromRows — dedup and aggregation invariants", 
         actual_winner_id: null,
         included_in_accuracy: null,
         created_at: t(0),
+        source: "live",
       },
     ];
     const stats = __TEST_computeAccuracyFromRows(rows);
@@ -1911,6 +1913,7 @@ describe("__TEST_computeAccuracyFromRows — dedup and aggregation invariants", 
       actual_winner_id: null,
       included_in_accuracy: null,
       created_at: t(0),
+      source: "live",
     };
     const rows: __TEST_AccuracyRow[] = [
       { ...abstainedBase, created_at: t(0) },
@@ -1933,6 +1936,7 @@ describe("__TEST_computeAccuracyFromRows — dedup and aggregation invariants", 
         builder_picked_player_id: "px",
         actual_winner_id: null, included_in_accuracy: null,
         created_at: t(100),
+        source: "live",
       },
     ];
     const stats = __TEST_computeAccuracyFromRows(rows);
@@ -1940,5 +1944,63 @@ describe("__TEST_computeAccuracyFromRows — dedup and aggregation invariants", 
     assert.strictEqual(stats.totalAbstained, 1, "unresolvable fixture counted once");
     assert.strictEqual(stats.totalPicked, 1, "one pick from the linked row");
     assert.strictEqual(stats.correctPicks, 1, "linked pick was correct");
+  });
+
+  it("backfill_approx rows are excluded from accuracy stats — do not count in total_eligible or total_abstained", () => {
+    // backfill_approx: builder_picked_player_id is selected_player_id proxy (not the real engine pick).
+    // Including it would silently skew accuracy with non-engine decisions.
+    const rows: __TEST_AccuracyRow[] = [
+      // One real live row — correct pick
+      { ...settledBase, historical_match_id: 200, builder_picked_player_id: "player-A", actual_winner_id: "player-A", source: "live", created_at: t(0) },
+      // backfill_approx row for same fixture — should be silently excluded
+      { ...settledBase, historical_match_id: 200, builder_picked_player_id: "player-B", actual_winner_id: "player-A", source: "backfill_approx", created_at: t(1000) },
+      // backfill row for a different fixture — also excluded
+      { ...settledBase, historical_match_id: 201, builder_picked_player_id: "player-A", actual_winner_id: "player-B", source: "backfill", created_at: t(0) },
+      // backfill_approx abstained row — must not appear in total_abstained
+      {
+        historical_match_id: null,
+        player_one_id: "pa", player_two_id: "pb",
+        match_scheduled_at: new Date("2024-09-01T10:00:00Z"),
+        builder_picked_player_id: "pa",
+        actual_winner_id: null, included_in_accuracy: null,
+        source: "backfill_approx",
+        created_at: t(0),
+      },
+    ];
+    const stats = __TEST_computeAccuracyFromRows(rows);
+    assert.strictEqual(stats.totalEligible, 1, "only the source='live' linked row is eligible");
+    assert.strictEqual(stats.totalPicked, 1, "one pick from the live row");
+    assert.strictEqual(stats.correctPicks, 1, "live pick was correct — backfill_approx wrong pick must not reduce accuracy");
+    assert.strictEqual(stats.totalAbstained, 0, "backfill_approx abstained row must not appear in total_abstained");
+  });
+
+  it("abstained dedup key is stable when player_one/player_two are swapped across re-validations", () => {
+    // Same fixture, same date — but call 1 selects player A (so player_one=A, player_two=B)
+    // and call 2 selects player B (player_one=B, player_two=A). Without LEAST/GREATEST
+    // normalisation these look like two different fixtures → total_abstained would be 2.
+    const matchDate = new Date("2024-10-05T11:00:00Z");
+    const rows: __TEST_AccuracyRow[] = [
+      {
+        historical_match_id: null,
+        player_one_id: "alpha", player_two_id: "beta",  // call 1: selected=alpha
+        match_scheduled_at: matchDate,
+        builder_picked_player_id: "alpha",
+        actual_winner_id: null, included_in_accuracy: null,
+        source: "live",
+        created_at: t(0),
+      },
+      {
+        historical_match_id: null,
+        player_one_id: "beta", player_two_id: "alpha",  // call 2: selected=beta (players swapped)
+        match_scheduled_at: matchDate,
+        builder_picked_player_id: "beta",
+        actual_winner_id: null, included_in_accuracy: null,
+        source: "live",
+        created_at: t(5000),
+      },
+    ];
+    const stats = __TEST_computeAccuracyFromRows(rows);
+    assert.strictEqual(stats.totalAbstained, 1,
+      "same fixture validated twice with swapped player order must dedup to total_abstained = 1");
   });
 });

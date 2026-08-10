@@ -1141,6 +1141,16 @@ router.get("/evaluation/calibration-refit/health", async (_req, res): Promise<vo
     staleThresholdHours: STALE_THRESHOLD_HOURS,
     issues,
     recommendedAction,
+    // In-process timer wired in src/index.ts: setInterval every 24 h + setTimeout 15 s after
+    // startup. No Scheduled Deployment required — the model refits daily as long as the API
+    // server process is alive. job_runs rows (visible in latestRun below) are written by this
+    // timer so the history here IS the timer's durable output.
+    inProcessTimer: {
+      intervalHours: 24,
+      startupFireDelaySeconds: 15,
+      // "active" whenever this endpoint is reachable — the timer lives in the same process.
+      status: "active",
+    },
     latestRun: run
       ? {
           id: run.id,

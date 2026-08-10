@@ -2076,12 +2076,17 @@ export async function computeBuilderAccuracyStats(): Promise<BuilderAccuracyStat
         -- Earliest validation (created_at ASC) wins so accuracy is not inflated by
         -- re-validations that may have benefited from later odds or news arriving
         -- closer to match time.
+        -- source = 'live' filter: backfill_approx rows have approximated
+        -- builder_picked_player_id (selected_player_id used as proxy) and must not
+        -- silently enter the accuracy signal. backfill rows have accurate picks but
+        -- were produced outside the live engine path; also excluded for the same reason.
         SELECT DISTINCT ON (historical_match_id)
           builder_picked_player_id,
           actual_winner_id,
           included_in_accuracy
         FROM builder_decision_log
         WHERE historical_match_id IS NOT NULL
+          AND source = 'live'
         ORDER BY historical_match_id, created_at ASC
       ),
       abstained AS (
@@ -2089,13 +2094,19 @@ export async function computeBuilderAccuracyStats(): Promise<BuilderAccuracyStat
         -- player pair + match date so the same never-settling fixture does not inflate
         -- total_abstained across re-validations. Rows with NULL match_scheduled_at
         -- collapse to one per player pair — conservative under-count, not over-count.
-        SELECT DISTINCT ON (player_one_id, player_two_id, match_scheduled_at::date)
+        --
+        -- LEAST/GREATEST normalises the player pair: player_one_id holds whichever
+        -- player the caller selected, so two re-validations of the same fixture where
+        -- different players were "selected" would produce (A,B) and (B,A) in the raw
+        -- rows. Without normalisation DISTINCT ON would treat them as different fixtures.
+        SELECT DISTINCT ON (LEAST(player_one_id, player_two_id), GREATEST(player_one_id, player_two_id), match_scheduled_at::date)
           NULL::text     AS builder_picked_player_id,
           NULL::text     AS actual_winner_id,
           false::boolean AS included_in_accuracy
         FROM builder_decision_log
         WHERE historical_match_id IS NULL
-        ORDER BY player_one_id, player_two_id, match_scheduled_at::date, created_at ASC
+          AND source = 'live'
+        ORDER BY LEAST(player_one_id, player_two_id), GREATEST(player_one_id, player_two_id), match_scheduled_at::date, created_at ASC
       ),
       combined AS (
         -- Both branches project the same 3 columns in the same order.
@@ -2151,6 +2162,13 @@ export interface __TEST_AccuracyRow {
   /** null = pending grading; true = graded+included; false = abstained (only valid for linked rows if set externally) */
   included_in_accuracy: boolean | null;
   created_at: Date;
+  /**
+   * Maps to the builder_decision_log.source column: 'live' | 'backfill' | 'backfill_approx'.
+   * Only 'live' rows are counted by computeBuilderAccuracyStats — backfill_approx rows have
+   * approximated builder_picked_player_id values (selected_player_id used as a proxy) and must
+   * not silently train the accuracy signal.
+   */
+  source: string;
 }
 
 /**
@@ -2164,8 +2182,13 @@ export interface __TEST_AccuracyRow {
  * @internal exported as __TEST_computeAccuracyFromRows
  */
 export function __TEST_computeAccuracyFromRows(rows: __TEST_AccuracyRow[]): BuilderAccuracyStats {
+  // Mirror the SQL source filter: exclude backfill and backfill_approx rows.
+  // backfill_approx has approximated builder_picked_player_id (selected_player_id proxy);
+  // including it would silently skew the accuracy signal with non-engine picks.
+  const liveRows = rows.filter(r => r.source === "live");
+
   // Sort ascending once — both CTEs use earliest-wins semantics
-  const sortedAsc = [...rows].sort((a, b) => a.created_at.getTime() - b.created_at.getTime());
+  const sortedAsc = [...liveRows].sort((a, b) => a.created_at.getTime() - b.created_at.getTime());
 
   // latest_linked: one row per resolvable fixture, earliest created_at wins
   const linkedByMatchId = new Map<number, __TEST_AccuracyRow>();
@@ -2176,13 +2199,20 @@ export function __TEST_computeAccuracyFromRows(rows: __TEST_AccuracyRow[]): Buil
   }
   const linked = Array.from(linkedByMatchId.values());
 
-  // abstained: one row per unresolvable fixture, deduped by player pair + match date
+  // abstained: one row per unresolvable fixture, deduped by player pair + match date.
   // Rows with null match_scheduled_at collapse to one per player pair (conservative under-count).
+  //
+  // Canonical pair ordering (mirrors LEAST/GREATEST in SQL): player_one_id holds whichever
+  // player was "selected" in that call, so two re-validations of the same fixture where
+  // different players were selected produce (A,B) and (B,A). Without normalisation the
+  // Set key would treat them as distinct fixtures and double-count total_abstained.
   const dateKey = (d: Date | null): string => d ? d.toISOString().slice(0, 10) : "__null__";
   const abstainedKeys = new Set<string>();
   for (const row of sortedAsc) {
     if (row.historical_match_id === null) {
-      abstainedKeys.add(`${row.player_one_id}|${row.player_two_id}|${dateKey(row.match_scheduled_at)}`);
+      const lo = row.player_one_id < row.player_two_id ? row.player_one_id : row.player_two_id;
+      const hi = row.player_one_id < row.player_two_id ? row.player_two_id : row.player_one_id;
+      abstainedKeys.add(`${lo}|${hi}|${dateKey(row.match_scheduled_at)}`);
     }
   }
   const totalAbstained = abstainedKeys.size;
