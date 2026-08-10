@@ -112,7 +112,7 @@ interface BuilderLegResult {
   riskScore: number             // 0–100
   matchupCloseness?: number     // 0–100, higher = more evenly matched; drives risk floor
   reliabilityGrade: "A" | "B" | "C" | "D" | "F"
-  parlayGrade: "Elite" | "Strong" | "Moderate" | "Weak" | "Reject"
+  parlayGrade: "Elite" | "Solid" | "Weak" | "Reject"
   removalProbability: number    // 0–100
   decision: "KEEP" | "BORDERLINE" | "REMOVE" | "DATA_UNAVAILABLE"
   reasons: string[]
@@ -185,8 +185,7 @@ function decisionBadge(d: string, size = "sm") {
 function parlayGradeBadge(g: string) {
   const map: Record<string, string> = {
     Elite: "bg-purple-500/20 text-purple-300 border-purple-500/30",
-    Strong: "bg-success/20 text-success border-success/30",
-    Moderate: "bg-primary/20 text-primary border-primary/30",
+    Solid: "bg-success/20 text-success border-success/30",
     Weak: "bg-warning/20 text-warning border-warning/30",
     Reject: "bg-destructive/20 text-destructive border-destructive/30",
   }
@@ -2423,7 +2422,7 @@ export default function AdminParlayBuilder() {
                           removeCount: savedLegs.filter(l => l.decision === "REMOVE").length,
                           avgValidationScore: Math.round(savedLegs.reduce((s, l) => s + l.validationScore, 0) / savedLegs.length),
                           avgRiskScore: Math.round(savedLegs.reduce((s, l) => s + l.riskScore, 0) / savedLegs.length),
-                          overallParlayGrade: "Moderate" as const,
+                          overallParlayGrade: "Solid" as const,
                         }}
                         const merged = [...prev.legs, ...savedLegs]
                         return { ...prev, legs: merged, summary: {

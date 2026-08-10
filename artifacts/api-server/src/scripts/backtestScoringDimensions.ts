@@ -531,7 +531,7 @@ async function main(): Promise<void> {
       "Parlay Grade / Confidence Tier (parlay_grade)",
       cleanRows,
       l => l.parlay_grade,
-      ["Elite", "Strong", "Moderate", "Weak", "Reject"],
+      ["Elite", "Solid", "Weak", "Reject"],
     );
     renderDimension(dimGrade);
 
@@ -988,7 +988,7 @@ async function main(): Promise<void> {
     const borderlineRows = cleanRows.filter(r => r.decision === "BORDERLINE");
     const removeRows = cleanRows.filter(r => r.decision === "REMOVE");
     const eliteRows = cleanRows.filter(r => r.parlay_grade === "Elite");
-    const strongRows = cleanRows.filter(r => r.parlay_grade === "Strong");
+    const solidRows = cleanRows.filter(r => r.parlay_grade === "Solid");
     const gradeARows = cleanRows.filter(r => r.reliability_grade === "A");
     const gradeBRows = cleanRows.filter(r => r.reliability_grade === "B");
 
@@ -996,7 +996,7 @@ async function main(): Promise<void> {
     const borderlineWR = borderlineRows.length > 0 ? winRate(borderlineRows) : null;
     const removeWR = removeRows.length > 0 ? winRate(removeRows) : null;
     const eliteWR = eliteRows.length > 0 ? winRate(eliteRows) : null;
-    const strongWR = strongRows.length > 0 ? winRate(strongRows) : null;
+    const solidWR = solidRows.length > 0 ? winRate(solidRows) : null;
     const gradeAWR = gradeARows.length >= MIN_BUCKET_N ? winRate(gradeARows) : null;
     const gradeBWR = gradeBRows.length >= MIN_BUCKET_N ? winRate(gradeBRows) : null;
 
@@ -1012,7 +1012,7 @@ async function main(): Promise<void> {
       `**Finding 2 — Elite parlay grade has the highest raw win rate of any single bucket.**\n` +
       `Elite: ${eliteRows.length} rows, ${eliteWR !== null ? pct(eliteWR) : "n/a"} win rate ` +
       `(${eliteWR !== null ? pp(eliteWR, baselineWR) : "n/a"} vs baseline).  \n` +
-      `Strong: ${strongRows.length} rows, ${strongWR !== null ? pct(strongWR) : "n/a"} win rate.  \n` +
+      `Solid: ${solidRows.length} rows, ${solidWR !== null ? pct(solidWR) : "n/a"} win rate.  \n` +
       `However, Elite and KEEP have high overlap — the combination may not add independent signal ` +
       `beyond what either provides alone.`,
     );

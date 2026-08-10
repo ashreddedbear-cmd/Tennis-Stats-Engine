@@ -165,7 +165,7 @@ async function main(): Promise<void> {
 
     // ── Per parlay grade ────────────────────────────────────────────────────
     console.log("\n── Per Parlay Grade ────────────────────────────────────────────────");
-    for (const grade of ["Elite", "Strong", "Moderate", "Weak", "Reject"]) {
+    for (const grade of ["Elite", "Solid", "Weak", "Reject"]) {
       const group = legs.filter(l => l.parlay_grade === grade);
       if (group.length === 0) continue;
       const wr = group.filter(l => l.won).length / group.length;

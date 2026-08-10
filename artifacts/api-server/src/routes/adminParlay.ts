@@ -406,7 +406,7 @@ router.post("/admin/parlay/validate", requireAdmin, async (req, res): Promise<vo
       res.status(400).json({ error: "maximum 150 legs per validation" }); return;
     }
 
-    const gradeOrder = ["Reject", "Weak", "Moderate", "Strong", "Elite"] as const;
+    const gradeOrder = ["Reject", "Weak", "Solid", "Elite"] as const;
 
     const results = await Promise.all(legs.map(async (leg) => {
       try {
@@ -454,7 +454,7 @@ router.post("/admin/parlay/validate", requireAdmin, async (req, res): Promise<vo
     const gradeIndices = results.map(r => gradeOrder.indexOf(r.parlayGrade));
     const worstIdx = Math.min(...gradeIndices);
     const avgIdx = Math.round(gradeIndices.reduce((s, v) => s + v, 0) / gradeIndices.length);
-    const overallParlayGrade = gradeOrder[Math.max(0, Math.min(4, Math.min(worstIdx + 1, avgIdx)))];
+    const overallParlayGrade = gradeOrder[Math.max(0, Math.min(3, Math.min(worstIdx + 1, avgIdx)))];
 
     // Persist session row — returns the id so leg outcome rows can reference it
     let sessionId: number | null = null;
@@ -755,7 +755,7 @@ router.get("/admin/parlay/calibration", requireAdmin, async (_req, res): Promise
     });
 
     // Per parlay grade
-    const parlayGrades = (["Elite", "Strong", "Moderate", "Weak", "Reject"] as const).map(grade => {
+    const parlayGrades = (["Elite", "Solid", "Weak", "Reject"] as const).map(grade => {
       const g = legs.filter(l => l.parlay_grade === grade);
       const gWins = g.filter(l => l.won).length;
       return {

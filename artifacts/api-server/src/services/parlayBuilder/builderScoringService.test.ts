@@ -259,8 +259,8 @@ describe("builderScoringService — scoring correctness invariants", () => {
 
     if (rBaseline.parlayGrade === "Elite") {
       // The guard should have fired and forced it down.
-      assert.strictEqual(rWithGap.parlayGrade, "Strong",
-        `Elite grade should be forced down to Strong when selectedPlayerStatus=insufficient_data ` +
+      assert.strictEqual(rWithGap.parlayGrade, "Solid",
+        `Elite grade should be forced down to Solid when selectedPlayerStatus=insufficient_data ` +
         `(was ${rWithGap.parlayGrade})`);
       assert.ok(rWithGap.caughtInconsistency !== null,
         "caughtInconsistency must be set when the consistency guard fires");
@@ -273,7 +273,7 @@ describe("builderScoringService — scoring correctness invariants", () => {
     }
   });
 
-  it("Bug D: player_not_found status with Elite grade → forced down to Strong", () => {
+  it("Bug D: player_not_found status with Elite grade → forced down to Solid", () => {
     const selDominant = makeStats({ total: 20, winRate: 0.85, recentWinRate: 0.85, currentRank: 5 });
     const oppWeak     = makeStats({ total: 20, winRate: 0.30, recentWinRate: 0.30, currentRank: 250 });
 

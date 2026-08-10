@@ -135,7 +135,7 @@ export interface BuilderResult {
   riskScore: number;         // 0–100, higher = more risk
   matchupCloseness: number;  // 0–100, higher = more evenly matched; used as a risk floor
   reliabilityGrade: "A" | "B" | "C" | "D" | "F";
-  parlayGrade: "Elite" | "Strong" | "Moderate" | "Weak" | "Reject";
+  parlayGrade: "Elite" | "Solid" | "Weak" | "Reject";
   removalProbability: number; // 0–100%
   /**
    * KEEP / BORDERLINE / REMOVE — standard outcomes.
@@ -951,15 +951,15 @@ function toReliabilityGrade(validationScore: number, coverage: number): "A" | "B
   return ORDER[Math.min(ORDER.indexOf(coverageCap), ORDER.indexOf(scoreGrade))];
 }
 
-function toParlayGrade(validationScore: number, riskScore: number, grade: string): "Elite" | "Strong" | "Moderate" | "Weak" | "Reject" {
+function toParlayGrade(validationScore: number, riskScore: number, grade: string): "Elite" | "Solid" | "Weak" | "Reject" {
   const adj = validationScore - riskScore * 0.35;
-  // Threshold raised from 52 → 58 based on 4,000-row corpus train/test split:
-  // adj≥52 gave 71%/73% Elite win rate on train/test (11/14pp gaps).
-  // adj≥58 gives 73%/76% Elite win rate (12/17pp gaps) — both halves validated.
+  // Elite threshold calibrated at adj≥58 (train/test validated, 12/17pp gap over non-Elite).
   // adj 52–57 rows win only 65–67% — not meaningfully Elite tier.
   if (adj >= 58 && grade <= "B") return "Elite";
-  if (adj >= 43 && grade <= "C") return "Strong";
-  if (adj >= 34) return "Moderate";
+  // Strong (adj 43–57) and Moderate (adj 34–42) are corpus-indistinguishable:
+  // 60.8% vs 60.5% full-corpus; no breakdown (SA, closeness) separated them.
+  // Merged into "Solid" — full-corpus 61%, train 62%, test 59%.
+  if (adj >= 34) return "Solid";
   if (adj >= 22) return "Weak";
   return "Reject";
 }
@@ -970,8 +970,6 @@ function toDecision(
   grade: string,
   coverage: number,
   criticalFlags: string[],
-  matchupCloseness: number,
-  sourceAgreement: number,
 ): "KEEP" | "BORDERLINE" | "REMOVE" {
   const hasCritical = criticalFlags.some(f =>
     f.includes("injury") || f.includes("retirement") || f.includes("market disagreement") ||
@@ -981,18 +979,7 @@ function toDecision(
   if (grade === "F" || validationScore <= 33 || riskScore >= 70) return "REMOVE";
   if (hasCritical || coverage < 40) return "BORDERLINE";
 
-  // Composite confidence score — single number that monotonically predicts win rate.
-  // Calibrated against 4,000 graded outcomes: composite >= 54 → 74% win rate (15pp gap vs
-  // BORDERLINE at 59%).  Replaces the previous independent val >= 58 AND risk <= 44 gate,
-  // which admitted rows at composite ~40–53 (59–63% win rate) and blurred the boundary.
-  const composite = validationScore - Math.round(riskScore * 0.4);
-  if (composite >= 54 && grade !== "D" && coverage >= 50) return "KEEP";
-
-  // Closeness rescue: unambiguous-edge matchups with strong source agreement achieve 65% win rate
-  // in the corpus even when composite falls below the primary gate (e.g., val=55, risk=48 → composite=36).
-  // matchupCloseness ≤ 35 means the ranking-gap / odds spread is large; combined with sourceAgreement >= 65
-  // this is a genuine high-confidence signal independent of the aggregate composite.
-  if (matchupCloseness <= 35 && sourceAgreement >= 65 && validationScore >= 50 && grade !== "D") return "KEEP";
+  if (validationScore >= 58 && riskScore <= 44) return "KEEP";
 
   return "BORDERLINE";
 }
@@ -1977,7 +1964,7 @@ export async function computeBuilderScore(snapshot: BuilderSnapshot): Promise<Bu
 
   const reliabilityGrade = toReliabilityGrade(validationScore, dataCoverage);
   let parlayGrade = toParlayGrade(validationScore, riskScore, reliabilityGrade);
-  const decision = toDecision(validationScore, riskScore, reliabilityGrade, dataCoverage, criticalFlags, closenessScore, agreementScore);
+  const decision = toDecision(validationScore, riskScore, reliabilityGrade, dataCoverage, criticalFlags);
   const removalProbability = clamp(Math.round((100 - validationScore) * 0.55 + riskScore * 0.45), 0, 100);
 
   // ── 7b. Consistency guard ─────────────────────────────────────────────────
@@ -1997,10 +1984,10 @@ export async function computeBuilderScore(snapshot: BuilderSnapshot): Promise<Bu
       ...(dataSourceDiagnostics.opponentStatus !== "data_available" ? [opponentName] : []),
     ].join(" and ");
     criticalFlags.push(
-      `Consistency guard: Elite tier forced down to Strong — insufficient data for ${_gapPlayers} contradicts Elite-tier confidence` +
+      `Consistency guard: Elite tier forced down to Solid — insufficient data for ${_gapPlayers} contradicts Elite-tier confidence` +
       (_thinDataFloorFired ? ` (thin-data risk floor ${THIN_DATA_RISK_FLOOR} also applied)` : ""),
     );
-    parlayGrade = "Strong";
+    parlayGrade = "Solid";
   }
 
   // ── 8. Reasons ────────────────────────────────────────────────────────────
@@ -2666,8 +2653,8 @@ export interface __TEST_ScoringResult {
   dataCoverage: number;
   riskScore: number;
   reliabilityGrade: "A" | "B" | "C" | "D" | "F";
-  parlayGrade: "Elite" | "Strong" | "Moderate" | "Weak" | "Reject";
-  /** Non-null only when the consistency guard fired (Elite + data gap → forced to Strong). */
+  parlayGrade: "Elite" | "Solid" | "Weak" | "Reject";
+  /** Non-null only when the consistency guard fired (Elite + data gap → forced to Solid). */
   caughtInconsistency: string | null;
   /** "pre-match" when scheduledStart is future/absent; "live" when it is in the past. */
   matchStatus: "pre-match" | "live";
@@ -2968,9 +2955,9 @@ export function __TEST_computeScoring(
       ...(opponentStatus       !== "data_available" ? [opponentName]       : []),
     ].join(" and ");
     caughtInconsistency =
-      `Consistency guard: Elite tier forced down to Strong — insufficient data for ${gapPlayers}` +
+      `Consistency guard: Elite tier forced down to Solid — insufficient data for ${gapPlayers}` +
       (thinDataFloorFired ? ` (thin-data risk floor ${_thinFloor} also applied)` : "");
-    parlayGrade = "Strong";
+    parlayGrade = "Solid";
   }
 
   return { factors, agreeing, available, agreementRate, validationScore, dataCoverage, riskScore, reliabilityGrade, parlayGrade, caughtInconsistency, matchStatus: matchIsLive ? "live" : "pre-match" };
