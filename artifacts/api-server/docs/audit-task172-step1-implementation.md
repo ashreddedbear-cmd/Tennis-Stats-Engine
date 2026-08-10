@@ -249,6 +249,56 @@ The response includes:
 - [x] `CALIBRATION_MIN_RELIABLE_BIN_N` constant documented and set to 50
 - [x] Swap-invariance test unchanged (≤2pp assertion, same predicted winner both directions)
 
-**Next:** Trigger the fast-refit endpoint and inspect `referenceCases.after` to confirm the
-flat-zone overrides are gone and the Pegula/Shnaider case improves to a realistic magnitude.
-Then Step 0 / Step 2 (calibration reversal sanity check).
+**Next:** Step 0 guardrail reconfirmation (dedup guard, three walk-forward quality gates, active
+model check), then Step 2 (calibration reversal sanity check).
+
+---
+
+## Verified Refit Results (2026-08-10T00:49:04Z)
+
+### Provider breakdown
+
+| Provider | Rows used in fit | winner-always-player1? |
+|---|---|---|
+| API-Tennis | 58,781 | No |
+| sackmann | 28,042 | **Yes** — orientation fix applied |
+| ext-csv | 12,029 | No |
+| tennis-data-co-uk | 7,255 | **Yes** — orientation fix applied |
+| **Total** | **84,885 train + 21,222 holdout** | |
+
+### Model quality
+
+- Method: **isotonic** (log-loss 0.6397 vs Platt 0.6402 — isotonic won)
+- holdoutSampleSize: **21,222** (≥200 quality gate ✓)
+- activated: **true** ✓
+
+### Reference case verification
+
+| Case | oriented x | Before (raw; no prior model) | After | Expected |
+|---|---|---|---|---|
+| Kostyuk/Swiatek | 0.666 | 33.4% (raw) | **73.0%** for Swiatek | 65–72% |
+| Rinderknech/Nakashima | 0.594 | 40.6% (raw) | **68.2%** for Nakashima | 60–68% |
+| Pegula/Shnaider | 0.696 | 69.6% (raw) | **77.0%** for Pegula | 72–85% |
+
+"Before" = raw probability with no calibration applied (old model #711 was deactivated in Task
+#175; this was the expected clean state). All three cases now within or just above their expected
+ranges. The flat-zone overrides (84.5%/85.5% for the wrong-direction cases) are gone.
+
+### Fitted knots
+
+```
+x=0.000 → y=0.5565  (synthetic floor)
+x=0.524 → y=0.5565  (flat zone: most-uncertain predictions)
+x=0.571 → y=0.6628
+x=0.621 → y=0.7046
+x=0.673 → y=0.7334
+x=0.722 → y=0.8114
+x=0.768 → y=0.8829
+x=1.000 → y=0.8829  (ceiling: 88.3%)
+```
+
+The flat zone from x=0 to 0.524 (predictions where the oriented confidence is 50–52.4%) maps
+to 55.6% output — a 5.6pp calibrated boost for extremely uncertain predictions. This is an
+artifact of limited real data in the near-50% oriented region and is acceptable: the
+reliability floor blend toward identity moderates the PAVA output, but thin bins still
+converge toward the local mean.
