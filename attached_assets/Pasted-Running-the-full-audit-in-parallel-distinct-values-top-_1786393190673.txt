@@ -1,0 +1,116 @@
+Running the full audit in parallel — distinct values, top-5 clustering check, and spread for all four numeric features, separately for KEEP and Strong cohorts:
+Good start — 34 distinct validation_score values needs top-5 inspection (range 58–91 = 33 integers, so nearly full coverage, but must confirm). The source_agreement p75 query had a typo (ORDER BY risk_score). Running all top-5 clustering checks and Strong cohort spreads now in parallel:
+There are two things that need closer inspection before I can clear the features as real:
+
+source_agreement = 100 accounts for 1,070/2,055 KEEP rows (52%) and 470/1,056 Strong rows (44.5%) — that cluster is large enough to be suspicious
+validation_score in Strong is extreme: p10=58, p25=59, p50=60, p90=63 — the IQR is only 3 points across 1,056 rows
+Running the follow-up checks: how many opinionated sources does a SA=100 row actually have (1 agreeing source = 100% trivially), and where validation_score clusters by grade to see if it's a threshold artifact or a calculation bug:
+SA=100 is genuine — the bulk of KEEP rows have 6–9 real opinionated sources all pointing the same way, not a trivial 1-source collapse. Strong val clustering is a threshold artifact, not a calc bug (the old KEEP gate at val≥58 puts the decision boundary right in the middle of the Strong range). Features are real. Let me now read toParlayGrade to understand its structure before running the comparison work:
+toParlayGrade uses adj = val - risk × 0.35, Elite requires adj ≥ 52 AND grade ≤ "B". The 0.35 coefficient is different from the 0.4 in the new decision composite — that inconsistency matters. Running all comparison work in one batch: train/test split, adj distribution within Strong/Moderate, and what's actually separating within those grades:
+All data in. Now I can give real analysis.
+
+Part 1 — Feature audit: are these real per-match values?
+
+KEEP cohort (n=2,055):
+
+Feature	Distinct	Top cluster	Verdict
+validation_score	34	val=60: 183 rows (8.9%), val=61: 172 (8.4%)	✅ Threshold artifact — old gate was val≥58, so naturally piles near the floor. Real per-match values.
+risk_score	42	risk=27: 333 rows (16.2%)	✅ risk=27 = baseline(35) − agreement_bonus(8). Genuine cluster of high-agreement, moderate-risk picks.
+source_agreement	40	SA=100: 1,070 rows (52%)	Requires deeper check below
+matchup_closeness	86	close=66: 49 rows (2.4%)	✅ Wide spread, no concentration
+SA=100 deeper check — how many opinionated sources do those 1,070 KEEP/SA=100 rows actually have?
+
+Sources agreeing	n	% of SA=100 KEEP
+2	12	1.1%
+3	32	3.0%
+4	67	6.3%
+5	104	9.7%
+6	161	15.0%
+7	197	18.4%
+8	258	24.1%
+9	158	14.8%
+10	69	6.4%
+11	12	1.1%
+SA=100 is genuine. The bulk of those rows have 6–9 real sources all pointing the same direction — the cluster exists because KEEP rows are specifically the ones where evidence is unanimous, not because the calculation collapsed to a default. Only 1.1% (12 rows) have a trivial 2-source SA=100.
+
+Same check for Strong/SA=100 (n=470): 18% have 2-3 sources (slightly more fragile), 62% have 4-8 sources (genuine). Not a bug.
+
+KEEP spread (corrected):
+
+Feature	p10	p25	p50	p75	p90	range
+validation_score	59	61	64	69	75	58–91
+risk_score	7	17	27	33	40	0–44
+source_agreement	80	88	100	100	100	49–100
+matchup_closeness	17	37	56	70	78	0–85
+Strong spread:
+
+Feature	p10	p25	p50	p75	p90	range
+validation_score	58	59	60	62	63	52–75
+risk_score	23	—	35	—	45	4–55
+source_agreement	72	—	90.5	—	100	42–100
+matchup_closeness	26.5	—	70	—	81	0–100
+Strong val has IQR of only 3 points (59–62) — this is not a calculation bug. toParlayGrade uses adj = val − risk×0.35, so the Strong band (adj 43–52) maps to val 58–62 for typical risk levels, which is exactly where the old KEEP threshold sits. The compression is real but it's a grade-definition artifact.
+
+Feature audit verdict: all four features are real per-match values. No calculation bugs. Proceed to comparison.
+
+Part 2 — Why Strong (60.8%) and Moderate (60.5%) barely separate
+
+By source_agreement:
+
+Grade	SA bucket	n	win%	avg_adj
+Moderate	SA 80–99	110	64%	41
+Moderate	SA < 60	261	61%	37
+Moderate	SA = 100	412	60%	40
+Moderate	SA 60–79	209	59%	39
+Strong	SA = 100	470	63%	48
+Strong	SA < 60	31	61%	46
+Strong	SA 60–79	179	59%	48
+Strong	SA 80–99	376	59%	49
+Source agreement within these grades gives at most 4–5pp spread. The within-grade SA signal inverts between Strong (SA=100 is best) and Moderate (SA 80–99 is best). SA is not separating them from each other.
+
+By matchup_closeness:
+
+Grade	Closeness	n	win%	avg_SA
+Moderate	close ≤ 30	100	68%	87
+Strong	close ≤ 30	116	68%	98
+Moderate	close > 75	482	62%	75
+Strong	close 56–75	475	62%	86
+Strong	close 31–55	139	61%	89
+Moderate	close 31–55	277	58%	92
+Strong	close > 75	326	57%	90
+Moderate	close 56–75	133	54%	54
+This is the root cause. close ≤ 30 produces 68% win rate in both Strong and Moderate identically — the grade is completely invisible to this signal. And close > 75 (very ambiguous matchup) produces 57–62% in both grades. The grade bands (adj 34–43 vs 43–52) don't capture matchup clarity at all because toParlayGrade uses only val − risk×0.35 and reliability grade, never matchup_closeness.
+
+The Strong/Moderate boundary is just an adj cutoff. Within each adj band, closeness creates a 10–14pp spread that drowns any 0.3pp grade-to-grade signal.
+
+Part 3 — Elite threshold sweep (train/test split, 50/50 by row id)
+
+Train half (n=1,982 graded rows):
+
+adj threshold	Elite n	Elite win%	Non-Elite n	Non-Elite win%	Gap
+≥50 (wider)	747	70%	1,235	60%	10pp
+≥52 (current)	721	71%	1,261	60%	11pp
+≥56	597	73%	1,385	60%	13pp
+≥58	500	73%	1,482	61%	12pp
+≥60	417	74%	1,565	61%	13pp
+≥62	354	76%	1,628	61%	15pp
+Test half (n=1,986 graded rows, never touched during threshold selection):
+
+adj threshold	Elite n	Elite win%	Non-Elite n	Non-Elite win%	Gap
+≥50	553	73%	1,433	58%	15pp
+≥52 (current)	522	73%	1,464	59%	14pp
+≥56	443	75%	1,543	58%	17pp
+≥58	383	76%	1,603	59%	17pp
+≥60	310	79%	1,676	59%	20pp
+≥62	248	81%	1,738	60%	21pp
+Both halves agree directionally. adj ≥ 58 is the conservative pick: 12pp gap on train, 17pp on test, validated on unseen data. The current adj≥52 gives 11/14pp on train/test. Raising to 58 is a clean corpus-driven improvement.
+
+adj ≥ 60 gives 13/20pp — larger but at the cost of shrinking Elite to 310 rows. Worth it only if the smaller pool is acceptable.
+
+The single line that fixes Elite:
+
+The current threshold (adj >= 52) was set too generously — it admits rows with adj 52–57 that win only 65–67% (not meaningfully Elite). Raising to adj >= 58 demotes those to Strong, giving Elite genuine 73–76% accuracy.
+
+Strong/Moderate convergence won't be fixed by adj threshold alone — it requires adding matchupCloseness to toParlayGrade. That's a separate decision.
+
+Implementing the Elite threshold change now:
