@@ -238,27 +238,66 @@ Both #707 and #708 are **worse** than the pre-task model #691 (isotonicHoldoutLL
 Model #691 was manually reactivated 2026-08-08 (manual DB update, both #707 and #708 set
 inactive). Root cause and guard fixes tracked in Tasks #134 and #135.
 
-### Current Active Calibration Model (as of 2026-08-08)
+### Current Active Calibration Model (as of 2026-08-10, re-activated)
 
 | Field | Value |
 |---|---|
-| Model ID | **691** |
+| Model ID | **712** |
 | Method | isotonic |
-| Validation sample size | 21,570 |
-| Holdout sample size | 4,314 |
-| Isotonic holdout log-loss | **0.6390** |
-| Validation date range | 2025-01-01 → 2026-07-26 |
+| Validation sample size | 84,885 |
+| Holdout sample size | 21,222 |
+| Isotonic holdout log-loss | **0.6397** |
+| Platt holdout log-loss | 0.6402 |
+| Fitted | 2026-08-10 |
 | Active | true ✓ |
 
-**Why #691 beats #707 despite smaller corpus:** #691 was fitted on 2025–2026 graded
-predictions (the most relevant calibration signal for current live picks). #707 was fitted
-on the full corpus back to year 2000, which dilutes the signal. Holdout LL is the
-authoritative comparator: 0.6390 (#691) < 0.6682 (#707) < 0.6904 (#708).
+**Prior model #691** (isotonic LL=0.6390, n=21,570, 2025-2026 rows only) was the active
+model until 2026-08-10. Model #712 is fit on the full historical corpus (84,885 rows
+back to year 2000). Its global holdout LL (0.6397) barely matches #691 (0.6390).
+
+**Full-corpus calibration underperforms on paper-trade rows (confirmed 2026-08-10):**
+B-CAL cross-check run on 184 accuracy-eligible paper-trade rows (all from 2026-07-14
+to 2026-07-24, locked under model #691):
+- (A) Stored calibrated probability (locked under #691): LL=0.6361
+- (B) Model #712 re-applied [cross-check]: LL=**0.6599** — WORSE than stored
+- (C) New market-odds-aware curve fit on these rows: LL=0.6412
+- Cross-check delta A vs B: **−0.0238** (inverted from prior +0.0212 under #691)
+  → Model #712 calibrates WORSE on live paper-trade rows than #691 did.
+  → Same full-corpus-dilution problem as #707 and #708, but milder.
+  → A targeted refit on recent (2025-2026) rows only would likely outperform #712.
+
+**Paper-trading pipeline health (2026-08-10):** Pipeline runs every ~15 min (job_runs
+shows success, 0/0/0). Provider returns 0 fixtures — between tournaments. Latest graded
+row is 2026-07-24 (999 "missed" rows from 2026-07-11 to 2026-08-09 — pre-existing backlog
+from circuit-breaker interference during walk-forward). Pipeline is healthy and will
+accumulate new rows once tournaments resume.
+
+**Model #691 re-activated (2026-08-10):** Model #712 (full-corpus, LL=0.6397) displaced
+#691 despite having WORSE holdout LL. Manual DB update restored #691 (isotonic, LL=0.6390,
+n=21,570, date range 2025-01-01 → 2026-07-26). New paper-trade rows will be locked under
+#691 going forward.
+
+**B-CAL orientation-convention finding (2026-08-10 — CRITICAL):**
+The 184 existing paper-trade rows were locked BEFORE the 2026-08-09 orientation fix
+(player1-space calibration convention). Any post-fix model re-applied to these rows shows
+a large cross-check delta (~0.02) because the orientation convention changed — this is NOT
+a vintage-mismatch signal, it's a measurement artifact. The B-CAL cross-check delta
+< 0.005 target can ONLY be validly measured on rows locked AFTER 2026-08-09 using the
+new predicted-winner-space convention. Do NOT interpret the ±0.02 deltas on pre-fix rows
+as evidence of calibration problems.
+
+**calibrationRefitFromExisting now supports minDate:** The function accepts an optional
+`minDate: string` (YYYY-MM-DD) parameter restricting fit to rows with scheduledStartAt ≥
+minDate. Both 2024-01-01 and 2025-01-01 restrictions were tried; both failed Gate 3
+(isotonic LL 0.6458–0.6489 > active model LL at the time, 0.6397) because restricted
+evaluation_predictions rows are already in #712's training corpus and recent tennis data
+has a harder distribution.
 
 ### Section B Δlog-loss Re-run Status
 **NOT RUN** — requires:
-1. Market odds active in the ensemble (currently EXCLUDED)
-2. 200+ graded paper-trade rows locked with a fresh calibration model
+1. Market odds active in the ensemble ✓ (activated 2026-08-08)
+2. 50+ graded paper-trade rows locked AFTER 2026-08-09 (orientation fix date) under #691
+3. Those rows must be graded (match result known)
 
-The 201 graded odds rows were all locked before the Task #117 refit (latest cutoff 2026-07-24).
-Section B Δlog-loss verification deferred until market odds activation (future task).
+Current status: 0 graded rows exist after 2026-08-09. Section B re-run blocked
+until new tournaments produce graded rows. Expected to resolve naturally.

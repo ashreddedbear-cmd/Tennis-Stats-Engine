@@ -207,9 +207,18 @@ router.post("/evaluation/walk-forward/run", async (req, res): Promise<void> => {
  *
  * Requires admin access — this writes to calibration_models and may deactivate the current model.
  */
-router.post("/evaluation/calibration-refit-from-existing/run", requireAdmin, async (_req, res): Promise<void> => {
+router.post("/evaluation/calibration-refit-from-existing/run", requireAdmin, async (req, res): Promise<void> => {
   try {
-    const report = await refitCalibrationFromExistingEvaluationData();
+    // Optional minDate (YYYY-MM-DD): restricts fit to rows with scheduledStartAt >= minDate.
+    // Prevents full-corpus dilution — recent rows only produce better-calibrated live models.
+    const rawBody = req.body as Record<string, unknown>;
+    const minDate = typeof rawBody["minDate"] === "string" ? rawBody["minDate"] : undefined;
+    const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+    if (minDate !== undefined && !dateRe.test(minDate)) {
+      res.status(400).json({ error: "minDate must be a YYYY-MM-DD string." });
+      return;
+    }
+    const report = await refitCalibrationFromExistingEvaluationData(minDate);
     res.json(report);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

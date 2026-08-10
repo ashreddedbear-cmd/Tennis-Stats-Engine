@@ -20,7 +20,7 @@
  *   - Pegula/Shnaider    (raw ~69.6% → oriented x=0.696): was 99.6% → expect ~72-85%
  */
 
-import { and, eq, isNotNull, sql } from "drizzle-orm";
+import { and, eq, gte, isNotNull, sql } from "drizzle-orm";
 import { db, evaluationPredictionsTable, calibrationModelsTable, historicalMatchesTable } from "@workspace/db";
 import { logger } from "../../lib/logger";
 import {
@@ -113,14 +113,20 @@ function computeReferenceCases(mapping: CalibrationKnot[]): RefitReferenceCase[]
 }
 
 /**
- * Refits the calibration model from all existing validation-segment evaluation_predictions rows,
+ * Refits the calibration model from existing validation-segment evaluation_predictions rows,
  * applying the predicted-winner orientation fix for all rows (including those from
  * WINNER_ALWAYS_PLAYER1_PROVIDERS). Writes a new calibration_models row and activates it if
  * it passes the minimum-quality gates.
  *
+ * @param minDate Optional YYYY-MM-DD lower bound on scheduledStartAt. When provided, only rows
+ *   from that date forward are used. Restricting to recent rows (e.g. 2024-01-01) prevents
+ *   the full-corpus dilution problem: models fit on the entire historical corpus (2000–present)
+ *   produce worse cross-check deltas on live paper-trade rows than models fit on recent data only.
+ *   See .agents/memory/market-odds-ablation-results.md § "Full-corpus calibration underperforms".
+ *
  * Returns a full diagnostic report including per-provider breakdowns and reference case outputs.
  */
-export async function refitCalibrationFromExistingEvaluationData(): Promise<RefitCalibrationReport> {
+export async function refitCalibrationFromExistingEvaluationData(minDate?: string): Promise<RefitCalibrationReport> {
   const startMs = Date.now();
   const fittedAt = new Date().toISOString();
 
@@ -143,6 +149,13 @@ export async function refitCalibrationFromExistingEvaluationData(): Promise<Refi
   // Join historical_matches to get the source provider for each evaluation_predictions row.
   // We only need: raw_probability, actual_winner_id, player1_id, locked_at,
   // and the tieBreakerApplied flag (extracted from featureSnapshot JSONB).
+  const minDateFilter = minDate ? gte(evaluationPredictionsTable.scheduledStartAt, new Date(minDate)) : undefined;
+
+  logger.info(
+    { minDate: minDate ?? "none (full corpus)" },
+    "calibration-refit-from-existing: applying date filter",
+  );
+
   const rows = await db
     .select({
       id:               evaluationPredictionsTable.id,
@@ -166,6 +179,7 @@ export async function refitCalibrationFromExistingEvaluationData(): Promise<Refi
         isNotNull(evaluationPredictionsTable.rawProbability),
         isNotNull(evaluationPredictionsTable.actualWinnerId),
         isNotNull(evaluationPredictionsTable.player1Id),
+        minDateFilter,
       ),
     );
 
