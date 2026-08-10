@@ -1,0 +1,17 @@
+"Perfect" is worth pushing back on gently — no scoring engine reaches a state where nothing else needs checking, and treating any of these as the last task risks the same pattern that happened with the composite formula: something ships because it feels "done" rather than because it was proven right on data it wasn't fit to. What you can actually get to is a state where every piece of the pipeline has been verified end-to-end, not just the scoring math.
+
+With that framing, here's the real sequence:
+
+**1. Finish what's already open — don't start anything new until this closes.**
+- #219 (DB migration) — run now, it's a live gap.
+- #220 (validate the restored KEEP gate) — the one part of the current formula that's never been corpus-checked. Everything else in the decision path is now validated; this is the last unvalidated piece.
+
+**2. Then the data layer, not the formula.** Right now all the validation work has been on *scoring* — but scoring is only as good as what feeds it. A perfectly-validated formula fed wrong or stale data is still wrong. The provider/identity and correctness tasks (#51, #38, #93, #67, #177, #90, #97, #98) matter more for "trustworthy" than any further threshold tuning — a bad Sackmann bridge or stale player data silently corrupts every downstream number, including the corpus these thresholds were validated against. This is the tier I'd actually prioritize next over #221.
+
+**3. #221 (closeness as a first-class axis)** — the real structural fix for Solid's flat accuracy, but it's a redesign, not a tweak. Worth doing once the data layer is trusted, not before — no point re-architecting the grade system on top of unverified inputs.
+
+**4. Close the loop with the user-facing tasks last.** #31 (re-score saved legs) and #169 (report copy) are what make the validated engine actually *visible and useful* to whoever uses this — they're the payoff for everything above, not filler.
+
+**5. #207 and #81's ongoing health** — once the calibration refit is running and its output is surfaced in the dashboard rather than curl-only, that's your signal that the system stays correct over time instead of needing this kind of manual audit again.
+
+Short version: **#219 → #220 → data-provider correctness tasks → #221 → user-facing tasks**, with #81/#207 running underneath as the thing that keeps it honest going forward.
