@@ -1,0 +1,37 @@
+Task #162a — Specialist weight ceiling ignores improvement magnitude (NOT STARTED)
+
+Finding: computeSpecialistWeight‘s baseWeight = min(0.7, sampleSize/(sampleSize+50)) pins at the 0.7 ceiling for any segment with n≳350, regardless of how small the actual log-loss improvement is. ATP-Hard (n=18,064, +0.0005 nat improvement — 218× smaller than WTA-Hard’s +0.109) still lands at 70.2% weight after the small perfAdjustment term. The formula rewards sample size, not value added.
+
+Confirmed NOT a problem for: WTA-Hard/Clay/Grass and both IndoorHard segments — these have improvements of +0.109 to +0.375 nats and legitimately earn their 0.85 weight by correcting a genuinely weak general model on those segments.
+
+Confirmed a live problem for: ATP-Hard specifically (active in engine, high validation volume). ATP-Clay has the same shape (+0.007 nats, would also be near-ceiling) but is already hard-gated off in code, so no live exposure there.
+
+Fix direction: gate weight on improvement magnitude, not just n. Something like scaling baseWeight’s ceiling by improvement relative to a reference scale (e.g., ceiling only reaches 0.7 once improvement ≥ some threshold like 0.02–0.05 nats, tapering toward the 0.1 floor below that), rather than n alone driving the ceiling.
+
+Required regression tests before shipping:
+
+	•	ATP-Hard (n=18,064, +0.0005 nats) → weight drops well below 0.5
+	•	WTA-Hard (n=9,408, +0.109 nats) → weight stays ≥0.8 (unchanged)
+	•	WTA-Clay, WTA-Grass, both IndoorHard segments → unchanged within tolerance
+	•	Sanity sweep across all 8 known segments before/after, not just the two extremes
+
+Task #162b — ATP specialist calibration curve steepness (selection bias) (NOT STARTED)
+
+Finding: Independent of weight, the ATP specialist’s own calibration curve is anomalously steep — e.g. WTA-Hard-style knots show a 47–55% raw ensemble confidence mapping to 70–78% specialist probability. Even if #162a caps ATP-Hard’s weight lower, a curve this steep will still visibly pull any blend it participates in.
+
+Suspected root cause: isKnownBadCascadeRow cascade-exclusion removes pre-cutoff tie-breaker rows from validation data, and this appears to disproportionately strip “hard/ambiguous” ATP matches, leaving PAVA to fit against an easy-match-skewed remainder. That produces a curve that’s accurate for the filtered training distribution but overconfident against the real live match mix.
+
+Why this is separate from #162a: lowering weight treats the symptom (how much the curve counts); this fixes the curve itself. Needed regardless of what #162a’s threshold ends up being — the two are independent variables (weight × curve shape), and only fixing one leaves the other’s error live.
+
+Open question to check before scoping the fix: does cascade-exclusion bias WTA validation data the same way? If so, WTA’s large weight might still be earned in magnitude (general model really is that much worse) but its curve shape could carry the same bias artifact — worth a quick per-segment bias check (compare match-difficulty distribution pre/post exclusion) across all 8 segments, not just ATP, before treating WTA as fully clean.
+
+Not yet scoped: the actual fix mechanism. Candidates to evaluate: (a) relax or replace the cascade-exclusion filter for calibration-training purposes specifically, (b) reweight validation rows to counter the induced skew instead of removing the filter, (c) apply a milder reliability-floor blend (same mechanism as the Task #172 flat-zone fix) specifically to ATP segments where selection bias is confirmed.
+
+Now, #162a fix approach scoping:
+
+Two design questions need answers before writing code:
+
+	1.	What’s the improvement scale to gate on? The current segments span +0.0005 to +0.375 nats — four orders of magnitude. A linear scale from 0 won’t discriminate well at the low end where the actual bug lives. Log-loss improvement over the general model’s own log-loss (relative improvement, not absolute nats) might separate ATP-Hard’s genuinely-negligible case more cleanly from WTA-Hard’s genuinely-large one. Worth computing relative-improvement-% for all 8 segments before picking a formula, to check monotonicity holds where you want it to.
+	2.	Hard threshold vs. smooth taper? A hard cutoff (“below X nats, cap weight at 0.1”) risks a cliff-edge discontinuity if a segment sits near the boundary and gets refit slightly differently each walk-forward run — could cause a segment to flip between “trusted” and “floor” across refits with no real underlying change. A smooth taper (weight ceiling scales continuously with improvement, same style as the Step 1 PAVA reliability-floor blend) avoids that instability and reuses a mechanism you’ve already shipped and tested once.
+
+My suggestion: reuse the existing reliability-floor blend pattern from Task #172 Step 1 rather than inventing a new formula — same shape of problem (thin/weak signal should decay toward a safe default rather than hard-gate), and it’s already proven in this codebase. Concretely: scale baseWeight’s ceiling continuously by improvement, something like ceiling = 0.1 + 0.6 × min(1, improvement / IMPROVEMENT_REFERENCE), where IMPROVEMENT_REFERENCE gets picked from the actual segment data (maybe the WTA-IndoorHard value of +0.252, or the median of the six “legitimate” segments) rather than an arbitrary round number.
