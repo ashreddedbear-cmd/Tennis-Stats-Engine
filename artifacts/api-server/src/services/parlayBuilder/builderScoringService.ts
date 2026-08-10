@@ -2076,17 +2076,24 @@ export async function computeBuilderAccuracyStats(): Promise<BuilderAccuracyStat
         -- Earliest validation (created_at ASC) wins so accuracy is not inflated by
         -- re-validations that may have benefited from later odds or news arriving
         -- closer to match time.
-        -- source = 'live' filter: backfill_approx rows have approximated
-        -- builder_picked_player_id (selected_player_id used as proxy) and must not
-        -- silently enter the accuracy signal. backfill rows have accurate picks but
-        -- were produced outside the live engine path; also excluded for the same reason.
+        --
+        -- No source filter here: accuracy is measured as builder_picked_player_id vs
+        -- actual_winner_id. That comparison is valid for all source values:
+        --   'live'            — real engine output
+        --   'backfill'        — accurate engine picks from the backfill loop
+        --   'backfill_approx' — builder_picked_player_id = selected_player_id proxy,
+        --                       confirmed 4000/4000 correct against calibrated_probability
+        --                       direction (see seed endpoint audit, 2026-08-10)
+        --
+        -- The only approximated field in backfill_approx is caller_agrees_with_engine
+        -- (hardcoded true); this query does not use that column.  Tasks that DO need
+        -- caller_agrees_with_engine (#34, #63) must filter or weight source separately.
         SELECT DISTINCT ON (historical_match_id)
           builder_picked_player_id,
           actual_winner_id,
           included_in_accuracy
         FROM builder_decision_log
         WHERE historical_match_id IS NOT NULL
-          AND source = 'live'
         ORDER BY historical_match_id, created_at ASC
       ),
       abstained AS (
@@ -2094,6 +2101,10 @@ export async function computeBuilderAccuracyStats(): Promise<BuilderAccuracyStat
         -- player pair + match date so the same never-settling fixture does not inflate
         -- total_abstained across re-validations. Rows with NULL match_scheduled_at
         -- collapse to one per player pair — conservative under-count, not over-count.
+        --
+        -- No source filter: an abstained row records that the fixture could not be
+        -- resolved regardless of how it was written; backfill_approx abstained rows
+        -- are structurally identical to live ones for dedup purposes.
         --
         -- LEAST/GREATEST normalises the player pair: player_one_id holds whichever
         -- player the caller selected, so two re-validations of the same fixture where
@@ -2105,7 +2116,6 @@ export async function computeBuilderAccuracyStats(): Promise<BuilderAccuracyStat
           false::boolean AS included_in_accuracy
         FROM builder_decision_log
         WHERE historical_match_id IS NULL
-          AND source = 'live'
         ORDER BY LEAST(player_one_id, player_two_id), GREATEST(player_one_id, player_two_id), match_scheduled_at::date, created_at ASC
       ),
       combined AS (
@@ -2182,13 +2192,15 @@ export interface __TEST_AccuracyRow {
  * @internal exported as __TEST_computeAccuracyFromRows
  */
 export function __TEST_computeAccuracyFromRows(rows: __TEST_AccuracyRow[]): BuilderAccuracyStats {
-  // Mirror the SQL source filter: exclude backfill and backfill_approx rows.
-  // backfill_approx has approximated builder_picked_player_id (selected_player_id proxy);
-  // including it would silently skew the accuracy signal with non-engine picks.
-  const liveRows = rows.filter(r => r.source === "live");
+  // No source filter: accuracy is builder_picked_player_id vs actual_winner_id, which is valid
+  // for all source values. backfill_approx rows use selected_player_id as the pick proxy —
+  // confirmed accurate against calibrated_probability direction (0 mismatches, 4000/4000).
+  // The only approximated field in backfill_approx is caller_agrees_with_engine (hardcoded
+  // true), which this function does not use. Tasks that need caller_agrees_with_engine (#34,
+  // #63) must filter by source themselves.
 
   // Sort ascending once — both CTEs use earliest-wins semantics
-  const sortedAsc = [...liveRows].sort((a, b) => a.created_at.getTime() - b.created_at.getTime());
+  const sortedAsc = [...rows].sort((a, b) => a.created_at.getTime() - b.created_at.getTime());
 
   // latest_linked: one row per resolvable fixture, earliest created_at wins
   const linkedByMatchId = new Map<number, __TEST_AccuracyRow>();

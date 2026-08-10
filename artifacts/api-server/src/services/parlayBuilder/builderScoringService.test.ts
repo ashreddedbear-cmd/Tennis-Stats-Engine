@@ -1946,17 +1946,20 @@ describe("__TEST_computeAccuracyFromRows — dedup and aggregation invariants", 
     assert.strictEqual(stats.correctPicks, 1, "linked pick was correct");
   });
 
-  it("backfill_approx rows are excluded from accuracy stats — do not count in total_eligible or total_abstained", () => {
-    // backfill_approx: builder_picked_player_id is selected_player_id proxy (not the real engine pick).
-    // Including it would silently skew accuracy with non-engine decisions.
+  it("backfill and backfill_approx rows are included in accuracy stats — accuracy signal is valid for all sources", () => {
+    // accuracy = builder_picked_player_id vs actual_winner_id, valid for all source values.
+    // backfill_approx uses selected_player_id as the pick proxy — confirmed accurate (0 mismatches
+    // against calibrated_probability direction on 4000 rows). The only approximated field is
+    // caller_agrees_with_engine (hardcoded true), which this function does not use.
+    // Tasks that need caller_agrees_with_engine (#34, #63) must filter by source themselves.
     const rows: __TEST_AccuracyRow[] = [
-      // One real live row — correct pick
+      // live row — correct pick, fixture 200
       { ...settledBase, historical_match_id: 200, builder_picked_player_id: "player-A", actual_winner_id: "player-A", source: "live", created_at: t(0) },
-      // backfill_approx row for same fixture — should be silently excluded
-      { ...settledBase, historical_match_id: 200, builder_picked_player_id: "player-B", actual_winner_id: "player-A", source: "backfill_approx", created_at: t(1000) },
-      // backfill row for a different fixture — also excluded
-      { ...settledBase, historical_match_id: 201, builder_picked_player_id: "player-A", actual_winner_id: "player-B", source: "backfill", created_at: t(0) },
-      // backfill_approx abstained row — must not appear in total_abstained
+      // backfill_approx row for a DIFFERENT fixture — should be included (wrong pick → reduces accuracy)
+      { ...settledBase, historical_match_id: 201, builder_picked_player_id: "player-B", actual_winner_id: "player-A", source: "backfill_approx", created_at: t(0) },
+      // backfill row for yet another fixture — also included (correct pick)
+      { ...settledBase, historical_match_id: 202, builder_picked_player_id: "player-A", actual_winner_id: "player-A", source: "backfill", created_at: t(0) },
+      // backfill_approx abstained row — must appear in total_abstained
       {
         historical_match_id: null,
         player_one_id: "pa", player_two_id: "pb",
@@ -1968,10 +1971,11 @@ describe("__TEST_computeAccuracyFromRows — dedup and aggregation invariants", 
       },
     ];
     const stats = __TEST_computeAccuracyFromRows(rows);
-    assert.strictEqual(stats.totalEligible, 1, "only the source='live' linked row is eligible");
-    assert.strictEqual(stats.totalPicked, 1, "one pick from the live row");
-    assert.strictEqual(stats.correctPicks, 1, "live pick was correct — backfill_approx wrong pick must not reduce accuracy");
-    assert.strictEqual(stats.totalAbstained, 0, "backfill_approx abstained row must not appear in total_abstained");
+    assert.strictEqual(stats.totalEligible, 3, "all three linked rows are eligible regardless of source");
+    assert.strictEqual(stats.totalPicked, 3, "three picks recorded");
+    assert.strictEqual(stats.correctPicks, 2, "live + backfill correct; backfill_approx wrong pick reduces accuracy");
+    assert.strictEqual(stats.accuracyPct, 67, "2/3 = 67%");
+    assert.strictEqual(stats.totalAbstained, 1, "backfill_approx abstained row counts in total_abstained");
   });
 
   it("abstained dedup key is stable when player_one/player_two are swapped across re-validations", () => {
