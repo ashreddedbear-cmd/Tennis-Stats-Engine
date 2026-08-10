@@ -979,7 +979,11 @@ function toDecision(
   if (grade === "F" || validationScore <= 33 || riskScore >= 70) return "REMOVE";
   if (hasCritical || coverage < 40) return "BORDERLINE";
 
-  if (validationScore >= 58 && riskScore <= 44) return "KEEP";
+  // Gate corpus-validated on 50/50 train/test split (n≈4,000 graded outcomes):
+  // val≥62, risk≤44 → train 70% / test 71% KEEP win rate (10/13pp gaps vs BORDERLINE).
+  // Previous val≥58 gate admitted val 58–61 rows winning ~62–63% — not KEEP territory.
+  // val threshold is the binding constraint; risk≤40 through ≤48 all perform identically.
+  if (validationScore >= 62 && riskScore <= 44) return "KEEP";
 
   return "BORDERLINE";
 }
