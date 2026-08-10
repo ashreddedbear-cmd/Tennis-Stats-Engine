@@ -380,7 +380,7 @@ export const jobRunsTable = pgTable(
     id: serial("id").primaryKey(),
     jobName: text("job_name").notNull(),
     startedAt: timestamp("started_at", { withTimezone: true }).notNull(),
-    finishedAt: timestamp("finished_at", { withTimezone: true }).notNull(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
     // 'success': the cycle ran to completion (it may still contain per-fixture errors in
     // `summary.errors`, e.g. a transient provider hiccup on one fixture -- those are not fatal).
     // 'failed': every retry attempt threw and the job gave up -- this is the fatal, alert-worthy

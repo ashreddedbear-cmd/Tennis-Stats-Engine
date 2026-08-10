@@ -137,6 +137,7 @@ const STATEMENTS: string[] = [
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
   )
   `,
+  `ALTER TABLE job_runs ALTER COLUMN finished_at DROP NOT NULL`,
   `
   CREATE TABLE IF NOT EXISTS candidate_configs (
     id SERIAL PRIMARY KEY,

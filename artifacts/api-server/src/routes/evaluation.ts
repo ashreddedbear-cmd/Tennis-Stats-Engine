@@ -59,7 +59,7 @@ import {
   orchestrateBridgeRefresh,
   type DbLike as BridgeDbLike,
 } from "../services/historicalData/externalCsvBridge";
-import { startBridgeRescoreJob, getBridgeRescoreJobStatus } from "../services/evaluation/bridgeRescoreJob";
+import { startBridgeRescoreJob, getBridgeRescoreJobStatus, BRIDGE_RESCORE_JOB_NAME } from "../services/evaluation/bridgeRescoreJob";
 import { getTennisDataProvider } from "../services/tennisData";
 import { HISTORICAL_BACKFILL_JOB_NAME } from "../jobs/historicalBackfillJobName";
 import {
@@ -593,6 +593,26 @@ router.get("/paper-trading/job-runs", async (req, res): Promise<void> => {
   res.json(ListPaperTradingJobRunsResponse.parse(rows));
 });
 
+router.get("/evaluation/bridge-rescore/status", async (_req, res): Promise<void> => {
+  const [latestRun] = await db
+    .select()
+    .from(jobRunsTable)
+    .where(eq(jobRunsTable.jobName, BRIDGE_RESCORE_JOB_NAME))
+    .orderBy(desc(jobRunsTable.startedAt))
+    .limit(1);
+
+  res.json(latestRun
+    ? {
+        id: latestRun.id,
+        status: latestRun.status,
+        startedAt: latestRun.startedAt.toISOString(),
+        finishedAt: latestRun.finishedAt?.toISOString() ?? null,
+        matchesRescored: (latestRun.summary as { rowsRescored?: number } | null)?.rowsRescored ?? 0,
+        errorMessage: latestRun.errorMessage,
+      }
+    : null);
+});
+
 /**
  * Task #33: Admin-only trigger for a full calibration refit (walk-forward with evaluationOnly=false).
  * Protected by requireAdmin (bypasses the subscription entitlement gate) so the owner can always
@@ -721,7 +741,7 @@ router.get("/evaluation/calibration-refit/health", async (_req, res): Promise<vo
           id: run.id,
           status: run.status,
           startedAt: run.startedAt.toISOString(),
-          finishedAt: run.finishedAt.toISOString(),
+          finishedAt: run.finishedAt?.toISOString() ?? null,
           ageHours: ageHours === null ? null : Math.round(ageHours * 10) / 10,
           attempts: run.attempts,
           summary,
