@@ -743,6 +743,21 @@ router.post("/evaluation/calibration-refit", requireAdmin, async (_req, res): Pr
 });
 
 /**
+ * Admin-only trigger for a full walk-forward refit (evaluationOnly=false). Bypasses the
+ * subscription entitlement gate so the owner can always refit the model. Runs in the background
+ * — poll GET /evaluation/walk-forward/status to track progress.
+ *
+ * This is the admin counterpart to POST /evaluation/walk-forward/run (entitlement-gated).
+ * It always passes evaluationOnly=false so the calibration and specialist models are refitted;
+ * it will never silently skip calibration the way a body-less POST to the user-facing endpoint
+ * would. Use POST /evaluation/calibration-refit for the cooldown-guarded admin calibration path.
+ */
+router.post("/evaluation/walk-forward/full-refit", requireAdmin, async (_req, res): Promise<void> => {
+  const result = startWalkForwardJob({ evaluationOnly: false });
+  res.json(result);
+});
+
+/**
  * Admin-only trigger for an evaluation-only walk-forward: scores all currently unscored
  * historical matches and writes them into evaluation_predictions WITHOUT touching the
  * calibration_models or specialist_models tables.

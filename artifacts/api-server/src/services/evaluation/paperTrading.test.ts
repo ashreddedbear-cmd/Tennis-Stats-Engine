@@ -82,15 +82,17 @@ function makeFixture(id: string, startOffsetMs: number): Fixture {
 test("paper trading cycle: locks at cutoff, misses once the lock-grace window elapses, never locks late", async (t) => {
   const MINUTE = 60_000;
   const LEAD_MINUTES = 30; // matches predictionSettingsTable default paperTradeLeadMinutes
-  const GRACE_MINUTES = 15; // matches LOCK_GRACE_MINUTES in paperTrading.ts
+  const GRACE_MINUTES = 25; // matches LOCK_GRACE_MINUTES in paperTrading.ts
 
   // A: starts far in the future -- cutoff hasn't arrived yet, must be untouched this cycle.
   const notYetDue = makeFixture("ptt-not-due", (LEAD_MINUTES + 60) * MINUTE);
-  // B: cutoff arrived a few minutes ago, well inside the lock grace window -- must be locked.
-  const withinGrace = makeFixture("ptt-within-grace", (LEAD_MINUTES - 5) * MINUTE);
-  // C: cutoff passed more than the grace window ago, but match hasn't started -- must be missed,
-  //    not locked (this is the exact regression this test guards against).
-  const pastGrace = makeFixture("ptt-past-grace", (LEAD_MINUTES - GRACE_MINUTES - 5) * MINUTE);
+  // B: cutoff arrived a few minutes ago, well within the lock grace window -- must be locked.
+  //    (cutoff was 20 min ago; grace=25 min, so 20 < 25 → still within grace)
+  const withinGrace = makeFixture("ptt-within-grace", (LEAD_MINUTES - 20) * MINUTE);
+  // C: cutoff passed more than the grace window ago, but match hasn't started yet -- must be
+  //    missed, not locked (guards against locking a prediction too close to or after the deadline).
+  //    (cutoff was 27 min ago; grace=25 min, so 27 > 25 → past grace; match still 3 min away)
+  const pastGrace = makeFixture("ptt-past-grace", (LEAD_MINUTES - GRACE_MINUTES - 2) * MINUTE);
   // D: match has already started with nothing ever locked -- must be missed.
   const alreadyStarted = makeFixture("ptt-already-started", -5 * MINUTE);
 

@@ -13,7 +13,7 @@
 
 import { logger } from "../../lib/logger";
 import { db, jobRunsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { runBridgeRescore, type BridgeRescoreResult } from "./bridgeRescore";
 
 export const BRIDGE_RESCORE_JOB_NAME = "bridge-rescore";
@@ -28,7 +28,7 @@ const persistence: BridgeRescoreJobPersistence = {
     const [run] = await db.insert(jobRunsTable).values({
       jobName: BRIDGE_RESCORE_JOB_NAME,
       startedAt,
-      finishedAt: null,
+      finishedAt: sql`NULL`, // column is nullable; sql`NULL` satisfies the required-field insert type
       status: "running",
       attempts: 1,
       summary: { rowsRescored: 0 },

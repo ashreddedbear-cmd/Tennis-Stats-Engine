@@ -11,14 +11,30 @@ import { extractFallbackInstrumentation } from "./fallbackInstrumentation";
 
 /**
  * How long after a fixture's cutoff instant the cycle will still lock a fresh prediction for it.
- * This exists only to absorb the polling cadence of the periodic cycle (so a fixture whose
- * cutoff fell between two runs still gets caught) -- it is NOT a second, looser cutoff. Once this
- * grace period elapses with nothing locked, the fixture is marked 'missed' immediately, even
- * though the match itself may not have started yet. Locking a "pre-match" prediction late (close
- * to or after the intended cutoff) would defeat the point of a cutoff, so this window is kept
- * tight -- matched to the cycle's own polling interval, not to the match start time.
+ *
+ * Two distinct latency sources must both fit inside this window:
+ *  1. **Polling cadence gap** — the in-process timer fires every 15 minutes, but each cycle
+ *     takes 22-26 minutes (ledger grading N pending user predictions). The effective inter-cycle
+ *     gap is therefore 37-50 minutes. A fixture whose cutoff falls between two runs can sit
+ *     uncaught for that entire gap.
+ *  2. **Provider fixture-visibility latency** — confirmed live (Aug 2026): API-Tennis does not
+ *     publish all upcoming fixtures 30+ minutes in advance. For some tournaments (e.g. National
+ *     Bank Open) fixtures only appear in the `get_fixtures` feed 8-15 minutes before their
+ *     scheduled start. With `paperTradeLeadMinutes=30`, the cutoff is 30 minutes before start and
+ *     the lock deadline under the old 15-minute grace was 15 minutes before start — so any
+ *     fixture that first became visible 16+ minutes after cutoff was immediately marked 'missed'.
+ *
+ * Setting this to 25 minutes makes the lock deadline 5 minutes before the scheduled start
+ * (`paperTradeLeadMinutes=30 − LOCK_GRACE_MINUTES=25 = 5 min`). Combined with the hard guard
+ * `now >= scheduledStartAt → missed`, the pipeline NEVER locks a prediction after the match has
+ * already started. Predictions locked in this extended window are late relative to the intended
+ * 30-minute pre-match cutoff, but they are still genuine pre-match predictions and far more
+ * useful than no prediction at all for pipeline health monitoring.
+ *
+ * Recalibrate if `paperTradeLeadMinutes` changes — the invariant to preserve is:
+ *   paperTradeLeadMinutes - LOCK_GRACE_MINUTES > 0  (lock deadline stays before match start)
  */
-const LOCK_GRACE_MINUTES = 15;
+const LOCK_GRACE_MINUTES = 25;
 
 function todayPlus(days: number): string {
   const d = new Date();
