@@ -1,0 +1,84 @@
+Let me read the remaining parts of the key files and understand the full scope needed.
+Let me get the remaining pieces I need to understand the full scoring function and DB schema.
+Now I have a complete picture. Let me check a few more pieces before writing the implementation.
+Let me check the test file count and understand what we're working with, then I'll write the implementation.
+Now I have all the context I need. Let me look at one more thing quickly, then write the full implementation.
+Let me read the remaining critical sections of builderScoringService.ts to understand the full structure:
+Let me read the remaining key sections to understand the full factor scoring and return structure:
+Let me check the exact signatures I need before writing all the code:
+Let me check makeStats in the test file and a few more sections:
+Let me check the adminParlay.ts validate route structure before writing all the code:
+Let me read the remaining key sections I need before writing any code.
+Now I have all the context I need. Let me implement everything. The plan has been worked out in detail — I'll write all production and test code changes in parallel, then run the tests.
+Now I have all the context I need. Let me implement everything in parallel batches, starting with the largest files.
+Let me continue with all remaining file edits in parallel batches.
+Continuing with all remaining edits in parallel:
+Let me continue with all remaining file edits in parallel batches:
+Let me continue the remaining edits in parallel:
+Let me do multiple parallel edits across all the files that need changes:
+Let me continue making all remaining edits in parallel batches:
+Let me continue with all remaining file edits in parallel:
+Let me read all the sections I need to edit in parallel:
+Let me do many edits in parallel now across all files:
+Let me continue with all remaining edits in parallel batches:
+Let me now do all remaining edits in parallel batches:
+Let me do all remaining edits in parallel:
+Let me continue with all remaining edits in parallel:
+Let me continue with all remaining file edits in parallel:
+Let me read the validate route in adminParlay.ts and find the right location for outcome tracking:
+Let me find the validate route and the end of ensureEvaluationSchema in parallel:
+Let me read the validate route now and do all remaining edits in parallel:
+Now I'll do all remaining edits in parallel:
+Let me continue with all remaining edits in parallel:
+Let me do all remaining edits in parallel:
+Now let me fix the test file and add all new tests:
+Now let me fix the failing test assertion and add all new tests:
+Let me update the comment about 27% in the test file and then add all new tests at the end:
+Let me add all 32+ new tests at the end of the test file:
+Let me now run the tests to see if everything compiles and passes:
+Let me fix both TypeScript errors in parallel:
+Let me fix the remaining type error:
+TypeScript compiles clean. Now let me run the full invariant test suite:
+Let me check the test results since the workflow is still running:
+The tests are still running. Let me wait for the full results:
+The new tests are all passing. Let me get the full count to confirm 300+ tests:
+Let me check if the test workflow has completed:
+All 342 tests pass with 0 failures. Let me read the follow-up tasks skill and then complete the task:
+342 tests, 342 pass, 0 fail. All Phase 1 work is complete. Let me propose follow-up tasks and mark complete:
+The reviewer identified two gaps:
+
+No grading job exists to fill actual_winner_id / included_in_accuracy — the log is permanently empty
+Fixture identity resolution uses "nearest to now" which can cross-pair unrelated matches
+I'll fix both by: adding stable identity columns to the log, fixing resolution to use scheduledStart, adding an idempotent grading job, and adding targeted tests. Let me start by reading the current state of the relevant files:
+I need to fix both issues: add a grading job and fix the unsafe fixture identity resolution. Let me read all relevant context first:
+Now I'll implement the three fixes in parallel: update schema, fix unsafe resolution, add grading job + pure logic + tests:
+Now let me fix the unsafe resolution in adminParlay.ts and add the grading function — all in parallel:
+Let me fix the unsafe resolution and add the grading job in parallel:
+Now let me add the grading job function to builderScoringService.ts, the endpoint to adminParlay.ts, and the tests — all in parallel:
+Let me add the grading endpoint and new tests in parallel:
+Now let me add the grading tests and update the imports in the test file in parallel:
+Let me add the grading logic tests at the end of the test file:
+TypeScript is clean. Let me run the full test suite:
+Let me wait for the test results:
+The test workflow hasn't produced new output yet. Let me check directly:
+352 tests, 352 pass, 0 fail. Let me update memory and mark complete:
+The reviewer found that matchRowToMatchRecord sets all stats to null/empty, so computeServeReturnModule always returns defaulted:true but we're including it at full weight as limited. I need to check what fields the module actually uses, then decide whether to populate them from score data or mark the factors genuinely unavailable.
+The module needs either real point stats OR setGameMargins from set scores. The builder rows have a score field (set scores). Let me check what format is available:
+The proxy path uses setGameMargins — and the builder rows have a score field with set scores (e.g. "6-4 7-5"). The fix is to parse that field into setGameMargins. Let me check the exact format:
+Let me understand the exact types needed:
+The MatchRow has no score field — I need to check what the DB query selects and what historical_matches has available:
+I see that setMargins.ts references historical_matches.game_margins_player1. Let me check if those columns exist and look at the expected format:
+Now I understand: game_margins_player1 is a JSON array { player1Games, player2Games }[] in the DB. I need to:
+
+Add it to the MatchRow interface and DB query
+Parse it into setGameMargins (with player-perspective flip for player2)
+When defaulted: true → mark Serve/Return as unavailable, not limited
+Add tests proving non-neutral output and the unavailable fallback
+Let me first confirm the exact DB column name and format:
+Good — I see the exact format. Let me check how dbHistoryFallback.ts converts game margins to setGameMargins, and also look at the serveReturn module's computeServeReturnModule signature to understand where defaulted is set:
+Now I have the complete picture. The fix requires three changes:
+
+Add game_margins_player1 to the DB query + MatchRow + convert in matchRowToMatchRecord
+When srResult.defaulted === true (no margin data) → mark unavailable, not limited
+Add tests for real margins → non-neutral output and defaulted → unavailable
+Let me look at how unavailable factors are added vs limited:
