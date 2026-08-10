@@ -2154,6 +2154,92 @@ function emptyAccuracyStats(): BuilderAccuracyStats {
 }
 
 // ---------------------------------------------------------------------------
+// Per-decision-tier accuracy (Task #34)
+// ---------------------------------------------------------------------------
+
+export interface BuilderDecisionTierStats {
+  decision: string;
+  picked: number;
+  correct: number;
+  accuracyPct: number;
+}
+
+export interface BuilderAccuracyByDecisionStats {
+  byDecision: BuilderDecisionTierStats[];
+  keepAccuracyPct: number | null;
+  borderlineAccuracyPct: number | null;
+  /** KEEP accuracy minus BORDERLINE accuracy in percentage points. Positive = KEEP more accurate. */
+  keepVsBorderlineGapPp: number | null;
+  /** Minimum graded-picked rows per tier required before invariantMet is evaluated. */
+  minSampleForComparison: number;
+  /**
+   * true  — KEEP accuracy strictly > BORDERLINE (invariant holds)
+   * false — KEEP accuracy ≤ BORDERLINE (invariant violated — investigate)
+   * null  — at least one tier has fewer than minSampleForComparison rows
+   */
+  invariantMet: boolean | null;
+}
+
+/**
+ * Minimum graded rows per tier before the KEEP > BORDERLINE invariant is evaluated.
+ * Below this the sample is too small for the comparison to be meaningful.
+ */
+export const MIN_SAMPLE_FOR_TIER_COMPARISON = 50;
+
+/**
+ * Compute per-decision-tier accuracy from builder_decision_log.
+ *
+ * Invariant (Task #34): KEEP decisions should remain more accurate than BORDERLINE ones
+ * as the graded sample grows. invariantMet encodes the current state:
+ *   true  — holds
+ *   false — violated (worth investigating)
+ *   null  — sample too small to evaluate (<MIN_SAMPLE_FOR_TIER_COMPARISON per tier)
+ *
+ * Uses the same no-source-filter policy as computeBuilderAccuracyStats: all sources
+ * (live / backfill / backfill_approx) contribute valid accuracy signal since accuracy
+ * is builder_picked_player_id vs actual_winner_id, not caller_agrees_with_engine.
+ */
+export async function computeBuilderAccuracyByDecision(): Promise<BuilderAccuracyByDecisionStats> {
+  try {
+    const result = await pool.query<{
+      builder_decision: string;
+      picked: string;
+      correct: string;
+    }>(`
+      SELECT builder_decision,
+        COUNT(*) FILTER (WHERE included_in_accuracy = true)::text                                              AS picked,
+        COUNT(*) FILTER (WHERE included_in_accuracy = true
+                           AND builder_picked_player_id = actual_winner_id)::text                             AS correct
+      FROM builder_decision_log
+      WHERE actual_winner_id IS NOT NULL
+      GROUP BY builder_decision
+      ORDER BY builder_decision
+    `);
+
+    const byDecision: BuilderDecisionTierStats[] = result.rows.map(r => {
+      const picked  = parseInt(r.picked)  || 0;
+      const correct = parseInt(r.correct) || 0;
+      return { decision: r.builder_decision, picked, correct, accuracyPct: picked > 0 ? Math.round((correct / picked) * 100) : 0 };
+    });
+
+    const keepRow       = byDecision.find(r => r.decision === "KEEP");
+    const borderlineRow = byDecision.find(r => r.decision === "BORDERLINE");
+    const keepAccuracyPct       = keepRow       && keepRow.picked       > 0 ? keepRow.accuracyPct       : null;
+    const borderlineAccuracyPct = borderlineRow && borderlineRow.picked > 0 ? borderlineRow.accuracyPct : null;
+    const enoughSample = (keepRow?.picked ?? 0) >= MIN_SAMPLE_FOR_TIER_COMPARISON
+                      && (borderlineRow?.picked ?? 0) >= MIN_SAMPLE_FOR_TIER_COMPARISON;
+    const keepVsBorderlineGapPp = keepAccuracyPct !== null && borderlineAccuracyPct !== null
+      ? keepAccuracyPct - borderlineAccuracyPct : null;
+    const invariantMet = enoughSample && keepAccuracyPct !== null && borderlineAccuracyPct !== null
+      ? keepAccuracyPct > borderlineAccuracyPct : null;
+
+    return { byDecision, keepAccuracyPct, borderlineAccuracyPct, keepVsBorderlineGapPp, minSampleForComparison: MIN_SAMPLE_FOR_TIER_COMPARISON, invariantMet };
+  } catch {
+    return { byDecision: [], keepAccuracyPct: null, borderlineAccuracyPct: null, keepVsBorderlineGapPp: null, minSampleForComparison: MIN_SAMPLE_FOR_TIER_COMPARISON, invariantMet: null };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Pure accuracy aggregation mirror — for unit tests
 // ---------------------------------------------------------------------------
 //
@@ -2179,6 +2265,8 @@ export interface __TEST_AccuracyRow {
    * not silently train the accuracy signal.
    */
   source: string;
+  /** Maps to builder_decision_log.builder_decision: 'KEEP' | 'BORDERLINE' | 'REMOVE' | 'DATA_UNAVAILABLE'. */
+  builder_decision: string;
 }
 
 /**
@@ -2239,6 +2327,64 @@ export function __TEST_computeAccuracyFromRows(rows: __TEST_AccuracyRow[]): Buil
   const coverageWarning = coveragePct < 30 ? "COVERAGE_WARNING: below minimum threshold" : null;
 
   return { totalEligible, totalPicked, coveragePct, correctPicks, accuracyPct, totalAbstained, coverageWarning };
+}
+
+// ---------------------------------------------------------------------------
+// Pure per-decision accuracy mirror — for unit tests (Task #34)
+// ---------------------------------------------------------------------------
+//
+// Mirrors the GROUP BY query in computeBuilderAccuracyByDecision in plain TypeScript
+// so tests can exercise the invariant logic without a real database.
+// MUST stay in sync with the SQL query whenever it changes.
+// @internal — never import in production code.
+
+/**
+ * Pure JS mirror of computeBuilderAccuracyByDecision's SQL GROUP BY query.
+ *
+ * Mirrors:
+ *   WHERE actual_winner_id IS NOT NULL (settled rows only)
+ *   GROUP BY builder_decision
+ *   COUNT(*) FILTER (WHERE included_in_accuracy = true)
+ *   COUNT(*) FILTER (WHERE included_in_accuracy = true AND builder_picked_player_id = actual_winner_id)
+ *
+ * @internal exported as __TEST_computeAccuracyByDecision
+ */
+export function __TEST_computeAccuracyByDecision(rows: __TEST_AccuracyRow[]): BuilderAccuracyByDecisionStats {
+  // Mirror: WHERE actual_winner_id IS NOT NULL
+  const gradedRows = rows.filter(r => r.actual_winner_id !== null);
+
+  // GROUP BY builder_decision
+  const groups = new Map<string, { picked: number; correct: number }>();
+  for (const row of gradedRows) {
+    const g = groups.get(row.builder_decision) ?? { picked: 0, correct: 0 };
+    if (row.included_in_accuracy === true) {
+      g.picked++;
+      if (row.builder_picked_player_id === row.actual_winner_id) g.correct++;
+    }
+    groups.set(row.builder_decision, g);
+  }
+
+  const byDecision: BuilderDecisionTierStats[] = Array.from(groups.entries())
+    .map(([decision, { picked, correct }]) => ({
+      decision,
+      picked,
+      correct,
+      accuracyPct: picked > 0 ? Math.round((correct / picked) * 100) : 0,
+    }))
+    .sort((a, b) => a.decision.localeCompare(b.decision));
+
+  const keepRow       = byDecision.find(r => r.decision === "KEEP");
+  const borderlineRow = byDecision.find(r => r.decision === "BORDERLINE");
+  const keepAccuracyPct       = keepRow       && keepRow.picked       > 0 ? keepRow.accuracyPct       : null;
+  const borderlineAccuracyPct = borderlineRow && borderlineRow.picked > 0 ? borderlineRow.accuracyPct : null;
+  const enoughSample = (keepRow?.picked ?? 0) >= MIN_SAMPLE_FOR_TIER_COMPARISON
+                    && (borderlineRow?.picked ?? 0) >= MIN_SAMPLE_FOR_TIER_COMPARISON;
+  const keepVsBorderlineGapPp = keepAccuracyPct !== null && borderlineAccuracyPct !== null
+    ? keepAccuracyPct - borderlineAccuracyPct : null;
+  const invariantMet = enoughSample && keepAccuracyPct !== null && borderlineAccuracyPct !== null
+    ? keepAccuracyPct > borderlineAccuracyPct : null;
+
+  return { byDecision, keepAccuracyPct, borderlineAccuracyPct, keepVsBorderlineGapPp, minSampleForComparison: MIN_SAMPLE_FOR_TIER_COMPARISON, invariantMet };
 }
 
 // ---------------------------------------------------------------------------

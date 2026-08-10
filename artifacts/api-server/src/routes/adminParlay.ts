@@ -15,6 +15,7 @@ import { logger } from "../lib/logger.js";
 import {
   computeBuilderScore,
   computeBuilderAccuracyStats,
+  computeBuilderAccuracyByDecision,
   gradeBuilderDecisions,
   writeBuilderDecisionLog,
   type BuilderSnapshot,
@@ -1176,8 +1177,11 @@ router.get("/admin/parlay/history", requireAdmin, async (req, res): Promise<void
 // Returns accuracy stats from builder_decision_log. Coverage < 30% triggers a mandatory label.
 router.get("/admin/parlay/builder-accuracy", requireAdmin, async (_req, res): Promise<void> => {
   try {
-    const stats = await computeBuilderAccuracyStats();
-    res.json(stats);
+    const [stats, byDecision] = await Promise.all([
+      computeBuilderAccuracyStats(),
+      computeBuilderAccuracyByDecision(),
+    ]);
+    res.json({ ...stats, byDecision });
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : "Failed to compute accuracy" });
   }

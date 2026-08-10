@@ -33,6 +33,7 @@ import assert from "node:assert/strict";
 import {
   __TEST_computeScoring,
   __TEST_computeAccuracyFromRows,
+  __TEST_computeAccuracyByDecision,
   __TEST_isStaleResult,
   __TEST_applyStalenessSupplementIfNeeded,
   __TEST_filterRowsByCeiling,
@@ -41,6 +42,7 @@ import {
   __TEST_STALE_MIN_MATCH_COUNT,
   __TEST_STALE_MAX_MATCH_AGE_DAYS,
   THIN_DATA_RISK_FLOOR,
+  MIN_SAMPLE_FOR_TIER_COMPARISON,
   thinDataRiskFloor,
   computeBuilderAccuracyStats,
   computePlayerStats,
@@ -50,6 +52,7 @@ import {
   type PlayerStats,
   type __TEST_ScoringResult,
   type BuilderAccuracyStats,
+  type BuilderAccuracyByDecisionStats,
   type __TEST_AccuracyRow,
 } from "./builderScoringService.js";
 
@@ -1854,6 +1857,7 @@ describe("__TEST_computeAccuracyFromRows — dedup and aggregation invariants", 
     included_in_accuracy: true,
     created_at: t(0),
     source: "live",
+    builder_decision: "KEEP",
   };
 
   it("three validations of the same fixture — only the first (earliest created_at) counts toward accuracy", () => {
@@ -1896,6 +1900,7 @@ describe("__TEST_computeAccuracyFromRows — dedup and aggregation invariants", 
         included_in_accuracy: null,
         created_at: t(0),
         source: "live",
+        builder_decision: "BORDERLINE",
       },
     ];
     const stats = __TEST_computeAccuracyFromRows(rows);
@@ -1914,6 +1919,7 @@ describe("__TEST_computeAccuracyFromRows — dedup and aggregation invariants", 
       included_in_accuracy: null,
       created_at: t(0),
       source: "live",
+      builder_decision: "BORDERLINE",
     };
     const rows: __TEST_AccuracyRow[] = [
       { ...abstainedBase, created_at: t(0) },
@@ -1937,6 +1943,7 @@ describe("__TEST_computeAccuracyFromRows — dedup and aggregation invariants", 
         actual_winner_id: null, included_in_accuracy: null,
         created_at: t(100),
         source: "live",
+        builder_decision: "BORDERLINE",
       },
     ];
     const stats = __TEST_computeAccuracyFromRows(rows);
@@ -1967,6 +1974,7 @@ describe("__TEST_computeAccuracyFromRows — dedup and aggregation invariants", 
         builder_picked_player_id: "pa",
         actual_winner_id: null, included_in_accuracy: null,
         source: "backfill_approx",
+        builder_decision: "BORDERLINE",
         created_at: t(0),
       },
     ];
@@ -1990,7 +1998,7 @@ describe("__TEST_computeAccuracyFromRows — dedup and aggregation invariants", 
         match_scheduled_at: matchDate,
         builder_picked_player_id: "alpha",
         actual_winner_id: null, included_in_accuracy: null,
-        source: "live",
+        source: "live", builder_decision: "BORDERLINE",
         created_at: t(0),
       },
       {
@@ -1999,12 +2007,124 @@ describe("__TEST_computeAccuracyFromRows — dedup and aggregation invariants", 
         match_scheduled_at: matchDate,
         builder_picked_player_id: "beta",
         actual_winner_id: null, included_in_accuracy: null,
-        source: "live",
+        source: "live", builder_decision: "BORDERLINE",
         created_at: t(5000),
       },
     ];
     const stats = __TEST_computeAccuracyFromRows(rows);
     assert.strictEqual(stats.totalAbstained, 1,
       "same fixture validated twice with swapped player order must dedup to total_abstained = 1");
+  });
+});
+
+// ── __TEST_computeAccuracyByDecision — per-tier invariant tests (Task #34) ──
+//
+// These tests exercise the JS mirror of computeBuilderAccuracyByDecision's SQL GROUP BY query.
+// The core invariant: KEEP decisions must remain more accurate than BORDERLINE ones.
+
+describe("__TEST_computeAccuracyByDecision — KEEP > BORDERLINE invariant", () => {
+  const t = (offsetMs: number): Date => new Date(1_700_000_000_000 + offsetMs);
+
+  /** Helper: build N settled rows for a given decision tier with a given correct ratio. */
+  function makeTierRows(
+    decision: "KEEP" | "BORDERLINE" | "REMOVE",
+    n: number,
+    correctFraction: number,
+    startId: number,
+  ): __TEST_AccuracyRow[] {
+    return Array.from({ length: n }, (_, i) => {
+      const correct = i < Math.round(n * correctFraction);
+      return {
+        historical_match_id: startId + i,
+        player_one_id: "p1", player_two_id: "p2",
+        match_scheduled_at: new Date("2024-06-01T12:00:00Z"),
+        builder_picked_player_id: correct ? "winner" : "loser",
+        actual_winner_id: "winner",
+        included_in_accuracy: true,
+        created_at: t(i),
+        source: "live",
+        builder_decision: decision,
+      };
+    });
+  }
+
+  it("invariantMet: true — KEEP accuracy strictly greater than BORDERLINE", () => {
+    // 80 KEEP rows at 80% correct, 80 BORDERLINE rows at 60% correct
+    const rows = [
+      ...makeTierRows("KEEP",       80, 0.80, 1000),
+      ...makeTierRows("BORDERLINE", 80, 0.60, 2000),
+    ];
+    const stats = __TEST_computeAccuracyByDecision(rows);
+    assert.strictEqual(stats.invariantMet, true,
+      "KEEP(80%) > BORDERLINE(60%) — invariant must hold");
+    assert.ok((stats.keepVsBorderlineGapPp ?? 0) > 0,
+      "gap must be positive when KEEP outperforms BORDERLINE");
+    assert.strictEqual(stats.keepAccuracyPct, 80);
+    assert.strictEqual(stats.borderlineAccuracyPct, 60);
+  });
+
+  it("invariantMet: false — KEEP accuracy at or below BORDERLINE (inverted)", () => {
+    // 80 KEEP at 55%, 80 BORDERLINE at 70% — inverted
+    const rows = [
+      ...makeTierRows("KEEP",       80, 0.55, 1000),
+      ...makeTierRows("BORDERLINE", 80, 0.70, 2000),
+    ];
+    const stats = __TEST_computeAccuracyByDecision(rows);
+    assert.strictEqual(stats.invariantMet, false,
+      "KEEP(55%) < BORDERLINE(70%) — invariant must be flagged as violated");
+    assert.ok((stats.keepVsBorderlineGapPp ?? 0) < 0,
+      "gap must be negative when BORDERLINE outperforms KEEP");
+  });
+
+  it("invariantMet: null — sample below minSampleForComparison (< 50 per tier)", () => {
+    // Only 10 rows per tier — too few to evaluate
+    const rows = [
+      ...makeTierRows("KEEP",       10, 0.80, 1000),
+      ...makeTierRows("BORDERLINE", 10, 0.50, 2000),
+    ];
+    const stats = __TEST_computeAccuracyByDecision(rows);
+    assert.strictEqual(stats.invariantMet, null,
+      "invariantMet must be null when sample is below minSampleForComparison");
+    assert.strictEqual(stats.minSampleForComparison, MIN_SAMPLE_FOR_TIER_COMPARISON);
+  });
+
+  it("REMOVE tier accuracy is reported separately and does not affect the KEEP/BORDERLINE invariant", () => {
+    // KEEP and BORDERLINE each have 80 rows; REMOVE has 20 rows — regardless of REMOVE accuracy
+    // the invariant is still evaluated on KEEP vs BORDERLINE only
+    const rows = [
+      ...makeTierRows("KEEP",       80, 0.80, 1000),
+      ...makeTierRows("BORDERLINE", 80, 0.60, 2000),
+      ...makeTierRows("REMOVE",     20, 0.30, 3000),  // low accuracy — must not affect invariant
+    ];
+    const stats = __TEST_computeAccuracyByDecision(rows);
+    assert.strictEqual(stats.invariantMet, true, "REMOVE tier must not affect invariantMet");
+    const removeRow = stats.byDecision.find(r => r.decision === "REMOVE");
+    assert.ok(removeRow, "REMOVE tier must appear in byDecision");
+    assert.strictEqual(removeRow?.picked, 20);
+  });
+
+  it("ungraded rows (actual_winner_id = null) are excluded from per-tier counts", () => {
+    // Mix of settled and ungraded KEEP rows
+    const settledKeep  = makeTierRows("KEEP", 80, 0.80, 1000);
+    const ungradedKeep: __TEST_AccuracyRow[] = Array.from({ length: 10 }, (_, i) => ({
+      historical_match_id: 5000 + i,
+      player_one_id: "p1", player_two_id: "p2",
+      match_scheduled_at: null,
+      builder_picked_player_id: "winner",
+      actual_winner_id: null,   // ungraded — must not count
+      included_in_accuracy: null,
+      created_at: t(i),
+      source: "live",
+      builder_decision: "KEEP",
+    }));
+    const rows = [
+      ...settledKeep,
+      ...ungradedKeep,
+      ...makeTierRows("BORDERLINE", 80, 0.60, 2000),
+    ];
+    const stats = __TEST_computeAccuracyByDecision(rows);
+    const keepRow = stats.byDecision.find(r => r.decision === "KEEP");
+    assert.strictEqual(keepRow?.picked, 80, "ungraded rows must not inflate the KEEP picked count");
+    assert.strictEqual(stats.invariantMet, true);
   });
 });
