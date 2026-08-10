@@ -871,6 +871,17 @@ router.post("/evaluation/external-csv-backfill/run", requireAdmin, async (req, r
   const startedAt = new Date();
   runExternalCsvBackfill({ files: absFiles })
     .then(async (result) => {
+      const bridgeRefresh = await orchestrateBridgeRefresh({
+        affectedMatchIds: result.bridge.affectedMatchIds,
+        resolved: result.bridge.resolved,
+        db: db as unknown as BridgeDbLike,
+        isJobRunning: () =>
+          getWalkForwardJobStatus().state === "running" ||
+          getBridgeRescoreJobStatus().state === "running",
+        clearPredictions: (dbLike, ids) => clearAffectedEvalPredictions(dbLike, ids),
+        startJob: (ids) => startBridgeRescoreJob(ids),
+      });
+
       await db.insert(jobRunsTable).values({
         jobName,
         startedAt,
@@ -893,6 +904,9 @@ router.post("/evaluation/external-csv-backfill/run", requireAdmin, async (req, r
             featureRowsUpdated:  result.bridge.featureRowsUpdated,
             atpMatchRate:        result.bridge.atpMatchRate,
             wtaMatchRate:        result.bridge.wtaMatchRate,
+            affectedEvalRowsCleared: bridgeRefresh.affectedEvalRowsCleared,
+            walkForwardStarted:      bridgeRefresh.walkForwardStarted,
+            walkForwardSkipReason:   bridgeRefresh.walkForwardSkipReason ?? null,
           },
         },
         errorMessage: null,
