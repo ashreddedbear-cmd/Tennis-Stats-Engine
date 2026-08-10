@@ -1,0 +1,40 @@
+#178 - Calibration monotonicity & bucket-accuracy check (Step 2 of Task #172)
+
+What & Why
+After the orientation fix (Task #175) and the reliability-floor refit
+(Step 1, 2026-08-10), model #712 is now the active calibration model.
+Before Step 3, we need to confirm two separate things: (1) the
+calibration curve is monotone — it should never assign a lower
+confidence to a higher raw signal than to a lower one — and (2) the
+calibrated output actually tracks observed reality in the buckets that
+were previously broken.
+
+Note: calibrated output being below raw x is NOT itself a problem.
+Calibration is supposed to correct raw scores in both directions —
+pull underconfident predictions up and pull overconfident ones down.
+Do not flag calibrated < raw as a reversal on its own; only monotonicity
+violations and bucket-accuracy gaps are real findings here.
+
+Done looks like
+- Query the validation segment of evaluation_predictions: for each row
+  compute orientedX = max(raw/100, 1-raw/100) and calibratedConfidence
+  = applyCalibrationOriented(model #712 knots, raw/100)
+- Sort by orientedX and confirm calibratedConfidence is monotone
+  non-decreasing across the full validation set — flag any x1 < x2
+  pair where calibrated(x1) > calibrated(x2)
+- For the x=0.66–0.75 bucket (Kostyuk/Swiatek region), compare
+  calibrated output against the empirical win rate observed in that
+  bucket's training data (not against raw x) — flag if the gap
+  exceeds 2pp
+- Repeat the bucket-accuracy check for at least 2 other buckets
+  spanning the range (e.g. x=0.40–0.50 and x=0.85–0.95) to confirm
+  the fix generalizes, not just at the one previously-checked bucket
+- Document findings in docs/audit-task172-step2-reversal-check.md
+- Update .local/tasks/specialist-calibration-audit-and-fix.md to mark
+  Step 2 DONE, or flag specific monotonicity/accuracy violations found
+
+Relevant files
+- artifacts/api-server/src/services/evaluation/calibrationRefitFromExisting.ts — refit implementation, knots at id=712
+- artifacts/api-server/src/services/predictionEngine/calibration.ts — applyCalibrationOriented, pavaFit (reliability floor)
+- artifacts/api-server/docs/audit-task172-step1-implementation.md — fitted knots table, reference cases
+- .local/tasks/specialist-calibration-audit-and-fix.md — step-by-step plan (Step 2 section)

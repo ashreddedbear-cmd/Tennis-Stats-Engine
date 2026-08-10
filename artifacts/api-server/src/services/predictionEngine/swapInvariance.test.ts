@@ -241,3 +241,175 @@ test("swap-invariance swapped: same matchup reversed — assert symmetry ≤ 2pp
     `Predicted winner flipped on slot swap: fwd=${fwdWinner}, swapped=${predictedWinner}. ` +
     `Orientation fix may not have reached all applyCalibration call sites.`);
 });
+
+// ─── Calibrated-not-raw invariants ───────────────────────────────────────────
+//
+// Guard: a future change must not accidentally wire recommendation / predicted-
+// winner logic to rawEnsembleProbability instead of calibratedProbability.
+//
+// Two scenarios:
+//   A) Flat-zone floor: near-even matchup (raw ≈ 50%) — calibration's flat-zone
+//      floor lifts output to ~56%.  Pick and margin must use the lifted value.
+//   B) Knots-determine-output: same matchup, two different calibration curves →
+//      calibratedProbability changes while rawEnsembleProbability stays the same.
+
+// ─── Flat-zone calibration knots (mirrors model #712 left-tail plateau) ──────
+// x ∈ [0, 0.52] → y = 0.56 (floor).  Higher-confidence inputs are compressed.
+const FLAT_ZONE_CALIBRATION: { x: number; y: number }[] = [
+  { x: 0.00, y: 0.56 },
+  { x: 0.52, y: 0.56 },
+  { x: 0.60, y: 0.62 },
+  { x: 0.70, y: 0.68 },
+  { x: 0.80, y: 0.74 },
+  { x: 1.00, y: 0.80 },
+];
+
+// ─── Alternative calibration knots (identity-like, minimal lift) ─────────────
+// Used in scenario B to confirm the output tracks the active knots.
+const IDENTITY_LIKE_CALIBRATION: { x: number; y: number }[] = [
+  { x: 0.00, y: 0.50 },
+  { x: 0.50, y: 0.50 },
+  { x: 0.60, y: 0.60 },
+  { x: 0.70, y: 0.70 },
+  { x: 0.80, y: 0.80 },
+  { x: 1.00, y: 0.90 },
+];
+
+// ─── Near-even matchup players ────────────────────────────────────────────────
+// Rank 50 vs 52 with symmetric win/loss records → raw ensemble ≈ 50%.
+// Some modules will say >50% for player A, others <50% — straddling 50% in
+// raw space — while the calibrated output is lifted above 50% by the flat zone.
+const playerA = makePlayer("even-a", "Player A", 50);
+const playerB = makePlayer("even-b", "Player B", 52);
+
+function makeSymmetricMatches(prefix: string): MatchRecord[] {
+  // 3W / 3L vs similar-ranked opponents — produces near-50% form signal.
+  return [
+    makeMatch(`${prefix}-opp-1`, "Opp One",   48, "W", "Hard", 2025, 1),
+    makeMatch(`${prefix}-opp-2`, "Opp Two",   51, "L", "Hard", 2025, 2),
+    makeMatch(`${prefix}-opp-3`, "Opp Three", 53, "W", "Hard", 2025, 3),
+    makeMatch(`${prefix}-opp-4`, "Opp Four",  47, "L", "Hard", 2025, 4),
+    makeMatch(`${prefix}-opp-5`, "Opp Five",  50, "W", "Hard", 2025, 5),
+    makeMatch(`${prefix}-opp-6`, "Opp Six",   49, "L", "Hard", 2025, 6),
+  ];
+}
+
+test("calibrated-not-raw A: near-50% raw ensemble is lifted by flat-zone calibration — pick and calibratedProbability use calibrated value, not raw", async () => {
+  const h2h: HeadToHeadRecord = { player1Id: playerA.id, player2Id: playerB.id, meetings: [] };
+  const input: PredictionEngineInput = {
+    player1: playerA,
+    player2: playerB,
+    player1Matches: makeSymmetricMatches("a"),
+    player2Matches: makeSymmetricMatches("b"),
+    headToHead: h2h,
+    surface: "Hard",
+    matchFormat: "BestOf3",
+    activeCalibration: FLAT_ZONE_CALIBRATION,
+    // No segment specialist — isolates the general calibration path.
+  };
+
+  const out = await runPredictionEngine(input);
+
+  console.log(`[FLAT-ZONE] raw ensemble P(A=p1):  ${out.rawEnsembleProbability.toFixed(2)}%`);
+  console.log(`[FLAT-ZONE] calibrated P(A=p1):    ${out.calibratedProbability.toFixed(2)}%`);
+  console.log(`[FLAT-ZONE] predicted winner:       ${out.predictedWinnerId}`);
+
+  // 1. Near-even matchup → raw ensemble must be close to 50%.
+  //    Modules will straddle 50% (some >50%, some <50%) by construction.
+  assert.ok(
+    Math.abs(out.rawEnsembleProbability - 50) <= 12,
+    `Expected near-even raw ensemble (within 12pp of 50%), got ${out.rawEnsembleProbability.toFixed(1)}%. ` +
+    `Check that playerA/playerB are equivalently matched.`,
+  );
+
+  // 2. Calibration must actually be applied: calibratedProbability must differ
+  //    from rawEnsembleProbability by more than rounding noise.
+  //    The flat-zone floor guarantees a minimum ~6pp lift for any raw ≤ 52%.
+  assert.notStrictEqual(
+    Math.round(out.calibratedProbability),
+    Math.round(out.rawEnsembleProbability),
+    `calibratedProbability (${out.calibratedProbability.toFixed(1)}%) must differ from ` +
+    `rawEnsembleProbability (${out.rawEnsembleProbability.toFixed(1)}%). ` +
+    `If these are equal, calibration is not being applied — check that activeCalibration ` +
+    `is wired into generalProbability and that applyCalibrationOriented is called.`,
+  );
+
+  // 3. predictedWinnerId must be determined by calibratedProbability (≥50% → player1),
+  //    NOT by rawEnsembleProbability.
+  //    This is the core guard: if someone accidentally wires the pick to raw, a near-50%
+  //    raw ensemble that calibrates to 56% would still assign the correct winner via
+  //    calibrated, but would produce the wrong result via raw when raw < 50%.
+  const calibratedFavorsA = out.calibratedProbability >= 50;
+  const predictedIsA = out.predictedWinnerId === playerA.id;
+  assert.strictEqual(
+    predictedIsA,
+    calibratedFavorsA,
+    `predictedWinnerId must match the calibratedProbability direction. ` +
+    `Got winner=${out.predictedWinnerId}, calibrated=${out.calibratedProbability.toFixed(1)}% ` +
+    `(favours ${calibratedFavorsA ? "A=player1" : "B=player2"}).`,
+  );
+
+  // 4. Calibrated margin must reflect the flat-zone lift (not the raw near-0 margin).
+  //    With flat zone y=0.56 and raw ≤ 52%, expected calibrated output ≈ 56%/44%.
+  //    Calibrated margin should be ≥ 4pp regardless of which side of 50% raw lands on.
+  const calMargin = Math.abs(out.calibratedProbability - 50);
+  assert.ok(
+    calMargin >= 4,
+    `Calibrated margin (${calMargin.toFixed(1)}pp) should be ≥ 4pp for a flat-zone calibration ` +
+    `applied to a near-50% raw ensemble. If it is near 0pp, the raw value is being used instead.`,
+  );
+});
+
+test("calibrated-not-raw B: changing calibration knots changes calibratedProbability but not rawEnsembleProbability", async () => {
+  // Run the strong-vs-weak matchup (well-separated, not a coin flip) with two
+  // different calibration curves.  Only calibratedProbability should change.
+  const base = buildInput(weakPlayer, strongPlayer, weakMatches, strongMatches);
+
+  const inputFlat: PredictionEngineInput = {
+    ...base,
+    activeCalibration: FLAT_ZONE_CALIBRATION,
+    segment: undefined, // no specialist — keep only the general calibration variable
+  };
+  const inputIdentity: PredictionEngineInput = {
+    ...base,
+    activeCalibration: IDENTITY_LIKE_CALIBRATION,
+    segment: undefined,
+  };
+
+  const [outFlat, outIdentity] = await Promise.all([
+    runPredictionEngine(inputFlat),
+    runPredictionEngine(inputIdentity),
+  ]);
+
+  console.log(`[KNOT-B flat]     raw=${outFlat.rawEnsembleProbability.toFixed(2)}%  cal=${outFlat.calibratedProbability.toFixed(2)}%`);
+  console.log(`[KNOT-B identity] raw=${outIdentity.rawEnsembleProbability.toFixed(2)}%  cal=${outIdentity.calibratedProbability.toFixed(2)}%`);
+
+  // Raw ensemble must be identical — it does not depend on calibration knots.
+  assert.strictEqual(
+    outFlat.rawEnsembleProbability,
+    outIdentity.rawEnsembleProbability,
+    `rawEnsembleProbability must be identical across calibration variants. ` +
+    `Got flat=${outFlat.rawEnsembleProbability}, identity=${outIdentity.rawEnsembleProbability}. ` +
+    `Raw ensemble must not depend on calibration knots.`,
+  );
+
+  // Calibrated output must differ — the two curves produce different outputs.
+  // FLAT_ZONE compresses high confidence; IDENTITY_LIKE passes it through.
+  // For a strongly-favoured prediction (strong vs weak), the gap should be visible.
+  assert.notStrictEqual(
+    Math.round(outFlat.calibratedProbability),
+    Math.round(outIdentity.calibratedProbability),
+    `calibratedProbability must differ between FLAT_ZONE and IDENTITY_LIKE calibration. ` +
+    `Got flat=${outFlat.calibratedProbability.toFixed(1)}%, identity=${outIdentity.calibratedProbability.toFixed(1)}%. ` +
+    `If they are equal, calibration knots are not being respected — check applyCalibrationOriented call sites.`,
+  );
+
+  // Both predicted winners must agree on direction (calibration is direction-preserving).
+  assert.strictEqual(
+    outFlat.predictedWinnerId,
+    outIdentity.predictedWinnerId,
+    `Predicted winner must be the same under both calibration curves. ` +
+    `applyCalibrationOriented preserves direction by construction. ` +
+    `Got flat=${outFlat.predictedWinnerId}, identity=${outIdentity.predictedWinnerId}.`,
+  );
+});
