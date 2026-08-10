@@ -846,6 +846,9 @@ router.post("/admin/parlay/backfill", requireAdmin, (req, res): void => {
         `SELECT backfill_match_id FROM parlay_leg_outcomes WHERE backfill_match_id IS NOT NULL`
       );
       const alreadyDone = new Set(existing.map(r => r.backfill_match_id));
+      // Known gap: if the server crashes after the parlay_leg_outcomes INSERT but before the
+      // builder_decision_log INSERT, the match lands in alreadyDone on re-run and permanently
+      // keeps no log row. Recovery: POST /admin/parlay/backfill/seed-decision-log.
 
       const { rows: candidates } = await client.query(`
         SELECT id, player1_id, player2_id, player1_name, player2_name,
@@ -953,6 +956,63 @@ router.post("/admin/parlay/backfill", requireAdmin, (req, res): void => {
 
 router.get("/admin/parlay/backfill/status", requireAdmin, (_req, res): void => {
   res.json({ running: parlayBackfillRunning, lastResult: parlayBackfillLastResult });
+});
+
+/**
+ * POST /admin/parlay/backfill/seed-decision-log
+ *
+ * Retroactive seed: inserts builder_decision_log rows for existing parlay_leg_outcomes
+ * backfill entries that predate the logging addition, or that missed the log write due to
+ * a crash between the two inserts (the known gap documented on alreadyDone above).
+ *
+ * Approximation: builder_picked_player_id is set to selected_player_id (the model's pick).
+ * In the original backfill, selected_player_id IS the model's predicted winner, so this is
+ * accurate when the builder agreed with that pick. The minority of rows where the builder
+ * independently chose the opponent (callerAgreesWithEngine = false) are approximated as
+ * agrees=true — a known limitation of reconstruction without re-running the full engine.
+ * validation_score is used as a proxy for builder_calibrated_probability.
+ *
+ * Safe to re-run: the NOT EXISTS guard prevents duplicates.
+ * Returns: { seeded: N } — the number of new log rows inserted.
+ */
+router.post("/admin/parlay/backfill/seed-decision-log", requireAdmin, async (_req, res): Promise<void> => {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(`
+      INSERT INTO builder_decision_log
+        (historical_match_id, player_one_id, player_two_id, match_scheduled_at,
+         builder_picked_player_id, builder_calibrated_probability,
+         builder_decision, caller_selected_player_id, caller_agrees_with_engine,
+         actual_winner_id, included_in_accuracy)
+      SELECT
+        plo.backfill_match_id,
+        plo.selected_player_id,          -- player_one_id
+        plo.opponent_id,                  -- player_two_id
+        plo.resolved_at,                  -- match_scheduled_at (= asOfDate in original backfill)
+        plo.selected_player_id,          -- builder_picked_player_id (approx: model pick = builder pick)
+        plo.validation_score,             -- builder_calibrated_probability (proxy: stored raw score)
+        plo.decision,                     -- builder_decision
+        plo.selected_player_id,          -- caller_selected_player_id
+        true,                             -- caller_agrees_with_engine (approx: see route comment)
+        plo.actual_winner_id,
+        true                              -- included_in_accuracy: actual_winner_id already known
+      FROM parlay_leg_outcomes plo
+      WHERE plo.backfill_match_id IS NOT NULL
+        AND plo.actual_winner_id IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM builder_decision_log bdl
+          WHERE bdl.historical_match_id = plo.backfill_match_id
+        )
+    `);
+    const seeded = result.rowCount ?? 0;
+    logger.info({ seeded }, "builder_decision_log retroactive seed complete");
+    res.json({ seeded });
+  } catch (err) {
+    logger.error({ err }, "seed-decision-log failed");
+    res.status(500).json({ error: String(err) });
+  } finally {
+    client.release();
+  }
 });
 
 // ── Screenshot Import Service — Health & Cache endpoints ─────────────────────
