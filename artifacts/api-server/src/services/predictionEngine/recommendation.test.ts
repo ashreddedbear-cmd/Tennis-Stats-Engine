@@ -311,3 +311,46 @@ test("calibrated vs raw — inverse: near-coin-flip calibrated probability fires
   assert.equal(result, "INSUFFICIENT_EDGE",
     "calibrated margin=6 with HighDisagreement must be INSUFFICIENT_EDGE — calibrated margin drives the gate, not a hypothetical raw value");
 });
+
+test("raw-module straddle + calibrated-agree: HighDisagreement from raw module conflict does NOT veto a real calibrated margin — displayed tier reflects calibrated probability, not raw disagreement", () => {
+  // Scenario: two underlying modules have raw probabilities on OPPOSITE sides of 50%:
+  //   Module A (e.g. Serve & Return): raw = 42%  → player-2 direction
+  //   Module B (e.g. Surface Elo):    raw = 63%  → player-1 direction
+  //
+  // computeWeightedDisagreement on those inputs would produce:
+  //   coreModelsConflict = true, modelAgreement = "HighDisagreement"
+  //
+  // The weighted ensemble, however, lands clearly on the player-1 side (≈53%), and
+  // after the isotonic calibration (flat-zone floor lifts near-50% raw to ≈57%),
+  // calibratedProbability = 65% — a real 15pp margin.
+  //
+  // The displayed recommendation tier must reflect the CALIBRATED margin, not treat
+  // HighDisagreement as a hard veto.  INSUFFICIENT_EDGE only fires when margin < 8.
+  // If a future change makes HighDisagreement override the calibrated pick regardless
+  // of margin, this test breaks — that is the intended guard.
+  const result = computeRecommendation(
+    65,               // calibratedProbability — clearly on one side (15pp margin)
+    70,               // dataQuality
+    "Strong",         // DQ label — data is available; disagreement is about model direction
+    "HighDisagreement", // modelAgreement — raw module probs straddle 50%
+  );
+
+  // Must NOT be INSUFFICIENT_EDGE: that gate is (margin < 8 AND Mixed|HighDisagreement).
+  // 15pp satisfies neither condition — the calibrated probability is the authoritative signal.
+  assert.notEqual(
+    result,
+    "INSUFFICIENT_EDGE",
+    `HighDisagreement from raw module conflict (modules straddle 50%) must not veto a ` +
+    `15pp calibrated margin. The recommendation tier is driven by calibratedProbability, ` +
+    `not by whether raw module probs agree. Got "${result}" — expected a real confidence tier.`,
+  );
+
+  // Must resolve to a real, pick-bearing tier — not DATA_INCOMPLETE or any non-pick label.
+  assert.equal(
+    result,
+    "MODERATE_CONFIDENCE",
+    `calibratedProbability=65% (margin=15pp) with HighDisagreement should yield ` +
+    `MODERATE_CONFIDENCE (the ≥12pp Mixed/HighDisagreement branch). ` +
+    `The agreement label informs the uncertainty disclosure, not the pick itself.`,
+  );
+});
