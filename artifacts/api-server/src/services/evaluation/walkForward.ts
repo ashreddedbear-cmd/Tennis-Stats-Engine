@@ -79,6 +79,51 @@ function classifyResult(match: { winnerId: string | null; retired: boolean; walk
 export const MIN_ELIGIBLE_FOR_TRAINING = 500;
 
 /**
+ * Maximum age of a historical match's validation point that may contribute to the pooled
+ * calibration model fitted at the end of a training-mode walk-forward run.
+ *
+ * ## Why full-corpus fitting silently degrades live accuracy (Task #193)
+ *
+ * Model #712 was fit on 84,885 rows (full historical corpus, 2000-present). Its global
+ * holdout log-loss (0.6397) barely matched model #691 (0.6390, n=21,570, 2025-2026 rows).
+ * But on the 184 live paper-trade rows, #712 re-applied produced LL=0.6599 — measurably
+ * WORSE than the stored probs from #691 (LL=0.6361). The same dilution caused models #707
+ * and #708 to be discarded in the 2026-08-07/08 incident.
+ *
+ * The mechanism: tennis styles, court speeds, equipment, and the player pool all shift over
+ * multi-year horizons. A model trained on year-2000 ATP patterns learns calibration signals
+ * that no longer apply in 2026. These old rows are not wrong — they were accurate for their
+ * era — but mixing them into a live-serving calibration model pulls the fitted curve away
+ * from the current true function. The global holdout gate (Gate 3, log-loss vs active model)
+ * is insufficient to catch this because the holdout is drawn proportionally from the same
+ * corpus: if 70% of training rows are pre-2024, so are 70% of holdout rows, and the global
+ * LL comparison sees no degradation. The miscalibration only surfaces on a live holdout
+ * drawn entirely from the current distribution.
+ *
+ * ## The fix
+ *
+ * Restrict pooled calibration fitting to validation points from matches within the last
+ * CALIBRATION_WINDOW_MONTHS months. The full corpus is still loaded and used for the scoring
+ * context (Elo trajectories, match history) to preserve point-in-time accuracy — only the
+ * FINAL pooled fit for live deployment is windowed. Per-fold intermediate fits (used for fold
+ * calibration and test-set scoring) are not restricted because they see only their own fold's
+ * data anyway.
+ *
+ * ## Value choice: 24 months
+ *
+ * 24 months stays well above the MIN_HOLDOUT_SAMPLE_SIZE_TO_ACTIVATE floor (500 held-out
+ * rows are needed to pass Gate 2) while being narrow enough to exclude obsolete era patterns.
+ * With the current corpus growth rate (~1,000 new graded rows/month), 24 months yields
+ * ~20,000-30,000 validation points — large enough for a reliable holdout comparison.
+ *
+ * ## Bypass for scoped / test runs
+ *
+ * Scoped runs (matchIds provided) bypass this filter entirely. Their synthetic seed corpus is
+ * already small and time-bounded, so date-based truncation would destroy the holdout sample.
+ */
+export const CALIBRATION_WINDOW_MONTHS = 24;
+
+/**
  * Minimum holdout sample size a newly-fitted calibration model must have before it is
  * allowed to replace the currently active model. A model with holdoutSampleSize > 0 but
  * below this floor was trained on a very small eligible set (e.g. because the historical
@@ -280,7 +325,11 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
 
   const chunkSize = Math.floor(scorable.length / foldCount);
   const foldIds: number[] = [];
-  const allValidationPoints: CalibrationPoint[] = [];
+  // Track validation points with their match date so the pooled calibration fit can be
+  // restricted to the calibration window (CALIBRATION_WINDOW_MONTHS). The matchDate field is
+  // only used for filtering before the final pooled fit and is dropped before calling
+  // fitBestCalibration, which expects plain CalibrationPoint[].
+  const allValidationPoints: Array<CalibrationPoint & { matchDate: Date }> = [];
 
   for (let fold = 0; fold < foldCount; fold++) {
     const chunkStart = fold * chunkSize;
@@ -335,7 +384,7 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
           "calibration training: all providers handled via predicted-winner orientation (Step 1)",
         );
       }
-      const foldValidationPoints: CalibrationPoint[] = foldEligibleNoCache
+      const foldValidationPoints: Array<CalibrationPoint & { matchDate: Date }> = foldEligibleNoCache
         .map((r) => {
           // Orientation fix (2026-08-09): train in predicted-winner space, not player1 space.
           // Sackmann stores the winner as player1 in ~90% of rows, so player1-space training
@@ -347,6 +396,9 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
           return {
             rawProbability: predictedPlayer1 ? raw : 1 - raw,
             outcome: (predictedPlayer1 === r.player1Won ? 1 : 0) as 0 | 1,
+            // matchDate is used later to window the pooled calibration fit to CALIBRATION_WINDOW_MONTHS.
+            // scheduledStartAt is the authoritative match date (set at insert time from the match record).
+            matchDate: r.scheduledStartAt,
           };
         });
       mapping = fitBestCalibration(foldValidationPoints).knots;
@@ -402,11 +454,40 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
     // Training mode: refit the single "live" calibration model from every fold's pooled
     // validation data -- this is what future paper-trade/live predictions will be calibrated with.
     // allValidationPoints was already filtered per-fold to exclude known-bad cascade rows.
+    //
+    // ── Calibration corpus window (Task #193) ──────────────────────────────────
+    // Before fitting, restrict to validation points from the last CALIBRATION_WINDOW_MONTHS
+    // months. Full-corpus fits (e.g. model #712, 84,885 rows) silently miscalibrate live
+    // predictions because old tennis patterns are out-of-distribution relative to the current
+    // player pool and court conditions — even when the global holdout LL looks fine, because
+    // that holdout is drawn proportionally from the same diluted corpus.
+    //
+    // Scoped runs (matchIds provided) bypass the window — their synthetic seed corpus is
+    // already small and bounded, so date-based truncation would destroy the holdout sample.
+    const calibrationWindowStart = new Date();
+    calibrationWindowStart.setMonth(calibrationWindowStart.getMonth() - CALIBRATION_WINDOW_MONTHS);
+    const windowedValidationPoints: CalibrationPoint[] = scopedMatchIds !== null
+      ? allValidationPoints
+      : allValidationPoints.filter((p) => p.matchDate >= calibrationWindowStart);
+
+    if (scopedMatchIds === null) {
+      logger.info(
+        {
+          total: allValidationPoints.length,
+          windowed: windowedValidationPoints.length,
+          excluded: allValidationPoints.length - windowedValidationPoints.length,
+          windowStartDate: calibrationWindowStart.toISOString().slice(0, 10),
+          windowMonths: CALIBRATION_WINDOW_MONTHS,
+        },
+        `Task #193: calibration corpus window applied — using ${windowedValidationPoints.length}/${allValidationPoints.length} validation points from the last ${CALIBRATION_WINDOW_MONTHS} months`,
+      );
+    }
+
     logger.info(
-      { pooledValidationPoints: allValidationPoints.length },
-      "Fitting pooled calibration model (cascade-bad rows already excluded per fold)",
+      { pooledValidationPoints: windowedValidationPoints.length },
+      "Fitting pooled calibration model (cascade-bad rows already excluded per fold; corpus window applied)",
     );
-    const liveFit = fitBestCalibration(allValidationPoints);
+    const liveFit = fitBestCalibration(windowedValidationPoints);
     const liveMapping = liveFit.knots;
     const dates = allMatches.map((m) => m.scheduledStartAt.getTime());
     // Use reduce instead of spread (Math.min(...dates)) to avoid "Maximum call stack size
@@ -532,8 +613,8 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
     segment: "validation" | "test",
     foldId: number | null,
     retirementRule: RetirementRule,
-  ): Promise<Array<{ id: number; rawProbability: number | null; player1Won: boolean; includedInAccuracy: boolean; tieBreakerApplied: boolean; lockedAt: Date }>> {
-    const results: Array<{ id: number; rawProbability: number | null; player1Won: boolean; includedInAccuracy: boolean; tieBreakerApplied: boolean; lockedAt: Date }> = [];
+  ): Promise<Array<{ id: number; rawProbability: number | null; player1Won: boolean; includedInAccuracy: boolean; tieBreakerApplied: boolean; lockedAt: Date; scheduledStartAt: Date }>> {
+    const results: Array<{ id: number; rawProbability: number | null; player1Won: boolean; includedInAccuracy: boolean; tieBreakerApplied: boolean; lockedAt: Date; scheduledStartAt: Date }> = [];
 
 
     for (const match of matches) {
@@ -611,7 +692,7 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
 
       try {
         const [inserted] = await db.insert(evaluationPredictionsTable).values(toInsert).returning({ id: evaluationPredictionsTable.id });
-        results.push({ id: inserted.id, rawProbability, player1Won, includedInAccuracy, tieBreakerApplied, lockedAt });
+        results.push({ id: inserted.id, rawProbability, player1Won, includedInAccuracy, tieBreakerApplied, lockedAt, scheduledStartAt: match.scheduledStartAt });
       } catch (err: any) {
         // Capture concise DB error metadata without logging the full feature snapshot or payload
         const errInfo: Record<string, any> = {
@@ -633,7 +714,7 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
           const repair = { ...toInsert, featureSnapshot: null };
           const [recovered] = await db.insert(evaluationPredictionsTable).values(repair).returning({ id: evaluationPredictionsTable.id });
           logger.warn({ recoveredId: recovered.id, historicalMatchId: toInsert.historicalMatchId }, "evaluation_predictions insert recovered by dropping featureSnapshot");
-          results.push({ id: recovered.id, rawProbability, player1Won, includedInAccuracy, tieBreakerApplied, lockedAt });
+          results.push({ id: recovered.id, rawProbability, player1Won, includedInAccuracy, tieBreakerApplied, lockedAt, scheduledStartAt: match.scheduledStartAt });
         } catch (repairErr: any) {
           // If repair also fails, surface the original concise error and re-throw the repair error
           logger.error({ repairMessage: repairErr?.message ?? String(repairErr) }, "evaluation_predictions repair attempt failed");

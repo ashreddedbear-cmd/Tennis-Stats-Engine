@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fitBestCalibration, isKnownBadCascadeRow, CASCADE_CUTOFF_DATE, type CalibrationPoint } from "./calibration";
+import { fitBestCalibration, isKnownBadCascadeRow, CASCADE_CUTOFF_DATE, applyCalibration, logLoss, type CalibrationPoint } from "./calibration";
 
 /**
  * Task #128 regression test. A real production fold's validation data showed a local
@@ -165,5 +165,84 @@ test("isKnownBadCascadeRow — calibration training path: contaminated rows are 
   assert.ok(
     trainingPoints.some((r) => r.id === 4),
     "Row 4 (post-cutoff, tieBreakerApplied:false) must NOT be excluded",
+  );
+});
+
+// ── Task #193: Full-corpus dilution invariant ─────────────────────────────────
+//
+// Demonstrates the mechanism that caused model #712 (84,885 rows, 2000-present) to produce
+// live LL=0.6599 while model #691 (21,570 recent rows) produced LL=0.6361 on the same 184
+// paper-trade rows — despite #712 having a comparable global holdout LL.
+//
+// When the true calibration function shifts over time (old tennis ≠ new tennis), including
+// old rows in the fit pulls the curve away from the current distribution. The global holdout
+// gate doesn't catch this because the holdout is drawn proportionally from the same diluted
+// corpus. The miscalibration only surfaces against a live holdout drawn purely from the
+// current distribution — exactly the B-CAL cross-check.
+
+test("invariant (Task #193): fitting on an out-of-distribution old corpus degrades holdout LL vs recent-only fit on the new distribution", () => {
+  // Build two populations with different true calibration curves to simulate the old-tennis /
+  // new-tennis shift. "Old" rows are plentiful but represent a steeper true curve than "new"
+  // rows. A model fit on old+new combined will be pulled toward the old curve and
+  // underperform on a holdout drawn entirely from the new distribution.
+  function makeRand(seed: number): () => number {
+    let s = seed;
+    return () => {
+      s = (s * 1664525 + 1013904223) >>> 0;
+      return s / 0x100000000;
+    };
+  }
+
+  const randOld = makeRand(7001);
+  const randNew = makeRand(7002);
+  const randHoldout = makeRand(7003);
+
+  // "Old" rows: true win rate is a steep function of confidence (raw=0.7 → 90% actual win)
+  const oldPoints: CalibrationPoint[] = Array.from({ length: 4000 }, () => {
+    const raw = 0.5 + randOld() * 0.4; // [0.5, 0.9]
+    const trueP = 0.5 + (raw - 0.5) * 2.2; // steep — maps 0.7 raw → ~0.94 true
+    const clampedP = Math.min(0.99, Math.max(0.01, trueP));
+    return { rawProbability: raw, outcome: randOld() < clampedP ? 1 : 0 };
+  });
+
+  // "New" rows: same raw probability range but a much flatter true curve (raw=0.7 → ~72% win)
+  const newPoints: CalibrationPoint[] = Array.from({ length: 1500 }, () => {
+    const raw = 0.5 + randNew() * 0.4;
+    const trueP = 0.5 + (raw - 0.5) * 0.55; // flat — more uncertainty in the modern game
+    const clampedP = Math.min(0.99, Math.max(0.01, trueP));
+    return { rawProbability: raw, outcome: randNew() < clampedP ? 1 : 0 };
+  });
+
+  // Holdout: drawn from the NEW distribution only (simulates live paper-trade rows)
+  const holdoutPoints: CalibrationPoint[] = Array.from({ length: 600 }, () => {
+    const raw = 0.5 + randHoldout() * 0.4;
+    const trueP = 0.5 + (raw - 0.5) * 0.55;
+    const clampedP = Math.min(0.99, Math.max(0.01, trueP));
+    return { rawProbability: raw, outcome: randHoldout() < clampedP ? 1 : 0 };
+  });
+
+  // Fit 1: recent-only (new rows only) — mimics a 24-month windowed fit
+  const recentFit = fitBestCalibration(newPoints);
+  // Fit 2: full corpus (old + new combined) — mimics fitting on the full historical corpus
+  const fullFit = fitBestCalibration([...oldPoints, ...newPoints]);
+
+  // Measure post-calibration log-loss on the holdout (new distribution only)
+  function calibratedLL(knots: ReturnType<typeof fitBestCalibration>["knots"], pts: CalibrationPoint[]): number {
+    const calibrated = pts.map((p) => ({
+      rawProbability: applyCalibration(knots, p.rawProbability),
+      outcome: p.outcome,
+    }));
+    return logLoss(calibrated) as number;
+  }
+
+  const recentLL = calibratedLL(recentFit.knots, holdoutPoints);
+  const fullLL = calibratedLL(fullFit.knots, holdoutPoints);
+
+  assert.ok(
+    recentLL < fullLL,
+    `Recent-only fit must outperform full-corpus fit on new holdout rows. ` +
+      `Got: recent LL=${recentLL.toFixed(4)}, full LL=${fullLL.toFixed(4)}. ` +
+      `If this fails, the full-corpus-dilution effect is no longer detectable with this synthetic dataset — ` +
+      `check that old/new distributions are sufficiently different.`,
   );
 });

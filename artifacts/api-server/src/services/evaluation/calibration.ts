@@ -222,6 +222,21 @@ export function binCalibrationPoints(points: CalibrationPoint[]): WeightedPoint[
  * observed rate) pairs weighted by each bucket's own N. This reduces curve jaggedness at current
  * sample sizes compared to fitting on thousands of raw individual points. Used for both per-fold
  * and pooled/live fits (see `fitBestCalibration`).
+ *
+ * ## ⚠ Full-corpus dilution warning (Task #193)
+ *
+ * Do NOT call this (or `fitBestCalibration`) on the full historical corpus spanning many years
+ * when the goal is a live-serving calibration model. Tennis distributions shift over time
+ * (player pool, court speeds, equipment), and including old rows pulls the fitted curve away
+ * from the current true function. The resulting model appears fine on a proportionally-drawn
+ * global holdout but measurably miscalibrates live predictions (confirmed: model #712, trained
+ * on 84,885 rows back to year 2000, produced live LL=0.6599 vs model #691's LL=0.6361 on the
+ * same 184 paper-trade rows despite a similar global holdout LL).
+ *
+ * For live deployment, callers in `walkForward.ts` must first restrict the pooled validation
+ * points to the last `CALIBRATION_WINDOW_MONTHS` months (currently 24) before passing them
+ * here. Scoped test runs and per-fold intermediate fits are exempt — they are already bounded
+ * by their own data window.
  */
 export function fitIsotonicCalibrationBinned(points: CalibrationPoint[]): CalibrationKnot[] {
   if (points.length === 0) {
