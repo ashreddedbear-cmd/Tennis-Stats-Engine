@@ -1,0 +1,1546 @@
+# Tennis Matrix AI — Engineering Project History and Continuation Handoff
+
+**Source basis:** `Ai1.txt`, `Ai2.txt`, `Ai3.txt`, and `Aineedshelp(1).txt`  
+**Prepared:** 2026-08-07  
+**Purpose:** Preserve the engineering state, evidence, contradictions, decisions, implementation history, and unresolved work needed for another engineer to continue the project.
+
+**Source-file registry:**
+
+- `Ai1.txt` — citation identifier `file_00000000a2f0822f8b61a23bdc901ce5`
+- `Ai2.txt` — citation identifier `file_0000000015c4822faddcd95ff139c2c8`
+- `Ai3.txt` — citation identifier `file_00000000affc822fab0e1121845c97f3`
+- `Aineedshelp(1).txt` — citation identifier `file_000000005b3c81f79acdf5370fecf5f6`
+
+The files overlap substantially. Exact duplicates were deduplicated; later contradictory evidence was retained alongside the earlier state and marked as superseding it where appropriate.
+
+## Status legend
+
+- ✅ Completed & Verified
+- 🟡 Completed – Needs Live Verification
+- 🔵 Built – Awaiting Deployment
+- ⚠️ Changed – Review Later
+- ❌ Still Open
+- 🔄 Possible Rollback Candidate
+
+## Evidence and readiness notation
+
+Every substantive item includes:
+
+- **Changed / finding:** What changed or was established.
+- **Why:** Reason for the work or importance of the finding.
+- **Evidence:** Specific source artifact, query result, test result, file, or observed behavior.
+- **Verified:** Whether the stated result was directly verified.
+- **Production-ready:** Whether it is safe and complete for production use.
+- **Additional testing:** What remains to be tested.
+- **Undo later:** Whether rollback/removal may be warranted.
+
+---
+
+# 1. Executive Summary
+
+### 1.1 Model claims were materially overstated
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** The original headline claims—approximately 66% win rate, 65.8% Strong-agreement accuracy, and 64.3% for the “High Data Quality + Low Upset Risk” combination—were validation-sample results, not held-out test results. The canonical held-out Strong-agreement benchmark is 57.9% on 3,144 rows.  
+**Why:** Segment mixing created false confidence and made retrospective results look deployable.  
+**Evidence:** `audit-task116-full-statistical-audit.md` reported 57.9% on 3,144 test rows; `audit-task162-full-prediction-accuracy-audit.md` reported 65.8% on 2,341 validation rows; `audit-task125-trade-combination-performance.md` contained validation-only combo results. Task 116 used a fresh four-fold expanding-window backtest dated 2026-07-14; Task 162 used a live development snapshot dated 2026-07-15 with no test rows available.  
+**Verified:** Yes, by repeated read-only reconciliation across independent sessions.  
+**Production-ready:** The 57.9% figure is suitable as the reporting baseline, but the model is not established as a real-money edge.  
+**Additional testing:** Re-run all headline buckets on a locked, current test segment with sample size, date range, raw wins/losses, confidence intervals, and number of comparisons disclosed.  
+**Undo later:** Do not restore the superseded 65.8% or 66% figures as canonical claims.
+
+### 1.2 Tie-break behavior is a verified high-impact weakness
+
+**Status:** 🟡 Completed – Needs Live Verification  
+**Changed / finding:** A live test-segment query found 66.8% accuracy when `tieBreakerApplied=false` (`n=36,682`) and 53.5% when `tieBreakerApplied=true` (`n=15,737`). A forward-only “soft no-play” fix was built and passed 82/82 unit tests, but was not yet proven active on a real new production prediction.  
+**Why:** Forced selections in ambiguous matches were barely above coin-flip accuracy and materially reduced blended accuracy.  
+**Evidence:** Direct live query over `evaluation_predictions.feature_snapshot->engine->tieBreakerApplied`; code scope and 82/82 unit-test result. Overall across false/true/null cohorts was calculated at roughly 62.8% over 52,456 rows, but this is a broad test slice and not comparable to the Strong-agreement-only 57.9%.  
+**Verified:** Accuracy gap and unit behavior are verified; live activation and accuracy lift are not.  
+**Production-ready:** Mechanically tested, but not outcome-verified.  
+**Additional testing:** Inspect a new prediction row after deployment; then run a locked same-row-set A/B or shadow comparison.  
+**Undo later:** Roll back if abstention is not correctly surfaced, silently breaks downstream consumers, or fails to improve a prospectively locked evaluation.
+
+### 1.3 Data Quality was inverted and its blend was incomplete
+
+**Status:** 🟡 Completed – Needs Live Verification  
+**Changed / finding:** “Excellent” Data Quality historically performed worst at 54.7%, while “Limited” performed best at 61.4%. The DQ blend was changed in `dataQuality.ts` and `index.ts` to restore missing Availability, Fatigue, and Match Load Recovery inputs and address a tournament-level selection effect.  
+**Why:** DQ was being presented as a reliability/truth signal despite almost no positive relationship with correctness and an inverted observed ordering.  
+**Evidence:** `audit-task111-dq-degradation-above-55.md`; targeted prediction-engine testing reported 198 tests with 197 passing in one run; later consolidated tests reported 93 tests for the DQ area and 102/102 across DQ, fallback instrumentation, and frozen-backtest test groups.  
+**Verified:** Code mechanics and root-cause implementation are tested; real predictive improvement is not verified.  
+**Production-ready:** The label-correctness fix can operate in production, but should not be described as an accuracy improvement.  
+**Additional testing:** Prospective DQ-tier calibration and accuracy on a locked cohort; confirm high-DQ no longer underperforms low-DQ.  
+**Undo later:** Possible if restored inputs worsen calibration or the tournament-level correction introduces selection bias.
+
+### 1.4 Fallback observability is live, but fallback accuracy is unknown
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Persisted `used_fallback` and `fallback_sources` instrumentation was wired into evaluation/prediction write paths, backed by migration `0002_add_evaluation_prediction_fallback_columns.sql`, applied live, and confirmed by a direct schema query returning both columns. `data_segment` was also part of the broader instrumentation design and code paths, though live-schema history was inconsistent.  
+**Why:** `serveReturn.ts`, `recentForm.ts`, and `index.ts` silently substitute neutral/default values when data is missing. Without row-level flags, fallback-affected accuracy could not be separated from clean predictions.  
+**Evidence:** Migration ran via `psql`; information-schema verification returned two matching rows; commit was pushed to `origin/main`; write paths showed real values such as `usedFallback: fallback.usedFallback` rather than stubs.  
+**Verified:** Columns and wiring verified; cohort accuracy effect not verified.  
+**Production-ready:** Yes for telemetry/data collection. It does not itself improve predictions.  
+**Additional testing:** Allow new data to accumulate, then compare clean vs fallback-affected accuracy by source, tour, surface, sample size, and confidence.  
+**Undo later:** Keep by default; remove only if write-path/schema compatibility causes production failures. Do not remove fallbacks themselves before an abstention design exists.
+
+### 1.5 Frozen-vs-dynamic weighting remains untestable from existing rows
+
+**Status:** ❌ Still Open  
+**Changed / finding:** `backtestFrozenVsDynamicWeights.ts` was built and executed. It found 52,419 frozen/evaluation rows, zero dynamic rows, and zero intersected matches. A system-wide query confirmed `optimizer_run_id IS NOT NULL` for zero rows across every segment and `run_kind`; `optimizer_rows=0`, `first_seen=null`, and `last_seen=null`.  
+**Why:** Recent Form weighting changes approximately 13× (1.3 versus 0.1) under match-dependent conflict gates, but no evidence shows that this complexity improves accuracy.  
+**Evidence:** Script output and two direct SQL queries. `optimizer_run_id` is the intended discriminator for optimizer-generated historical-test rows in this pipeline.  
+**Verified:** Absence of dynamic persisted data is verified. Comparative accuracy is not available.  
+**Production-ready:** The diagnostic script is usable; the dynamic weighting architecture is not validated.  
+**Additional testing:** Trigger a real optimizer/training run through `candidateOptimizer.ts` with `evaluationOnly:false`, persist tagged test rows, and compare identical `historical_match_id` sets.  
+**Undo later:** Dynamic weighting is a rollback/simplification candidate if the eventual frozen comparison shows no improvement or worse calibration.
+
+### 1.6 Engineering workflow itself caused false “done” states
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Agent sandbox work and the actual Codespace/Shell repository were sometimes disconnected. Multiple files reported as created did not exist in the real checkout.  
+**Why:** This caused repeated phantom completions, missing migration/backtest artifacts, and wasted verification cycles.  
+**Evidence:** Shell searches found no migration or frozen-backtest script after prior “created” reports; files were later rebuilt in the real checkout. At least three file incidents occurred, including the migration and backtest script more than once.  
+**Verified:** Yes.  
+**Production-ready:** New workflow rule is production-process ready: verify every artifact via real-shell `git status`, `find`/`rg`, diff, tests, commit, and push.  
+**Additional testing:** None for the finding; enforce via CI and handoff checklists.  
+**Undo later:** Never return to summary-only acceptance.
+
+---
+
+# 2. Verified Findings
+
+### 2.1 Canonical Strong-agreement benchmark
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Use 57.9% accuracy on 3,144 test-segment rows as the canonical Strong-agreement benchmark. Preserve 65.8% on 2,341 rows as a validation-only historical snapshot.  
+**Why:** Held-out test evidence has priority over validation evidence.  
+**Evidence:** Task 116 versus Task 162 reconciliation; no evidence that the Strong/Moderate/Mixed/High-Disagreement bucket definition itself changed.  
+**Verified:** Yes.  
+**Production-ready:** Yes for reporting.  
+**Additional testing:** Current-data rerun remains advisable.  
+**Undo later:** No; revise only with a newer locked held-out test.
+
+### 2.2 Test and validation datasets differed
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Task 116 and Task 162 used different segments, dataset snapshots, dates, and row counts. Task 162 explicitly had no test rows in its snapshot.  
+**Why:** Explains the same bucket label producing 57.9% versus 65.8%.  
+**Evidence:** Audit metadata dated 2026-07-14 and 2026-07-15.  
+**Verified:** Yes.  
+**Production-ready:** Applicable as a reporting constraint.  
+**Additional testing:** Automate segment/date/sample labels in all reports.  
+**Undo later:** No.
+
+### 2.3 Prior tie-break “+3.1 points” claim is invalid
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** The historical claim of 61.5% pre-fix to 64.6% post-fix cannot be treated as a valid improvement. Pre-fix used 3,987 graded validation/backfill rows with `fold_id IS NULL`; post-fix used 7,844 test rows, including fold 185. Close-match rows were reported at 56.0% post-fix versus 52.9% old-cascade rows, but these were also not established on an identical cohort.  
+**Why:** Segment and cohort mismatch prevents causal comparison.  
+**Evidence:** `audit-task11-tiebreak-fix-before-after.md`; repeated independent reconciliation.  
+**Verified:** Yes.  
+**Production-ready:** The 64.6% result may be cited only as a post-fix test snapshot, not an uplift.  
+**Additional testing:** Locked identical-row-set comparison.  
+**Undo later:** Retire the “+3.1 points” claim permanently unless reproduced correctly.
+
+### 2.4 Live tie-break cohort gap
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** `tieBreakerApplied=false`: 66.8%, `n=36,682`; `tieBreakerApplied=true`: 53.5%, `n=15,737`. A historical fold-185 audit separately recorded `applied=true`, `n=2,803`; it is older evidence, not the current live count.  
+**Why:** Identifies a large, actionable weak cohort.  
+**Evidence:** Direct PostgreSQL query using JSON path `(feature_snapshot->'engine'->>'tieBreakerApplied')::boolean`.  
+**Verified:** Yes.  
+**Production-ready:** Suitable for abstention-policy design, not proof that the implemented fix improves accuracy.  
+**Additional testing:** Recent-only tie-break rate and prospective results.  
+**Undo later:** No for the finding.
+
+### 2.5 DQ tiers are not truth/reliability tiers
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Limited DQ historically achieved 61.4%; Excellent achieved 54.7%. DQ had almost no measurable relationship with correctness.  
+**Why:** High DQ was being interpreted as an independent confirmation and stronger edge.  
+**Evidence:** Existing audits and consolidated findings.  
+**Verified:** Historical finding verified.  
+**Production-ready:** DQ should be presented as input completeness/coverage until prospective evidence establishes otherwise.  
+**Additional testing:** Recalibration after the DQ blend change.  
+**Undo later:** Roll back any UI text equating DQ with probability correctness.
+
+### 2.6 Signals overlap
+
+**Status:** ⚠️ Changed – Review Later  
+**Changed / finding:** Data Quality, model agreement, and form weighting share underlying module outputs and are not independent confirmations.  
+**Why:** Combining them can double-count the same evidence and create false certainty.  
+**Evidence:** Architecture inspection described in the audits; DQ blend fix did not remove this entanglement.  
+**Verified:** Structural overlap verified; quantitative harm not isolated.  
+**Production-ready:** Existing architecture remains usable but claims of independent corroboration are not.  
+**Additional testing:** Feature ablation, correlation/VIF or mutual-information analysis, and test-segment incremental-value evaluation.  
+**Undo later:** Potentially decouple or remove redundant labels/features.
+
+### 2.7 High-confidence probabilities are overconfident
+
+**Status:** ⚠️ Changed – Review Later  
+**Changed / finding:** Calibration was roughly acceptable in the 50–67% range and degraded above approximately 70%, where “Strong Recommendation” and Elite-style labeling operates.  
+**Why:** Users may size bets based on inflated probability labels.  
+**Evidence:** Internal calibration audit summarized in the project history.  
+**Verified:** Historical audit evidence; not freshly rerun after fixes.  
+**Production-ready:** High-confidence labels should be guarded or softened.  
+**Additional testing:** Reliability curve, ECE, log loss, and Brier by confidence band on a current held-out test.  
+**Undo later:** Elite/high-confidence thresholds are rollback candidates if recalibration cannot support them.
+
+### 2.8 No persisted optimizer/dynamic cohort exists
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Zero `evaluation_predictions` rows have non-null `optimizer_run_id`, system-wide.  
+**Why:** Makes frozen-vs-dynamic accuracy unknowable from existing data.  
+**Evidence:** Grouped query returned `(0 rows)`; aggregate query returned `optimizer_rows=0`, blank `first_seen`, blank `last_seen`.  
+**Verified:** Yes.  
+**Production-ready:** Diagnostic conclusion is final for the inspected database.  
+**Additional testing:** Run and persist a real optimizer cohort.  
+**Undo later:** No.
+
+### 2.9 Database access differs by environment
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** The agent sandbox repeatedly failed with `could not translate host name "helium"`, missing `psql`, or `PG_NOT_FOUND`, while the actual Replit Shell successfully connected and returned `SELECT NOW()` at `2026-08-04 18:03:35`.  
+**Why:** Explains contradictory “cannot verify” versus successful live-query states.  
+**Evidence:** Raw environment errors and Shell result.  
+**Verified:** Yes.  
+**Production-ready:** Live DB verification must occur from an environment where `helium` resolves.  
+**Additional testing:** Add a safe deployed health check and document environment boundaries.  
+**Undo later:** Do not use bare internal DB URLs outside their intended runtime.
+
+### 2.10 Database URL shape
+
+**Status:** ⚠️ Changed – Review Later  
+**Changed / finding:** Observed URL: `postgresql://postgres:password@helium/heliumdb?sslmode=disable`. It is syntactically valid but uses a bare internal host and disables SSL.  
+**Why:** It may be runtime-internal and unusable from sandboxed/external environments; if `password` is literal, credentials are insecure.  
+**Evidence:** User-provided value and differing hostname resolution by environment.  
+**Verified:** Syntax and behavior partially verified; change history was not established.  
+**Production-ready:** Only inside the intended trusted Replit runtime, subject to credential review.  
+**Additional testing:** Compare secret history/config, rotate weak credentials, confirm production DB identity, and avoid exposing the URL.  
+**Undo later:** Replace with managed external endpoint/SSL if cross-environment access is required.
+
+---
+
+# 3. Problems Discovered
+
+### 3.1 Retrospective data mining presented as prediction
+
+**Status:** ❌ Still Open  
+**Changed / finding:** “Best” combinations were selected from many historical buckets after outcomes were known. Samples of 209–311 are too thin for confident superiority claims; 64.1% on 209 cases was estimated to have a broad interval around approximately 57–71%.  
+**Why:** Multiple comparisons and selection after observing outcomes create overfitting. Parlays compound leg risk and correlation.  
+**Evidence:** Original audit critique and validation-only combo reports.  
+**Verified:** Methodological issue verified; exact number of attempted combinations remains unknown.  
+**Production-ready:** No as an advertised predictive edge.  
+**Additional testing:** Pre-register rules, disclose comparisons, and evaluate on fresh held-out/prospective data.  
+**Undo later:** Remove “highest winning combination” marketing if it cannot pass held-out validation.
+
+### 3.2 Silent neutral/default fallbacks
+
+**Status:** ❌ Still Open  
+**Changed / finding:** Missing data is replaced in `serveReturn.ts`, `recentForm.ts`, and `index.ts` without a user-facing warning or abstention.  
+**Why:** Placeholder-driven predictions can look equally supported and contaminate aggregate accuracy.  
+**Evidence:** Code inspection; later instrumentation added to measure usage.  
+**Verified:** Existence verified; accuracy harm not measured.  
+**Production-ready:** Fallback mechanism is operational but risk handling is not.  
+**Additional testing:** Source-specific fallback frequency and accuracy; verify whether 50/50 or confidence failures correlate with fallback paths.  
+**Undo later:** Do not simply delete fallback code; replace risky fallback outputs with transparent low-confidence/no-play behavior when evidence supports it.
+
+### 3.3 No stake/position-sizing engine
+
+**Status:** ❌ Still Open  
+**Changed / finding:** No bankroll, Kelly, or fixed-fraction logic exists. `ResponsibleGambling.ts` supplies advisory text only.  
+**Why:** Even calibrated probabilities do not translate into disciplined real-money risk without sizing and odds/edge logic.  
+**Evidence:** Repo inspection summarized in the audit.  
+**Verified:** Yes.  
+**Production-ready:** Predictions may be displayed, but the product should not imply automated risk management.  
+**Additional testing:** Only after probability calibration and actual odds integration are validated.  
+**Undo later:** No.
+
+### 3.4 No audit-to-real-bet linkage
+
+**Status:** ❌ Still Open  
+**Changed / finding:** Engine self-audits are not connected to the user’s selected bets, odds, timing, stakes, cash-outs, or realized P&L.  
+**Why:** Prediction correctness and real trading profitability are different datasets and objectives.  
+**Evidence:** No trade-log relationship was found.  
+**Verified:** Yes.  
+**Production-ready:** Internal accuracy cannot be marketed as user profitability.  
+**Additional testing:** Build an append-only trade ledger and reconcile signals at decision time.  
+**Undo later:** No.
+
+### 3.5 Hardcoded confidence discounts
+
+**Status:** ⚠️ Changed – Review Later  
+**Changed / finding:** Blanket ATP and low-sample-surface adjustments are coarse, unvalidated heuristics.  
+**Why:** They may systematically over- or under-correct entire categories.  
+**Evidence:** Repo audit.  
+**Verified:** Existence verified; benefit not verified.  
+**Production-ready:** Operational but not evidence-backed.  
+**Additional testing:** Locked ablation and calibration by tour/surface/sample size.  
+**Undo later:** Yes, if no incremental held-out benefit.
+
+### 3.6 Dynamic feature weights change semantics across matches
+
+**Status:** ⚠️ Changed – Review Later  
+**Changed / finding:** Recent Form weight can change from 1.3 to 0.1, roughly 13×, under a conflict gate. “Strong agreement” therefore aggregates matches scored under materially different logic.  
+**Why:** Bucket labels are less stable and harder to interpret or validate.  
+**Evidence:** Formula/weight inspection summarized in the audit.  
+**Verified:** Dynamic behavior verified; incremental value unverified.  
+**Production-ready:** Operational, not validated.  
+**Additional testing:** Frozen comparison and per-policy reporting.  
+**Undo later:** Strong rollback candidate if complexity does not improve held-out performance.
+
+### 3.7 File persistence and path confusion
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Files were created in wrong locations or only in an agent sandbox. Examples included loose `backtestFrozenVsDynamicWeights.ts`, expected scripts under `artifacts/api-server/src/scripts/` versus `src/scripts/`, and migration name/path variations.  
+**Why:** A reported implementation did not guarantee the real repo contained it.  
+**Evidence:** `find`/directory listings showed only `backtestLedgerJuly8_9.ts`, `backtestScoringDimensions.ts`, and `backtestScoringDimensions_report.md` when the frozen script was expected.  
+**Verified:** Yes.  
+**Production-ready:** Resolved by rebuilding and committing actual files.  
+**Additional testing:** CI existence checks and canonical path documentation.  
+**Undo later:** Remove duplicate/misplaced versions if any remain.
+
+### 3.8 Mobile-shell operational friction
+
+**Status:** ⚠️ Changed – Review Later  
+**Changed / finding:** iOS Replit terminal could not reliably paste; long SQL was manually mistyped, including `ordinal_positions`, missing spaces, and a dropped comparison. Scratch `.sh` files were used to hold commands.  
+**Why:** Increased error rate and delayed live verification.  
+**Evidence:** Recorded shell errors and repeated command-file workflow.  
+**Verified:** Yes.  
+**Production-ready:** Use short wrapper scripts or UI/admin endpoints, not manual long SQL on mobile.  
+**Additional testing:** Add read-only admin diagnostics.  
+**Undo later:** Delete scratch helpers after use.
+
+---
+
+# 4. Root Causes
+
+### 4.1 Validation/test segment confusion
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Reports did not consistently label segment, sample, date, fold, or cohort.  
+**Why:** Validation results were presented as if held-out test results.  
+**Evidence:** 65.8% validation versus 57.9% test reconciliation.  
+**Verified:** Yes.  
+**Production-ready:** Root cause understood; reporting guardrails still need automation.  
+**Additional testing:** CI/report-schema enforcement.  
+**Undo later:** No.
+
+### 4.2 DQ blend omitted modules and had tournament selection effects
+
+**Status:** 🟡 Completed – Needs Live Verification  
+**Changed / finding:** Availability, Fatigue, and Match Load Recovery were excluded from the DQ blend; tournament-level selection also distorted DQ cohorts.  
+**Why:** Produced high DQ labels that did not represent the actual evidence used.  
+**Evidence:** `audit-task111-dq-degradation-above-55.md` and subsequent implementation.  
+**Verified:** Code root cause addressed; live statistical correction unverified.  
+**Production-ready:** Mechanically yes.  
+**Additional testing:** DQ cohort recalibration.  
+**Undo later:** Possible if the fix creates regressions.
+
+### 4.3 Tie-break cascade forced picks in ambiguous cases
+
+**Status:** 🟡 Completed – Needs Live Verification  
+**Changed / finding:** Tie resolution forced a recommendation despite genuine disagreement/close evidence.  
+**Why:** Tie-triggered cohort accuracy was 53.5%.  
+**Evidence:** Live cohort query and `tieBreakers.ts`/`recommendation.ts` inspection; `savePrediction.ts` and `walkForward.ts` were storage/audit paths, not decision-policy sources.  
+**Verified:** Root cause and mechanics verified; production activation pending.  
+**Production-ready:** Only after confirming downstream no-play handling.  
+**Additional testing:** Live row and same-cohort shadow evaluation.  
+**Undo later:** Possible if abstention is misinterpreted downstream.
+
+### 4.4 Missing row-level fallback provenance
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Existing predictions did not persist whether fallback modules were used. Historical rows could not be reliably backfilled without artifacts.  
+**Why:** Prevented fallback-vs-clean evaluation.  
+**Evidence:** Initial live schema lacked the columns; later migration added them.  
+**Verified:** Yes.  
+**Production-ready:** New-row collection is ready.  
+**Additional testing:** Confirm all write paths and nullable legacy semantics.  
+**Undo later:** No.
+
+### 4.5 Optimizer pipeline never persisted a dynamic cohort
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** No non-null `optimizer_run_id` exists in `evaluation_predictions`.  
+**Why:** The comparison script had no dynamic rows to join.  
+**Evidence:** 52,419 frozen rows, 0 dynamic rows; system-wide aggregate zero.  
+**Verified:** Yes.  
+**Production-ready:** Root cause understood, execution path still needs repair/use.  
+**Additional testing:** Exercise `candidateOptimizer.ts` with `evaluationOnly:false`.  
+**Undo later:** No.
+
+### 4.6 Environment isolation
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Sandbox paths and DB networking differed from the actual Replit runtime.  
+**Why:** Caused phantom files and failed live checks.  
+**Evidence:** `helium` resolved in Shell but not agent container; real-repo searches contradicted agent summaries.  
+**Verified:** Yes.  
+**Production-ready:** Workflow mitigation defined.  
+**Additional testing:** None; add environment identity banner/check.  
+**Undo later:** No.
+
+---
+
+# 5. Engineering Decisions
+
+### 5.1 Test segment is canonical
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Accuracy reporting must use held-out test data as the standard; validation snapshots remain labeled secondary evidence.  
+**Why:** Prevent overfitting and apples-to-oranges comparisons.  
+**Evidence:** Strong-agreement reconciliation and invalid tie-break uplift claim.  
+**Verified:** Yes.  
+**Production-ready:** Yes.  
+**Additional testing:** Enforce in report generation.  
+**Undo later:** No.
+
+### 5.2 No fix counts as improved without identical cohorts
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Standing rule: before and after must use the identical row set, segment, fold, and outcome policy.  
+**Why:** The 61.5%→64.6% comparison was invalid because cohorts differed.  
+**Evidence:** Audit reconciliation.  
+**Verified:** Yes.  
+**Production-ready:** Yes as process policy.  
+**Additional testing:** Automate cohort fingerprinting.  
+**Undo later:** No.
+
+### 5.3 Instrument first; do not guess historical fallback state
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Persist `data_segment`, `used_fallback`, and `fallback_sources` going forward. Backfill segment only where deterministically inferable; leave fallback fields null when historical artifacts are insufficient.  
+**Why:** Avoid fabricating provenance.  
+**Evidence:** Instrumentation plan and implemented write paths.  
+**Verified:** Yes for approach and live fallback columns.  
+**Production-ready:** Yes.  
+**Additional testing:** Validate legacy null handling.  
+**Undo later:** No.
+
+### 5.4 Soft no-play instead of forced tie-break selection
+
+**Status:** 🟡 Completed – Needs Live Verification  
+**Changed / finding:** Ambiguous/tie cases should abstain or clearly surface no-play rather than force a winner.  
+**Why:** Tie cohort achieved only 53.5% over 15,737 rows.  
+**Evidence:** Live query and 82/82 unit tests for implementation.  
+**Verified:** Decision evidence is strong; production behavior unverified.  
+**Production-ready:** Pending live/downstream verification.  
+**Additional testing:** Prediction card, parlay builder, API contracts, history, and grading behavior.  
+**Undo later:** Yes if downstream breakage outweighs benefit; alternative is visible low-confidence flag.
+
+### 5.5 Keep fallbacks temporarily; measure before abstaining
+
+**Status:** ⚠️ Changed – Review Later  
+**Changed / finding:** Do not delete fallback logic immediately. Instrument it, measure accuracy, then consider a soft no-play policy for harmful fallback cohorts.  
+**Why:** Removing fallbacks could cause crashes/no outputs across thin-data matches; instrumentation does not itself lower accuracy.  
+**Evidence:** Fallback code and lack of historical flags.  
+**Verified:** Architectural rationale verified; empirical cohort effect open.  
+**Production-ready:** Yes as interim policy.  
+**Additional testing:** Fallback-source-specific prospective analysis.  
+**Undo later:** Fallback use may be reduced or replaced after evidence.
+
+### 5.6 Build diagnostic tooling without changing production logic
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Frozen-vs-dynamic comparison was implemented as a standalone script.  
+**Why:** Research question should not mutate live scoring.  
+**Evidence:** Script runs and outputs counts/accuracy/delta fields without production changes.  
+**Verified:** Yes.  
+**Production-ready:** Diagnostic tool is ready.  
+**Additional testing:** Needs a populated dynamic cohort.  
+**Undo later:** No, unless discriminator design changes.
+
+### 5.7 Approval-first and raw-evidence workflow
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** No writes, edits, scripts, installations, or migrations without an explicit approved plan; require raw diff, raw tests, `git status`, and live evidence.  
+**Why:** Confident summaries repeatedly concealed missing files, mismatched cohorts, or pre-existing failures.  
+**Evidence:** Multiple corrections after raw-output requests.  
+**Verified:** Yes.  
+**Production-ready:** Yes as engineering governance.  
+**Additional testing:** Encode in repository instructions/CI.  
+**Undo later:** No.
+
+---
+
+# 6. Code Changes Completed
+
+### 6.1 Data Quality blend correction
+
+**Status:** 🟡 Completed – Needs Live Verification  
+**Changed / finding:** Updated `dataQuality.ts` and `index.ts` to restore missing DQ inputs and correct tournament-level selection handling.  
+**Why:** Excellent DQ underperformed Limited and the blend omitted modules.  
+**Evidence:** Implementation summary; targeted tests.  
+**Verified:** Unit-tested, not prospectively outcome-tested.  
+**Production-ready:** Mechanically yes.  
+**Additional testing:** Current held-out/live DQ calibration.  
+**Undo later:** Possible rollback if degradation appears.
+
+### 6.2 Fallback persistence logic
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Added `fallbackInstrumentation.ts` and `fallbackInstrumentation.test.ts`; wired fallback/segment fields through `savePrediction.ts`, `walkForward.ts`, `paperTrading.ts`, `shadowReplay.ts`, `bridgeRescore.ts`, and historical-test insert paths.  
+**Why:** Enable row-level provenance and later accuracy splits.  
+**Evidence:** Raw code example showed `dataSegment:"live"`, `usedFallback:fallback.usedFallback`, and `fallbackSources:fallback.fallbackSources`; schema migration live-verified.  
+**Verified:** Yes for code/schema.  
+**Production-ready:** Yes for collection.  
+**Additional testing:** Inspect recent persisted rows and all nullable/error paths.  
+**Undo later:** Unlikely.
+
+### 6.3 Tie-break soft no-play
+
+**Status:** 🟡 Completed – Needs Live Verification  
+**Changed / finding:** Tie/close-match path changed to abstain/soft no-play rather than force a winner.  
+**Why:** 53.5% tie-trigger accuracy.  
+**Evidence:** Scope review and 82/82 tests.  
+**Verified:** Unit verified.  
+**Production-ready:** Pending live UI/API verification.  
+**Additional testing:** End-to-end prediction generation and downstream compatibility.  
+**Undo later:** Possible rollback candidate.
+
+### 6.4 Tie-break test fixture correction
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** `tieBreakers.test.ts` now uses the existing test input fixture instead of an undefined placeholder.  
+**Why:** Restore intended display-invariant regression checks.  
+**Evidence:** 21 tests run, 21 passed, 0 failed; commit `2a1f0e1`; test-only change.  
+**Verified:** Yes.  
+**Production-ready:** Yes.  
+**Additional testing:** None beyond normal CI.  
+**Undo later:** No.
+
+### 6.5 Frozen-vs-dynamic backtest script
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Created `artifacts/api-server/src/scripts/backtestFrozenVsDynamicWeights.ts` (also referenced in commands as `src/scripts/backtestFrozenVsDynamicWeights.ts` from the API package root). It filters `historical_test` + `test` + graded/included rows, keeps latest row per cohort/match, intersects on `historical_match_id`, and prints row counts, distinct matches, sample counts, accuracies, and delta.  
+**Why:** Compare static/evaluation-only and optimizer/dynamic approaches fairly.  
+**Evidence:** Script executed successfully and returned 52,419 frozen rows, 0 dynamic rows, 0 intersections, and null accuracies.  
+**Verified:** Script behavior verified; experiment remains blocked by missing dynamic data.  
+**Production-ready:** Yes as diagnostic tooling.  
+**Additional testing:** Execute after an optimizer cohort exists.  
+**Undo later:** Update discriminator if pipeline semantics change.
+
+---
+
+# 7. Files Modified
+
+| Status | File | Purpose and evidence | Verified / production / further test / undo |
+|---|---|---|---|
+| 🟡 | `dataQuality.ts` | Restores missing Availability/Fatigue/Match Load Recovery inputs and corrects DQ computation. | Unit verified; production outcome not verified; test DQ calibration; rollback possible. |
+| 🟡 | `index.ts` | Integrates corrected DQ blend and contains an existing fallback path. | Unit verified; live outcome pending; test interaction with fallback/confidence; rollback possible. |
+| ✅ | `fallbackInstrumentation.ts` | Detects and packages `used_fallback`/`fallback_sources`. | Unit/schema verified; production-ready telemetry; inspect live rows; unlikely rollback. |
+| ✅ | `fallbackInstrumentation.test.ts` | Tests fallback provenance behavior. | Passed targeted testing; CI-ready; no rollback expected. |
+| ✅ | `savePrediction.ts` | Persists `dataSegment`, fallback boolean, and fallback-source list on prediction writes. | Raw code verified; live-row sampling advisable; production-ready. |
+| ✅ | `walkForward.ts` | Persists segment and scored fallback metadata for evaluation rows. | Code verified; test locked evaluation run; production-ready. |
+| ✅ | `paperTrading.ts` | Writes live/paper-trade segment and real fallback values. | Raw object construction verified; test live paper-trade row; production-ready. |
+| ✅ | `shadowReplay.ts` | Persists instrumentation during shadow replay. | Code-path verified; run replay smoke test when DB available; production-ready. |
+| ✅ | `bridgeRescore.ts` | Persists instrumentation for bridge rescoring. | Code-path verified; further integration test advisable; production-ready. |
+| ✅ | `evaluation.ts` | TypeScript schema includes evaluation instrumentation columns. | Schema inspected; pre-existing type errors at lines 30/82 were found unrelated; production-ready subject to broader typecheck debt. |
+| ✅ | `predictions.ts` | Prediction ledger schema/write path references instrumentation. | Pre-existing errors at lines 25/48/395 were shown unrelated; further global typecheck cleanup needed. |
+| ✅ | `ensureEvaluationSchema.ts` | Runtime `IF NOT EXISTS` safety shim and backfill support. | Code verified; do not use as substitute for migrations; review later if migration system becomes authoritative. |
+| ✅ | `lib/db/drizzle/0002_add_evaluation_prediction_fallback_columns.sql` | Adds `used_fallback boolean` and `fallback_sources jsonb` idempotently. | Applied and live-verified; production-ready; no rollback expected. |
+| 🟡 | `tieBreakers.ts` | Implements tie/close-match decision policy including soft no-play change. | 82/82 tests; live activation pending; rollback candidate. |
+| 🟡 | `recommendation.ts` | Downstream recommendation behavior for tie/no-play cases. | Unit scope verified; needs end-to-end/UI checks; rollback possible. |
+| ✅ | `tieBreakers.test.ts` | Corrected undefined fixture reference. | 21/21 passed; test-only; production-safe. |
+| ✅ | `artifacts/api-server/src/scripts/backtestFrozenVsDynamicWeights.ts` | Diagnostic identical-match frozen/dynamic comparison. | Executed; blocked by 0 dynamic rows; production logic unaffected. |
+| ⚠️ | `backtestService.ts` | Contains evaluation-only/frozen scaffolding referenced by the script. | Existing behavior inspected; real optimizer execution not verified; review semantics. |
+| ⚠️ | `candidateOptimizer.ts` | Expected entry point for a real optimizer run with `evaluationOnly:false`. | Not executed/persisted in observed DB; requires controlled run; may need repair. |
+| ❌ | `serveReturn.ts` | Existing silent neutral fallback source. | Existence verified; accuracy impact unknown; may later require abstention behavior. |
+| ❌ | `recentForm.ts` | Existing silent fallback and dynamically weighted signal. | Existence/13× weight swing verified; needs ablation and fallback analysis; rollback candidate. |
+| ⚠️ | `fallbackTracking.ts` | Tracks fallback/freshness information internally. | Internal presence verified; ensure all useful warnings persist/surface. |
+| ⚠️ | `playerProfileWarnings.ts` | Tracks profile/data warnings that were not fully surfaced in output tiers. | Presence verified; needs UI/API propagation review. |
+| ❌ | `ResponsibleGambling.ts` | Advisory content only; no sizing engine. | Verified; no production risk enforcement. |
+| ✅ | `audit-task116-full-statistical-audit.md` | Source for canonical 57.9% test Strong-agreement result. | Verified evidence artifact. |
+| ⚠️ | `audit-task162-full-prediction-accuracy-audit.md` | Source for 65.8% validation snapshot and no-test-row caveat. | Preserve historically; do not use as canonical benchmark. |
+| ⚠️ | `audit-task125-trade-combination-performance.md` | Source for validation-only 66.0%/64.3% bucket claims. | Preserve historically; requires held-out reproduction. |
+| ⚠️ | `audit-task11-tiebreak-fix-before-after.md` | Documents mismatched 61.5% validation versus 64.6% test comparison. | Preserve as invalid-comparison evidence; do not cite uplift. |
+| 🟡 | `audit-task111-dq-degradation-above-55.md` | Root-cause evidence for DQ blend/selection problem. | Implementation derived from it; prospective confirmation pending. |
+
+---
+
+# 8. Database Changes / Migrations
+
+### 8.1 Fallback columns migration
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Added `used_fallback boolean` and `fallback_sources jsonb` to `evaluation_predictions` with `IF NOT EXISTS`.  
+**Why:** Persist fallback provenance for future cohort analysis.  
+**Evidence:** `lib/db/drizzle/0002_add_evaluation_prediction_fallback_columns.sql`; live information-schema query returned both columns (two rows).  
+**Verified:** Yes, live.  
+**Production-ready:** Yes.  
+**Additional testing:** Confirm recent inserted values and JSON shape.  
+**Undo later:** No, unless schema compatibility issues arise.
+
+```sql
+ALTER TABLE "evaluation_predictions"
+  ADD COLUMN IF NOT EXISTS "used_fallback" boolean;
+
+ALTER TABLE "evaluation_predictions"
+  ADD COLUMN IF NOT EXISTS "fallback_sources" jsonb;
+```
+
+### 8.2 `data_segment` schema history
+
+**Status:** ⚠️ Changed – Review Later  
+**Changed / finding:** `data_segment` was designed and wired in TypeScript/write paths, but an early live query showed only `segment`, `predicted_winner_id`, `actual_winner_id`, and `included_in_accuracy` among requested fields. Later consolidated schema sources listed both `segment` and `data_segment`, and summaries claimed instrumentation was live.  
+**Why:** This is a real historical contradiction that must not be flattened. Runtime shims, later migrations, or different snapshots/environments may explain it.  
+**Evidence:** Direct early information-schema query versus later `evaluation.ts`/`ensureEvaluationSchema.ts` schema inspection and instrumentation summary.  
+**Verified:** `segment` is definitely live; `data_segment` live presence at the final state was not shown with the same direct evidence as the two fallback columns.  
+**Production-ready:** Treat `segment` as canonical until a current live schema/value query confirms `data_segment`.  
+**Additional testing:** Query column existence, null rate, value distribution, and write-path consistency.  
+**Undo later:** Consolidate duplicate segment concepts if both are redundant.
+
+### 8.3 Runtime safety shim
+
+**Status:** ⚠️ Changed – Review Later  
+**Changed / finding:** `ensureEvaluationSchema.ts` attempts runtime `ADD COLUMN IF NOT EXISTS` and backfills evaluation schema.  
+**Why:** Protect environments where migrations were not applied.  
+**Evidence:** Code inspection.  
+**Verified:** Present; not sufficient proof a production migration ran.  
+**Production-ready:** Useful as defense-in-depth, but migrations must remain authoritative.  
+**Additional testing:** Startup behavior on fresh and already-migrated DBs.  
+**Undo later:** Consider removing after migration discipline is reliable.
+
+### 8.4 Existing migration references
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Migration style was based on `0001_add_cross_engine_agreement.sql`; baseline `0000_rapid_cammi.sql` and `0000_snapshot.json` lacked fallback columns. Other referenced migration names included `0000_add_prediction_provenance_columns.sql`.  
+**Why:** Establish migration ordering/style and prove the gap.  
+**Evidence:** Repo inspection.  
+**Verified:** Yes for inspected checkout.  
+**Production-ready:** Yes.  
+**Additional testing:** Ensure Drizzle migration journal/snapshot recognizes `0002`.  
+**Undo later:** No.
+
+---
+
+# 9. Tests Run
+
+### 9.1 Combined DQ and tie-break targeted suite
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Ran:
+
+```bash
+cd /workspaces/Tennis-Stats-Engine
+pnpm --dir artifacts/api-server exec tsx --test \
+  src/services/predictionEngine/dataQuality.test.ts \
+  src/services/predictionEngine/tieBreakers.test.ts
+```
+
+**Why:** Verify DQ and tie-break regression behavior.  
+**Evidence:** 21 run, 21 passed, 0 failed after fixture correction.  
+**Verified:** Yes.  
+**Production-ready:** Supports mechanical readiness.  
+**Additional testing:** Full end-to-end/live behavior.  
+**Undo later:** No.
+
+### 9.2 Tie-break implementation suite
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** 82/82 unit tests passed for the soft no-play tie-break work.  
+**Why:** Confirm scoped behavior without touching weights/calibration/DQ.  
+**Evidence:** Raw test count reported and scope review.  
+**Verified:** Yes.  
+**Production-ready:** Unit-ready; live verification pending.  
+**Additional testing:** New production row and downstream UI/parlay behavior.  
+**Undo later:** Possible.
+
+### 9.3 Data Quality targeted tests
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** One run reported 198 prediction-engine tests with 197 passing; later scoped totals reported 93 DQ tests passing as part of 102/102 across three work items.  
+**Why:** Validate the DQ blend change.  
+**Evidence:** Recorded raw totals. The single non-pass in the 198-run context was not attributed to DQ logic in the final status.  
+**Verified:** Partially: targeted mechanics passed, but preserve both counts because they came from different suite scopes.  
+**Production-ready:** Mechanically.  
+**Additional testing:** Clarify the 198th test status and run CI in a fully provisioned environment.  
+**Undo later:** Possible based on live metrics.
+
+### 9.4 Fallback and frozen-backtest unit groups
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Consolidated result reported 102/102 across groups: 93 + 6 + 3. Frozen-backtest tests passed 3/3 after adding a guard preventing auto-execution against the live DB during tests.  
+**Why:** Ensure instrumentation and diagnostic script behave safely.  
+**Evidence:** Recorded totals and guard-fix narrative.  
+**Verified:** Yes.  
+**Production-ready:** Yes for telemetry/script.  
+**Additional testing:** Real optimizer cohort.  
+**Undo later:** No.
+
+### 9.5 Evaluation and historical scoring tests
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Planned/runs included:
+
+```bash
+pnpm --filter @workspace/api-server exec tsx --test \
+  src/services/evaluation/backtestCancellation.test.ts
+
+pnpm --filter @workspace/api-server exec tsx --test \
+  src/services/evaluation/historicalScoring.test.ts
+```
+
+**Why:** Closest coverage for backtest behavior and fallback scoring path.  
+**Evidence:** Evaluation environment run produced 19 passed and 81 failed both with and without the two new files.  
+**Verified:** The identical failure baseline is verified.  
+**Production-ready:** New files did not introduce the failures.  
+**Additional testing:** Re-run with DB hostname resolution and built workspace packages.  
+**Undo later:** No based on these failures.
+
+### 9.6 Controlled stash comparison
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Changes were stashed, failing suites rerun on a clean tree, then stash popped. Failure counts were identical; every delta was zero. Suites included leakage, historicalBackfillIncremental, evaluation, ledgerPlayers, and job-smoke.  
+**Why:** Prove failures were pre-existing/environmental rather than assume it.  
+**Evidence:** Side-by-side raw counts and restored working tree.  
+**Verified:** Yes.  
+**Production-ready:** Demonstrates no new regression in those suite counts.  
+**Additional testing:** Run in functional DB/browser CI.  
+**Undo later:** No.
+
+### 9.7 Typecheck
+
+**Status:** ⚠️ Changed – Review Later  
+**Changed / finding:** API typecheck failed before reaching new files due to broader build-state issues. First error was in `src/_cleanup.ts` involving stale/missing `@workspace/db` build output. `evaluation.ts` lines 30/82 and `predictions.ts` lines 25/48/395 also had errors proven pre-existing and unrelated to instrumentation.  
+**Why:** Distinguish new regressions from repository debt.  
+**Evidence:** Raw error locations and line-by-line comparison.  
+**Verified:** New changes did not introduce the cited errors.  
+**Production-ready:** Repository-wide typecheck is not green.  
+**Additional testing:** Rebuild workspace dependencies and clear all baseline type errors.  
+**Undo later:** Do not roll back verified features merely due to unrelated failures.
+
+---
+
+# 10. Test Results
+
+| Status | Scope | Result | Interpretation | Production readiness / more testing / rollback |
+|---|---|---|---|---|
+| ✅ | DQ + tie-break fixture suite | 21/21 passed | Fixture fix restored intended tests. | Test-only fix ready; no rollback. |
+| ✅ | Tie-break soft no-play | 82/82 passed | Mechanical behavior is correct. | Live activation and outcome impact still needed; rollback possible. |
+| ✅ | DQ/fallback/frozen grouped targeted tests | 102/102 passed (93+6+3) | Scoped implementation is internally consistent. | Live DQ/fallback and real optimizer tests remain. |
+| ⚠️ | Prediction-engine broader suite | 198 run, 197 passed | Preserve as a different suite scope; one non-pass not established as new logic failure. | Re-run in CI and document remaining test. |
+| ✅ | Evaluation suite controlled comparison | 19 passed, 81 failed both with and without new files | Failures are environmental/pre-existing, primarily `ENOTFOUND helium`. | New files need not be rolled back; environment must be fixed. |
+| ✅ | Five-suite stash comparison | All failure-count deltas = 0 | Today’s changes did not change failure counts. | Safe scope evidence; still need functional CI. |
+| ⚠️ | Full repo suite | Leakage 9/9 failed; historicalBackfillIncremental 2/2 failed; evaluation 40/59 failed in one recorded run; ledgerPlayers 8/8 failed; job-smoke/e2e affected | DB hostname and Chromium/browser unavailability; counts varied by suite command/scope. | Not a green CI signal. Provision DB/browser and rerun. |
+| ⚠️ | Typecheck | Failed first in `src/_cleanup.ts` / stale `@workspace/db` outputs | Pre-existing build debt, not caused by migration/script. | Must be repaired before claiming fully clean build. |
+
+---
+
+# 11. Performance Metrics
+
+### 11.1 No verified runtime performance benchmark was preserved
+
+**Status:** ❌ Still Open  
+**Changed / finding:** The project history contains no trustworthy latency, throughput, memory, or batch-duration benchmark for prediction generation.  
+**Why:** Performance claims require reproducible timing evidence.  
+**Evidence:** Timing was discussed around backtests and diagnostics, but no final benchmark table/result was captured in these files.  
+**Verified:** Yes as an absence in the provided history.  
+**Production-ready:** Performance readiness unknown.  
+**Additional testing:** Benchmark single match, 10/50/100-match batches, cache warm/cold, API latency, DB load, and optimizer duration.  
+**Undo later:** No.
+
+### 11.2 Evaluation corpus scale
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Frozen-backtest query found 52,419 qualifying frozen rows; live tie-break query covered 52,456 rows including a small null/unclassified cohort.  
+**Why:** Establishes data scale for audits and validates that the tie-break gap is not a tiny-sample artifact.  
+**Evidence:** Direct script and SQL outputs.  
+**Verified:** Yes.  
+**Production-ready:** Useful for planning run times and confidence intervals.  
+**Additional testing:** Explain the 37-row difference through exact filter/date/cohort comparison.  
+**Undo later:** No.
+
+---
+
+# 12. Accuracy Results
+
+| Status | Metric | Segment / sample | Evidence and interpretation | Production / more testing / rollback |
+|---|---|---|---|---|
+| ✅ | Strong agreement 57.9% | Test, n=3,144 | Canonical held-out benchmark from Task 116. | Reporting-ready; rerun on current locked test eventually. |
+| ⚠️ | Strong agreement 65.8% | Validation, n=2,341 | Task 162 snapshot; no test rows available. Superseded as canonical, preserved historically. | Never present as held-out result. |
+| ⚠️ | Approximately 66.0% | Validation historical slice; Mixed-agreement example | Original headline was not test verified. | Remove as headline until reproduced. |
+| ⚠️ | High DQ + Low Upset Risk 64.3% | Validation, n=311 | Data-mined combo; no test result. | Not production evidence; rollback marketing claim. |
+| ⚠️ | Other “best combo” 64.1% | Historical, n≈209 | Thin sample; approximate uncertainty around 57–71%. | Requires pre-registered held-out test. |
+| ✅ | DQ Limited 61.4% | Historical audit | Best DQ tier despite being “Limited.” | Treat DQ as completeness, not truth. |
+| ✅ | DQ Excellent 54.7% | Historical audit | Worst DQ tier; inversion. | Prospective rerun after fix. |
+| ✅ | No tie-break 66.8% | Live test slice, n=36,682 | Large verified cohort. | Supports abstention design, not universal model claim. |
+| ✅ | Tie-break applied 53.5% | Live test slice, n=15,737 | Large verified weak cohort. | Soft no-play candidate; verify implementation live. |
+| ✅ | Broad combined test ≈62.8% | 52,456 rows | Calculated from 24,507 + 8,416 + 20 correct; broader than Strong agreement. | Do not compare directly to 57.9% bucket. |
+| ⚠️ | Pre-fix 61.5% | Validation, n=3,987 | Invalid baseline for post-fix comparison. | Retire uplift claim. |
+| ⚠️ | Post-fix 64.6% | Test, n=7,844 | Real post-fix snapshot but no same-slice baseline. | Not proof of improvement. |
+| ⚠️ | Old cascade 52.9% vs close-match 56.0% | Different/unclear cohorts | Reported in tie-break audit without locked identical rows. | Requires correct reproduction. |
+| ❌ | Frozen vs dynamic accuracy | Frozen rows 52,419; dynamic rows 0 | Both accuracies/delta null because no intersection. | Trigger optimizer run first. |
+
+No trustworthy log-loss, Brier, ECE, ROI, CLV, or real-P&L result was established in the four supplied files as a final engineering conclusion. Future audits must include them where available.
+
+---
+
+# 13. Live Verifications
+
+### 13.1 Database connectivity
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Replit Shell connected to PostgreSQL and returned timestamp `2026-08-04 18:03:35`.  
+**Why:** Proved the DB was live even when sandbox access failed.  
+**Evidence:** `SELECT NOW()` result.  
+**Verified:** Yes.  
+**Production-ready:** Connection works in intended runtime.  
+**Additional testing:** Deployed app health check and recent successful query timestamp.  
+**Undo later:** No.
+
+### 13.2 Live schema before migration
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** A direct requested-column query initially returned only `segment`, `predicted_winner_id`, `actual_winner_id`, and `included_in_accuracy`; `data_segment`, `used_fallback`, and `fallback_sources` were absent.  
+**Why:** Disproved an earlier “instrumentation complete/live” report.  
+**Evidence:** Raw information-schema result.  
+**Verified:** Yes for that point in time/environment.  
+**Production-ready:** Demonstrated migration gap.  
+**Additional testing:** Current `data_segment` status remains to be reconciled.  
+**Undo later:** No.
+
+### 13.3 Live schema after migration
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** `used_fallback` and `fallback_sources` were added; verification query returned two rows.  
+**Why:** Activated telemetry persistence.  
+**Evidence:** Direct `psql` migration and information-schema check.  
+**Verified:** Yes.  
+**Production-ready:** Yes.  
+**Additional testing:** Verify populated values on recent rows.  
+**Undo later:** No.
+
+### 13.4 Live tie-break split
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** 66.8% without tie-break versus 53.5% with tie-break.  
+**Why:** Establish high-value accuracy weakness.  
+**Evidence:** Direct query.  
+**Verified:** Yes.  
+**Production-ready:** Evidence is ready; code fix still needs live check.  
+**Additional testing:** Date-window/fold breakdown and prospective cohort.  
+**Undo later:** No.
+
+### 13.5 Live optimizer absence
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** No non-null optimizer IDs anywhere.  
+**Why:** Explains null frozen/dynamic result.  
+**Evidence:** Group query `(0 rows)` and aggregate `0 | null | null`.  
+**Verified:** Yes.  
+**Production-ready:** Conclusion ready.  
+**Additional testing:** Actual training run.  
+**Undo later:** No.
+
+---
+
+# 14. Items Built but NOT Yet Verified
+
+### 14.1 Tie-break soft no-play in production
+
+**Status:** 🟡 Completed – Needs Live Verification  
+**Changed / finding:** Built and unit-tested, but no new production row was inspected.  
+**Why:** Unit tests cannot prove deployment, route use, or downstream UI semantics.  
+**Evidence:** 82/82 tests; explicit “not yet confirmed active” status.  
+**Verified:** Unit only.  
+**Production-ready:** Pending.  
+**Additional testing:** Generate/observe natural tie case and inspect recommendation/flag/ledger.  
+**Undo later:** Yes if downstream incompatibility.
+
+### 14.2 DQ statistical improvement
+
+**Status:** 🟡 Completed – Needs Live Verification  
+**Changed / finding:** Blend correction is deployed/active on new predictions, but accuracy/calibration improvement is unmeasured.  
+**Why:** It is a correctness-of-label fix, not a new predictive signal.  
+**Evidence:** Code and tests only.  
+**Verified:** Mechanical only.  
+**Production-ready:** Yes with conservative claims.  
+**Additional testing:** Prospective tier distributions and outcomes.  
+**Undo later:** Possible.
+
+### 14.3 Fallback row population and accuracy split
+
+**Status:** 🟡 Completed – Needs Live Verification  
+**Changed / finding:** Columns are live, but insufficient recent rows were available to measure fraction/accuracy in the preserved history.  
+**Why:** Telemetry value depends on real population.  
+**Evidence:** Migration verified; no final recent-row cohort result.  
+**Verified:** Schema yes, data analysis no.  
+**Production-ready:** Collection yes.  
+**Additional testing:** Recent row inspection and accuracy after outcomes mature.  
+**Undo later:** No.
+
+### 14.4 Frozen/dynamic comparison result
+
+**Status:** ❌ Still Open  
+**Changed / finding:** Script works, but there is no dynamic cohort.  
+**Why:** Cannot calculate delta without identical rows from both policies.  
+**Evidence:** 52,419 vs 0.  
+**Verified:** Blocker verified.  
+**Production-ready:** Tool yes, conclusion no.  
+**Additional testing:** Training run and rerun.  
+**Undo later:** Dynamic architecture may be simplified.
+
+---
+
+# 15. Features Added
+
+### 15.1 Fallback provenance telemetry
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Added persisted boolean/source telemetry for fallback usage.  
+**Why:** Enable auditability and cohort separation.  
+**Evidence:** Code, tests, live migration.  
+**Verified:** Yes.  
+**Production-ready:** Yes.  
+**Additional testing:** Live values and reporting endpoint.  
+**Undo later:** No.
+
+### 15.2 Segment provenance
+
+**Status:** ⚠️ Changed – Review Later  
+**Changed / finding:** Added/wired `data_segment` semantics alongside existing `segment`.  
+**Why:** Prevent validation/test ambiguity across write paths.  
+**Evidence:** TypeScript schema and writes; live-final column status not conclusively preserved.  
+**Verified:** Code yes, live-final state uncertain.  
+**Production-ready:** Use with caution until reconciled.  
+**Additional testing:** Schema and value consistency audit.  
+**Undo later:** Merge/remove redundant field if appropriate.
+
+### 15.3 Frozen/dynamic diagnostic CLI
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Added manual identical-match comparison tool.  
+**Why:** Test whether optimizer complexity adds value.  
+**Evidence:** Successful null-result run.  
+**Verified:** Yes as a tool.  
+**Production-ready:** Diagnostic only.  
+**Additional testing:** Populated dynamic cohort.  
+**Undo later:** No.
+
+### 15.4 Tie-case abstention
+
+**Status:** 🟡 Completed – Needs Live Verification  
+**Changed / finding:** Added soft no-play behavior to avoid forced ambiguous picks.  
+**Why:** Tie cohort is weak.  
+**Evidence:** Tests and live historical gap.  
+**Verified:** Unit only.  
+**Production-ready:** Pending live/UI verification.  
+**Additional testing:** End-to-end.  
+**Undo later:** Yes.
+
+---
+
+# 16. Features Changed
+
+### 16.1 Data Quality calculation and tier outcomes
+
+**Status:** 🟡 Completed – Needs Live Verification  
+**Changed / finding:** DQ blend now includes previously omitted modules; some formerly Excellent predictions should move to lower tiers.  
+**Why:** Make DQ reflect actual input support.  
+**Evidence:** Implementation and tests.  
+**Verified:** Mechanical.  
+**Production-ready:** Yes with cautious messaging.  
+**Additional testing:** Distribution drift and correctness.  
+**Undo later:** Possible.
+
+### 16.2 Prediction/evaluation persistence
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Multiple write paths now persist segment/fallback provenance.  
+**Why:** Auditability.  
+**Evidence:** Raw code and schema.  
+**Verified:** Yes.  
+**Production-ready:** Yes.  
+**Additional testing:** All run-kind smoke tests.  
+**Undo later:** No.
+
+### 16.3 Tie-break recommendation policy
+
+**Status:** 🟡 Completed – Needs Live Verification  
+**Changed / finding:** Forced pick changed toward no-play.  
+**Why:** 53.5% tie cohort.  
+**Evidence:** Implementation/tests.  
+**Verified:** Unit.  
+**Production-ready:** Pending.  
+**Additional testing:** Downstream and prospective.  
+**Undo later:** Possible.
+
+---
+
+# 17. Features Removed
+
+### 17.1 No confirmed production feature removal in supplied history
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** No substantive production feature was conclusively documented as removed. The tie-break change altered behavior rather than deleting the subsystem; fallback logic was intentionally retained.  
+**Why:** Preserve continuity and avoid inventing removals.  
+**Evidence:** Project history.  
+**Verified:** Yes.  
+**Production-ready:** Not applicable.  
+**Additional testing:** None.  
+**Undo later:** Not applicable.
+
+### 17.2 Scratch files removed/discarded
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** `GoGo`, `dodo`, `check.sh`, and `.tmp-full-test-output.txt` were identified as scratch/stale artifacts to delete/discard, not commit.  
+**Why:** They contained temporary commands or outdated paths.  
+**Evidence:** Git-status cleanup workflow.  
+**Verified:** Expected clean commit scope was established; final repository should be rechecked for remnants.  
+**Production-ready:** Yes to remove.  
+**Additional testing:** `git status --short` and `rg --files`.  
+**Undo later:** No recovery needed; commands are preserved in this document.
+
+---
+
+# 18. Potential Rollback Candidates
+
+### 18.1 Dynamic weighting complexity
+
+**Status:** 🔄 Possible Rollback Candidate  
+**Changed / finding:** Recent Form and other weights vary dynamically, but no optimizer cohort proves benefit.  
+**Why:** Complexity may add noise and destabilize bucket semantics.  
+**Evidence:** 13× weight swing and zero optimizer rows.  
+**Verified:** Unvalidated architecture confirmed.  
+**Production-ready:** Existing production behavior is not empirically justified.  
+**Additional testing:** Frozen identical-cohort comparison.  
+**Undo later:** Simplify to frozen weights if no held-out gain.
+
+### 18.2 High-confidence/Elite presentation thresholds
+
+**Status:** 🔄 Possible Rollback Candidate  
+**Changed / finding:** Labels operate where calibration degrades above ~70%.  
+**Why:** May drive overconfidence and oversized bets.  
+**Evidence:** Calibration audit.  
+**Verified:** Historical, needs rerun.  
+**Production-ready:** Risky without recalibration.  
+**Additional testing:** Reliability/ECE and decision-utility analysis.  
+**Undo later:** Lower, rename, or remove unsupported tiers.
+
+### 18.3 Hardcoded discounts
+
+**Status:** 🔄 Possible Rollback Candidate  
+**Changed / finding:** Coarse category-wide corrections lack held-out validation.  
+**Why:** They can distort calibrated probabilities.  
+**Evidence:** Code audit.  
+**Verified:** Existence verified.  
+**Production-ready:** Review required.  
+**Additional testing:** Ablations.  
+**Undo later:** Remove if non-beneficial.
+
+### 18.4 Soft no-play implementation
+
+**Status:** 🔄 Possible Rollback Candidate  
+**Changed / finding:** Abstention is evidence-based, but downstream contracts may expect a winner.  
+**Why:** Could break UI, parlay builder, saving, grading, or clients.  
+**Evidence:** Unit tests only.  
+**Verified:** Not live.  
+**Production-ready:** Pending.  
+**Additional testing:** End-to-end contract testing.  
+**Undo later:** Restore flagged low-confidence pick if null/no-play is incompatible.
+
+### 18.5 Duplicate `segment`/`data_segment`
+
+**Status:** 🔄 Possible Rollback Candidate  
+**Changed / finding:** Two segment fields may overlap.  
+**Why:** Duplicate provenance can drift and recreate reporting ambiguity.  
+**Evidence:** Schema sources versus early live schema discrepancy.  
+**Verified:** Needs current DB check.  
+**Production-ready:** Not until precedence is explicit.  
+**Additional testing:** Null/value/cross-field consistency.  
+**Undo later:** Consolidate after migration plan.
+
+---
+
+# 19. Open Questions
+
+Each item below is **❌ Still Open**, not production-proven, requires additional testing, and should not be undone because it is a question rather than a deployed change.
+
+1. **Does the tie-break soft no-play path execute on real new predictions?** Evidence: only unit tests exist. Production-ready: no.
+2. **Does abstaining on tie cases improve accuracy on an identical prospective cohort?** Evidence: historical cohort gap, not an A/B result. Production-ready: no.
+3. **Why is there a 37-row difference between the 52,419 script corpus and 52,456 tie-break corpus?** Evidence: likely filter/snapshot difference; unverified.
+4. **Does corrected DQ ordering become monotonic or at least non-inverted?** Evidence: no post-fix outcome audit.
+5. **What fraction of new predictions uses fallbacks, by source?** Evidence: columns live, final counts absent.
+6. **How accurate are fallback-affected versus clean predictions?** Evidence: historically impossible, now measurable prospectively.
+7. **Should fallback use cause no-play, probability shrinkage, a warning, or model failure?** Evidence: no measured cohort effect yet.
+8. **Can a real optimizer run complete and persist `optimizer_run_id` rows?** Evidence: zero historical rows.
+9. **Does dynamic weighting beat frozen weighting on identical test matches?** Evidence: no dynamic sample.
+10. **Is `optimizer_run_id` sufficient policy provenance, or should explicit `weight_policy`/version be persisted?** Evidence: current discriminator is indirect.
+11. **Does `data_segment` exist and populate in the final live schema, and how does it differ from `segment`?** Evidence conflicts across time/environment.
+12. **Why does DQ overlap with agreement/form signals, and what incremental value does each add?** Evidence: structural entanglement.
+13. **Are confidence discounts beneficial after calibration?** Evidence: unvalidated heuristics.
+14. **Is there any test-segment result for the original 66% or 64.3% combo claims?** Evidence: none found.
+15. **How many combinations were searched before selecting “best” combos?** Evidence: not recorded.
+16. **What is the real joint parlay probability after correlation?** Evidence: single-leg hit rates are insufficient.
+17. **How does engine performance map to actual bets, odds, stake, CLV, cash-out, and P&L?** Evidence: no ledger link.
+18. **Is the `helium` connection string still the intended production DB and are credentials secure?** Evidence: internal URL works only in Shell.
+19. **Can repository-wide typecheck and full tests pass in a correctly provisioned environment?** Evidence: current baseline is red.
+20. **Are all scratch/duplicate files removed and all intended files pushed?** Evidence: several path/persistence failures occurred historically.
+
+---
+
+# 20. Known Risks
+
+### 20.1 Financial-decision risk
+
+**Status:** ❌ Still Open  
+**Changed / finding:** Uncalibrated high-confidence labels, data-mined combinations, and no sizing system can encourage overbetting.  
+**Why:** Prediction accuracy does not imply positive expected value without market odds and disciplined sizing.  
+**Evidence:** Validation/test gaps, >70% overconfidence, no trade ledger.  
+**Verified:** Risk verified.  
+**Production-ready:** Not as an automated betting-edge product.  
+**Additional testing:** Odds-aware calibration, EV, CLV, and prospective P&L.  
+**Undo later:** Remove unsupported edge language.
+
+### 20.2 Silent-data-degradation risk
+
+**Status:** ❌ Still Open  
+**Changed / finding:** Fallbacks and stale/thin profiles can still generate normal-looking predictions.  
+**Why:** Telemetry is persisted but not necessarily surfaced or used to abstain.  
+**Evidence:** `fallbackTracking.ts`, `playerProfileWarnings.ts`, and fallback modules.  
+**Verified:** Yes.  
+**Production-ready:** Telemetry yes; risk handling no.  
+**Additional testing:** UI/API warnings and cohort analysis.  
+**Undo later:** No.
+
+### 20.3 Deployment-verification risk
+
+**Status:** ❌ Still Open  
+**Changed / finding:** Code existence, commit, deployment, schema application, and live route use have repeatedly been conflated.  
+**Why:** A unit-passing change may not be active.  
+**Evidence:** Missing files and pre-migration schema.  
+**Verified:** Yes.  
+**Production-ready:** Requires explicit deployment checklist.  
+**Additional testing:** Commit SHA, deployment SHA, migration version, live row.  
+**Undo later:** No.
+
+### 20.4 Environment-dependent DB risk
+
+**Status:** ⚠️ Changed – Review Later  
+**Changed / finding:** Bare `helium` host works only in intended runtime.  
+**Why:** Tests/agents cannot reach production DB, and accidental wrong-database use is possible.  
+**Evidence:** Shell success versus sandbox failure.  
+**Verified:** Yes.  
+**Production-ready:** Runtime-local only.  
+**Additional testing:** Environment identity and DB fingerprint checks.  
+**Undo later:** Move to managed external/SSL endpoint if needed.
+
+### 20.5 Statistical leakage/overfitting risk
+
+**Status:** ❌ Still Open  
+**Changed / finding:** Many retrospective buckets were inspected without disclosed multiple-comparison control.  
+**Why:** Selected best slices will regress toward baseline.  
+**Evidence:** Validation-only “best combo” results and 8-point Strong-agreement drop.  
+**Verified:** Strong evidence.  
+**Production-ready:** No for claims derived this way.  
+**Additional testing:** Temporal holdout and prospective tracking.  
+**Undo later:** Remove rules selected only in-sample.
+
+---
+
+# 21. Future Work
+
+### 21.1 Run a real optimizer/training evaluation
+
+**Status:** ❌ Still Open  
+**Changed / finding:** Trigger the path that invokes `candidateOptimizer.ts` with `evaluationOnly:false`; persist versioned dynamic test rows.  
+**Why:** Required to resolve frozen-vs-dynamic question.  
+**Evidence:** Zero optimizer rows.  
+**Verified:** Need is verified.  
+**Production-ready:** Not yet.  
+**Additional testing:** Resource limits, cancellation, reproducibility, unique cohort IDs, and no leakage.  
+**Undo later:** Remove optimizer complexity if it cannot complete reliably.
+
+### 21.2 Build prospective locked evaluation harness
+
+**Status:** ❌ Still Open  
+**Changed / finding:** Persist cohort fingerprint, code/strategy version, segment, fold, cutoff, feature policy, and abstention reason.  
+**Why:** Prevent invalid comparisons.  
+**Evidence:** Historical segment mismatch.  
+**Verified:** Need verified.  
+**Production-ready:** No.  
+**Additional testing:** Reproducibility and immutability.  
+**Undo later:** No.
+
+### 21.3 Surface data provenance to users
+
+**Status:** ❌ Still Open  
+**Changed / finding:** Show fallback used/source, data freshness, profile warnings, and tie/no-play reason on prediction outputs.  
+**Why:** Users currently cannot distinguish thin/stale data from complete evidence.  
+**Evidence:** Internal tracking exists but is not fully surfaced.  
+**Verified:** Need verified.  
+**Production-ready:** No.  
+**Additional testing:** UI clarity and API compatibility.  
+**Undo later:** Simplify if overwhelming, but retain machine-readable fields.
+
+### 21.4 Actual trade ledger
+
+**Status:** ❌ Still Open  
+**Changed / finding:** Record timestamped recommendation as seen, probability, odds, stake, result, cash-out, and P&L.  
+**Why:** Measure real decisions rather than engine self-audits.  
+**Evidence:** Current linkage absent.  
+**Verified:** Need verified.  
+**Production-ready:** No.  
+**Additional testing:** Immutable snapshots, odds source, privacy, reconciliation.  
+**Undo later:** No.
+
+### 21.5 Repair CI/typecheck baseline
+
+**Status:** ❌ Still Open  
+**Changed / finding:** Provision DB/browser, rebuild workspace packages, and eliminate existing errors.  
+**Why:** Controlled stash comparisons prove no regression but do not substitute for green CI.  
+**Evidence:** `ENOTFOUND helium`, missing Chromium, stale `@workspace/db`, and raw TypeScript errors.  
+**Verified:** Need verified.  
+**Production-ready:** No.  
+**Additional testing:** Full suite.  
+**Undo later:** No.
+
+---
+
+# 22. TODO List
+
+1. **🟡 Verify tie soft no-play on a real new prediction.** Evidence required: prediction row, `tieBreakerApplied`, recommendation/no-play field, deployed commit. Production-ready only after this; rollback if contracts break.
+2. **❌ Lock and run a prospective tie-break evaluation.** Same matches/policy versions; report accuracy, coverage, log loss/Brier where applicable, and abstention rate. Do not use mismatched old cohorts.
+3. **❌ Query fallback telemetry after enough outcomes mature.** Report total, fraction fallback, sources, accuracy, calibration, and confidence bands. Do not backfill unknown history.
+4. **❌ Decide fallback action from evidence.** Warning, shrinkage, or no-play; do not simply delete fallback handling.
+5. **❌ Confirm final live `data_segment` status.** Compare it with `segment`, document precedence, and migrate/consolidate if necessary.
+6. **❌ Trigger a versioned optimizer run.** Require `evaluationOnly:false`, persisted `optimizer_run_id`, locked train/validation/test windows, and no retroactive edits.
+7. **❌ Rerun `backtestFrozenVsDynamicWeights.ts`.** Require identical intersected match IDs and nonzero cohorts.
+8. **❌ Re-audit DQ post-fix.** Tier counts, accuracy, calibration, and comparison to pre-fix on a locked evaluation.
+9. **❌ Run feature ablations.** DQ, agreement, recent form, hardcoded discounts, and dynamic gates.
+10. **❌ Reproduce original 66% and 64.3% claims on held-out data or retire them.** Include raw counts and confidence intervals.
+11. **❌ Add actual-bet ledger and odds snapshots.** Keep separate from engine evaluation.
+12. **❌ Repair full typecheck/test environment.** Build `@workspace/db`, provide test DB and Chromium, then establish a green baseline.
+13. **❌ Add safe read-only diagnostics.** Recent schema version, DB connectivity timestamp, latest evaluation row, fallback counts, and deployment SHA—avoiding mobile Shell SQL.
+14. **❌ Audit DB credentials and SSL.** Rotate literal/default password if present; confirm correct database.
+15. **✅ Preserve approval-first workflow.** Plan → explicit approval → diff → targeted tests → full tests → clean-tree comparison when needed → status → commit → push → deploy/migrate → live row.
+
+---
+
+# 23. Commands, SQL, and Scripts Worth Saving
+
+## 23.1 Install/typecheck/test commands
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Preserve commands used to reproduce engineering checks.  
+**Why:** Future engineers need exact entry points.  
+**Evidence:** Recorded runs.  
+**Verified:** Commands were used or explicitly approved; environment provisioning still matters.  
+**Production-ready:** Safe when run in correct repo/runtime.  
+**Additional testing:** None beyond interpreting environment failures.  
+**Undo later:** No.
+
+```bash
+pnpm install
+
+pnpm --filter @workspace/api-server run typecheck
+
+pnpm --filter @workspace/api-server exec tsx --test \
+  src/services/predictionEngine/dataQuality.test.ts \
+  src/services/predictionEngine/tieBreakers.test.ts
+
+pnpm --filter @workspace/api-server exec tsx --test \
+  src/services/evaluation/backtestCancellation.test.ts
+
+pnpm --filter @workspace/api-server exec tsx --test \
+  src/services/evaluation/historicalScoring.test.ts
+
+pnpm --filter @workspace/api-server exec tsx \
+  src/scripts/backtestFrozenVsDynamicWeights.ts
+```
+
+## 23.2 Migration and schema verification
+
+```bash
+psql "$DATABASE_URL" \
+  -f lib/db/drizzle/0002_add_evaluation_prediction_fallback_columns.sql
+
+psql "$DATABASE_URL" -c "
+SELECT column_name, data_type
+FROM information_schema.columns
+WHERE table_name = 'evaluation_predictions'
+  AND column_name IN (
+    'segment', 'data_segment', 'used_fallback', 'fallback_sources',
+    'included_in_accuracy', 'actual_winner_id', 'predicted_winner_id'
+  )
+ORDER BY ordinal_position;
+"
+```
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Migration was applied and fallback columns verified.  
+**Why:** Activate provenance.  
+**Evidence:** Two returned rows for new columns.  
+**Verified:** Yes.  
+**Production-ready:** Yes.  
+**Additional testing:** Current values.  
+**Undo later:** No.
+
+## 23.3 Live tie-break split
+
+```sql
+SELECT
+  (feature_snapshot->'engine'->>'tieBreakerApplied')::boolean AS applied,
+  COUNT(*) AS n,
+  SUM(CASE WHEN predicted_winner_id = actual_winner_id THEN 1 ELSE 0 END) AS correct,
+  ROUND(
+    100.0 * SUM(CASE WHEN predicted_winner_id = actual_winner_id THEN 1 ELSE 0 END)
+    / COUNT(*),
+    1
+  ) AS accuracy_pct
+FROM evaluation_predictions
+WHERE segment = 'test'
+  AND included_in_accuracy = true
+  AND actual_winner_id IS NOT NULL
+GROUP BY (feature_snapshot->'engine'->>'tieBreakerApplied')::boolean
+ORDER BY applied NULLS LAST;
+```
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Produced 66.8%/36,682 versus 53.5%/15,737.  
+**Why:** Canonical live weakness evidence.  
+**Evidence:** Raw output.  
+**Verified:** Yes.  
+**Production-ready:** Query is safe/read-only.  
+**Additional testing:** Add date/fold/version grouping.  
+**Undo later:** No.
+
+## 23.4 Historical fold-185 tie-break query
+
+```sql
+SELECT
+  (feature_snapshot->'engine'->>'tieBreakerApplied')::boolean AS applied,
+  COUNT(*) AS n,
+  SUM(CASE WHEN predicted_winner_id = actual_winner_id THEN 1 ELSE 0 END) AS correct,
+  ROUND(
+    100.0 * SUM(CASE WHEN predicted_winner_id = actual_winner_id THEN 1 ELSE 0 END)
+    / COUNT(*),
+    1
+  ) AS accuracy_pct
+FROM evaluation_predictions
+WHERE fold_id = 185
+  AND run_kind = 'historical_test'
+  AND segment = 'test'
+  AND included_in_accuracy = true
+GROUP BY (feature_snapshot->'engine'->>'tieBreakerApplied')::boolean
+ORDER BY applied NULLS LAST;
+```
+
+**Status:** ⚠️ Changed – Review Later  
+**Changed / finding:** Historical audit recorded `applied=true`, `n=2,803`.  
+**Why:** Useful artifact but not a fresh live count or valid pre/post baseline.  
+**Evidence:** `audit-task11-tiebreak-fix-before-after.md`.  
+**Verified:** Historical only.  
+**Production-ready:** Query safe; interpretation constrained.  
+**Additional testing:** Same-policy version tagging.  
+**Undo later:** Retire as uplift evidence.
+
+## 23.5 Optimizer row checks
+
+```bash
+psql "$DATABASE_URL" -c "
+SELECT
+  run_kind,
+  COALESCE(segment, 'null') AS segment,
+  COUNT(*) AS rows_with_optimizer_run_id
+FROM evaluation_predictions
+WHERE optimizer_run_id IS NOT NULL
+GROUP BY run_kind, COALESCE(segment, 'null')
+ORDER BY run_kind, segment;
+"
+
+psql "$DATABASE_URL" -c "
+SELECT
+  COUNT(*) AS optimizer_rows,
+  MIN(locked_at) AS first_seen,
+  MAX(locked_at) AS last_seen
+FROM evaluation_predictions
+WHERE optimizer_run_id IS NOT NULL;
+" | cat
+```
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Returned no grouped rows and aggregate zero/null/null.  
+**Why:** Prove dynamic cohort absence.  
+**Evidence:** Raw output.  
+**Verified:** Yes.  
+**Production-ready:** Safe diagnostics.  
+**Additional testing:** Rerun after optimizer execution.  
+**Undo later:** No.
+
+## 23.6 DB connectivity and schema inspection
+
+```bash
+psql "$DATABASE_URL" -c "SELECT NOW();"
+psql "$DATABASE_URL" -c "\dt"
+psql "$DATABASE_URL" -c "\d evaluation_predictions" | cat
+
+psql "$DATABASE_URL" -c "
+SELECT column_name
+FROM information_schema.columns
+WHERE table_name = 'evaluation_predictions'
+ORDER BY ordinal_position;
+"
+```
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** These are the preferred read-only live checks.  
+**Why:** Establish actual schema rather than trust code summaries.  
+**Evidence:** Shell connection succeeded.  
+**Verified:** Yes.  
+**Production-ready:** Safe in intended runtime.  
+**Additional testing:** None.  
+**Undo later:** No.
+
+## 23.7 Git integrity commands
+
+```bash
+git status
+git status --short
+git log --oneline -15
+git diff --stat
+git diff
+git diff --cached
+find . -iname '*frozen*'
+rg --files artifacts/api-server/src/scripts src/scripts 2>/dev/null
+```
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Preserve real-checkout verification commands.  
+**Why:** Prevent phantom files and unexpected commit scope.  
+**Evidence:** These checks caught missing/misplaced files.  
+**Verified:** Yes.  
+**Production-ready:** Yes.  
+**Additional testing:** None.  
+**Undo later:** No.
+
+---
+
+# 24. Important Lessons Learned
+
+### 24.1 A clean summary is not evidence
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Require raw output, code/diff, and live rows.  
+**Why:** Multiple “done” claims failed on first inspection.  
+**Evidence:** Missing files, absent columns, and contradictory typecheck claims.  
+**Verified:** Yes.  
+**Production-ready:** Process rule ready.  
+**Additional testing:** None.  
+**Undo later:** No.
+
+### 24.2 Always label every metric
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Every accuracy/win-rate figure must state segment, sample size, date range, cohort/fold, policy/version, and whether it was pre-specified.  
+**Why:** Prevent validation/test confusion and cherry-picking.  
+**Evidence:** 57.9% versus 65.8%; invalid 61.5% versus 64.6%.  
+**Verified:** Yes.  
+**Production-ready:** Reporting rule ready.  
+**Additional testing:** Automate.  
+**Undo later:** No.
+
+### 24.3 Unit tests prove mechanics, not accuracy improvement
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** 82/82 or 102/102 passing does not show a model change improves real outcomes.  
+**Why:** Statistical impact requires held-out/prospective evaluation.  
+**Evidence:** DQ and tie-break fixes remain live-outcome unverified.  
+**Verified:** Yes.  
+**Production-ready:** Testing doctrine ready.  
+**Additional testing:** Locked outcome studies.  
+**Undo later:** No.
+
+### 24.4 “Wired” is not “migrated,” “deployed,” or “populating”
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Treat code, schema, deployment, and observed row state as separate gates.  
+**Why:** Instrumentation was code-wired before columns existed live.  
+**Evidence:** Early schema query versus later migration.  
+**Verified:** Yes.  
+**Production-ready:** Deployment checklist ready.  
+**Additional testing:** Automate schema/deployment assertions.  
+**Undo later:** No.
+
+### 24.5 Never infer missing historical provenance
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Leave fallback state null unless reconstructable; infer segment only from deterministic run semantics.  
+**Why:** Guessed backfills poison audits.  
+**Evidence:** Instrumentation design decision.  
+**Verified:** Yes.  
+**Production-ready:** Yes.  
+**Additional testing:** Null-aware reporting.  
+**Undo later:** No.
+
+### 24.6 Abstention can improve decision quality without improving the underlying model
+
+**Status:** ⚠️ Changed – Review Later  
+**Changed / finding:** Removing weak tie cohorts from recommendations may raise effective selection accuracy while reducing coverage.  
+**Why:** 53.5% tie cohort versus 66.8% non-tie cohort.  
+**Evidence:** Live query.  
+**Verified:** Cohort difference yes; implemented tradeoff prospectively unverified.  
+**Production-ready:** Pending coverage/utility analysis.  
+**Additional testing:** Accuracy-coverage curve and downstream behavior.  
+**Undo later:** Possible.
+
+### 24.7 More data-quality inputs do not automatically mean greater correctness
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** DQ should describe evidence completeness, not be assumed to predict correctness.  
+**Why:** Excellent underperformed Limited.  
+**Evidence:** 54.7% versus 61.4%.  
+**Verified:** Historical result.  
+**Production-ready:** Messaging lesson ready.  
+**Additional testing:** Post-fix calibration.  
+**Undo later:** Remove any remaining “DQ = truth” language.
+
+### 24.8 Parlays require joint probability and correlation
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Single-leg historical accuracy cannot be interpreted as parlay win probability.  
+**Why:** Leg risks compound and are often correlated.  
+**Evidence:** Audit critique of 64% combo framing.  
+**Verified:** Methodological fact.  
+**Production-ready:** Product logic should follow it.  
+**Additional testing:** Correlation-aware simulation and odds-based EV.  
+**Undo later:** Remove misleading combo win-rate framing.
+
+### 24.9 Verify in the real execution environment
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Files and DB behavior must be checked where production/repo actually runs.  
+**Why:** Sandbox and Shell were disconnected.  
+**Evidence:** `helium` resolution and missing-file incidents.  
+**Verified:** Yes.  
+**Production-ready:** Process rule ready.  
+**Additional testing:** Add environment identity to logs.  
+**Undo later:** No.
+
+### 24.10 Preserve contradictions as engineering history
+
+**Status:** ✅ Completed & Verified  
+**Changed / finding:** Earlier conclusions are retained with their scope, and later evidence is identified as superseding—not erasing—them.  
+**Why:** Future engineers need to understand why a claim changed and avoid repeating the same audit error.  
+**Evidence:** Instrumentation “complete”→absent→rebuilt/live; 65.8%→57.9% canonical; “+3.1 points”→invalid comparison; frozen script “built”→missing→rebuilt→blocked by zero dynamic rows.  
+**Verified:** Yes.  
+**Production-ready:** Documentation practice ready.  
+**Additional testing:** Keep changelog updated.  
+**Undo later:** No.
+
+---
+
+## Final continuation state
+
+The safest next engineering sequence is:
+
+1. Verify the deployed tie-break no-play behavior on a real new row and all downstream consumers.
+2. Accumulate and analyze fallback telemetry without guessing historical values.
+3. Trigger a real, versioned optimizer run and persist dynamic test rows.
+4. Rerun frozen versus dynamic on identical match IDs.
+5. Re-audit DQ and calibration prospectively.
+6. Repair the repository’s full typecheck/CI environment.
+7. Retire or reproduce every validation-only marketing/headline claim on held-out data.
+
+Until those are done, the defensible canonical model statement is: **Strong-agreement accuracy was 57.9% on 3,144 held-out test rows in the preserved audit; tie-triggered cases were a verified weak cohort at 53.5% over 15,737 rows; multiple fixes are mechanically tested but not yet proven to improve prospective live accuracy.**
