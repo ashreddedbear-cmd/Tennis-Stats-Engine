@@ -210,12 +210,12 @@ Every substantive item includes:
 ### 2.10 Database URL shape
 
 **Status:** ⚠️ Changed – Review Later  
-**Changed / finding:** Observed URL: `postgresql://postgres:password@helium/heliumdb?sslmode=disable`. It is syntactically valid but uses a bare internal host and disables SSL.  
-**Why:** It may be runtime-internal and unusable from sandboxed/external environments; if `password` is literal, credentials are insecure.  
-**Evidence:** User-provided value and differing hostname resolution by environment.  
-**Verified:** Syntax and behavior partially verified; change history was not established.  
-**Production-ready:** Only inside the intended trusted Replit runtime, subject to credential review.  
-**Additional testing:** Compare secret history/config, rotate weak credentials, confirm production DB identity, and avoid exposing the URL.  
+**Changed / finding:** Observed URL uses a bare internal Replit hostname with `sslmode=disable`. The actual URL has been redacted from this document; see the `DATABASE_URL` secret in the Replit secrets manager.  
+**Why:** Internal DB URLs resolve only within the Replit runtime; the `sslmode=disable` setting is acceptable for intra-host Replit connections but must not be used for external-facing endpoints.  
+**Evidence:** Runtime-internal hostname; credential values managed via Replit secrets, not committed to the repository.  
+**Verified:** Connection confirmed working in the Replit runtime.  
+**Production-ready:** Only inside the intended trusted Replit runtime.  
+**Additional testing:** Confirm the database URL secret is rotated if it was ever exposed outside the runtime.  
 **Undo later:** Replace with managed external endpoint/SSL if cross-environment access is required.
 
 ---

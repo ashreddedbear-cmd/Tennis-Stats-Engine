@@ -8,7 +8,7 @@
 // Run with: pnpm --filter @workspace/api-server run test:evaluation
 import test from "node:test";
 import assert from "node:assert/strict";
-import { db, historicalMatchesTable, evaluationPredictionsTable, specialistModelsTable } from "@workspace/db";
+import { db, historicalMatchesTable, evaluationPredictionsTable, specialistModelsTable, calibrationModelsTable } from "@workspace/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   computeAndStoreSpecialistSegments,
@@ -435,4 +435,76 @@ test("Phase 6 specialist weighting: rich segment gets its own calibration, thin 
 
   const nonCandidateInput = await resolveSegmentSpecialistInput("Challenger", RICH_SURFACE);
   assert.equal(nonCandidateInput, null);
+});
+
+// ── Task #184: Live-DB convergence constraint regression test ──────────────────────────────────────
+//
+// Reads the currently-stored specialist_models rows and the active general calibration, then
+// asserts that every active specialist's stored knots satisfy the convergence-blend constraint
+// at x ∈ [0.5, SPECIALIST_FULL_TRUST_X). This prevents Task #182's fix from silently
+// regressing: if `constrainSpecialistKnotsToGeneral` is removed or its trust ramp is widened
+// past SPECIALIST_FULL_TRUST_X, the stored y values will drift above the general model in the
+// moderate-confidence band and this test will fail.
+//
+// The test is read-only (no DB writes, no cleanup needed). It is skipped when the
+// specialist_models table is empty (e.g. a fresh environment before any walk-forward has run)
+// or when no active calibration model exists.
+
+test("Task #184: stored specialist knots satisfy the convergence constraint at x<SPECIALIST_FULL_TRUST_X (regression guard)", async (t) => {
+  // Load the active general calibration model.
+  const [activeCalibration] = await db
+    .select({ id: calibrationModelsTable.id, mapping: calibrationModelsTable.mapping })
+    .from(calibrationModelsTable)
+    .where(eq(calibrationModelsTable.active, true))
+    .limit(1);
+
+  if (!activeCalibration) {
+    t.skip("No active calibration model in DB — skipping (fresh environment, no walk-forward has run yet)");
+    return;
+  }
+
+  const generalMapping = activeCalibration.mapping as CalibrationKnot[];
+
+  // Load all stored specialist rows.
+  const allSpecialists = await db.select().from(specialistModelsTable);
+
+  if (allSpecialists.length === 0) {
+    t.skip("specialist_models table is empty — skipping (no walk-forward training run has been completed yet)");
+    return;
+  }
+
+  // Check every active (meetsThreshold=true) specialist's stored knots in the convergence band.
+  // SPECIALIST_FULL_TRUST_X=0.75: below this, the trust ramp must have pulled stored y toward
+  // the general model. Above it, the specialist is fully trusted so no constraint applies.
+  const MAX_GAP_PP = 0.15; // 15pp: the theoretical max from the trust ramp at any x below 0.75
+
+  const violations: string[] = [];
+
+  for (const specialist of allSpecialists) {
+    if (!specialist.meetsThreshold) continue; // inactive segments use no calibration; skip
+    if (!specialist.calibrationMapping || !Array.isArray(specialist.calibrationMapping)) continue;
+
+    const knots = specialist.calibrationMapping as CalibrationKnot[];
+    for (const knot of knots) {
+      if (knot.x >= SPECIALIST_FULL_TRUST_X) continue; // above full-trust threshold: no constraint
+      if (knot.x < 0.5) continue; // below 0.5 (anchor/pre-uncertainty): general model should dominate
+
+      const generalY = applyCalibration(generalMapping, knot.x);
+      const gap = knot.y - generalY; // positive means specialist is MORE confident than general
+
+      if (gap > MAX_GAP_PP) {
+        violations.push(
+          `${specialist.segmentKey}: knot at x=${knot.x.toFixed(3)} has y=${knot.y.toFixed(4)} vs generalY=${generalY.toFixed(4)}, gap=${(gap * 100).toFixed(1)}pp > ${MAX_GAP_PP * 100}pp limit`,
+        );
+      }
+    }
+  }
+
+  assert.deepEqual(
+    violations,
+    [],
+    `Convergence constraint violated — specialist knots in x∈[0.5, ${SPECIALIST_FULL_TRUST_X}) must not exceed general model by more than ${MAX_GAP_PP * 100}pp.\n` +
+      `This means constrainSpecialistKnotsToGeneral is not being applied or its trust ramp is too wide.\n` +
+      `Violations:\n${violations.join("\n")}`,
+  );
 });
