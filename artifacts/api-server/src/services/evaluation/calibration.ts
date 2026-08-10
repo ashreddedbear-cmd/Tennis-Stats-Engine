@@ -13,6 +13,53 @@ import type { CalibrationKnot } from "./types";
 export const CASCADE_CUTOFF_DATE = new Date("2026-07-15T00:00:00.000Z");
 
 /**
+ * Providers whose historical_matches rows structurally always store the match winner as player1.
+ * This is a labeling convention, not a tennis fact: 100% of rows from these sources have
+ * `winner_id = player1_id` by construction, confirmed by DB query on 2026-08-10:
+ *
+ *   provider           | player1_win_pct
+ *   -------------------+-----------------
+ *   sackmann           | 100.00%  (276,677 rows)
+ *   tennis-data-co-uk  | 100.00%  (11,018 rows)
+ *   ext-csv            |  51.43%  (well-behaved)
+ *   API-Tennis         |  51.32%  (well-behaved)
+ *
+ * Training calibration in player1-space on these rows produces a perverse signal: PAVA sees
+ * a reverse-monotone win-rate sequence (all 1.0 at low x, dropping toward 0.5 in mixed folds)
+ * and pools the entire low-probability region into one flat block at ~84.5%.
+ *
+ * Fix (approach b): re-orient all training rows to predicted-winner space before fitting:
+ *   x       = max(raw, 1-raw)    — model confidence, always in [0.5, 1.0]
+ *   outcome = 1 if predicted winner actually won
+ * This is already done for NEW walk-forward rows by the orientation fix (2026-08-09).
+ * For the fast-refit path that reads existing evaluation_predictions rows, the same transform
+ * must be applied explicitly (done in refitCalibrationFromExistingEvaluationData).
+ *
+ * Do NOT add shadow-replay providers here — their rows are kept in a separate runKind bucket
+ * and never mixed into calibration training.
+ */
+export const WINNER_ALWAYS_PLAYER1_PROVIDERS = new Set<string>([
+  "sackmann",
+  "tennis-data-co-uk",
+]);
+
+/** Returns true when the provider always stores the winner as player1 by convention. */
+export function isWinnerAlwaysPlayer1Provider(provider: string): boolean {
+  return WINNER_ALWAYS_PLAYER1_PROVIDERS.has(provider);
+}
+
+/**
+ * Minimum effective sample size (raw row count per PAVA merged block) required to fully trust
+ * the fitted y value. Blocks below this threshold are blended toward the identity line (y = x)
+ * proportionally: blendWeight = clamp(effectiveN / MIN_RELIABLE_BIN_N, 0, 1).
+ *
+ * Value 50 is conservative: at 50 rows, a ±10pp calibration gap has a ~95% CI of ±14pp —
+ * wide, but not wide enough to confidently trust the raw PAVA output. Blending toward raw
+ * (y = x) prevents low-N bins from pulling the curve to 0 or 1 when the data is thin.
+ */
+export const CALIBRATION_MIN_RELIABLE_BIN_N = 50;
+
+/**
  * Returns true when a row should be excluded from calibration training because it was scored by
  * the old directional tie-break cascade (locked before CASCADE_CUTOFF_DATE) and has
  * `tieBreakerApplied=true` in its stored `engine` breakdown.
@@ -74,6 +121,20 @@ interface WeightedPoint {
  * weight (sample count), so a binned reliability curve pools correctly (a bucket built from 400
  * points pulls the fit harder than one built from 8) instead of every bucket counting equally.
  * Anchors the ends to the full [0,1] domain so `applyCalibration` never has to extrapolate.
+ *
+ * Reliability floor (Step 1, 2026-08-10): merged blocks whose total sample count is below
+ * CALIBRATION_MIN_RELIABLE_BIN_N are blended toward the identity line (y = x) in proportion
+ * to their sample thinness:
+ *
+ *   blendWeight  = clamp(effectiveN / CALIBRATION_MIN_RELIABLE_BIN_N, 0, 1)
+ *   blendedY     = blendWeight * pavaY + (1 - blendWeight) * knotX
+ *
+ * This means a block with 0 rows maps to the identity (fully trust raw), and a block with
+ * 50+ rows is fully trusted. The floor is applied at fit time so the stored knots already
+ * reflect it — no change needed at inference time.
+ *
+ * The anchor points (x=0, x=1) are always added at the extremes and are exempt from the floor
+ * (they exist only to prevent extrapolation, not to represent real training data).
  */
 function pavaFit(weighted: WeightedPoint[]): CalibrationKnot[] {
   if (weighted.length === 0) {
@@ -100,7 +161,16 @@ function pavaFit(weighted: WeightedPoint[]): CalibrationKnot[] {
     }
   }
 
-  const knots: CalibrationKnot[] = blocks.map((b) => ({ x: b.sumX / b.count, y: b.sumY / b.count }));
+  // Apply reliability floor: blend thin blocks toward the identity line y=x.
+  const knots: CalibrationKnot[] = blocks.map((b) => {
+    const knotX = b.sumX / b.count;
+    const pavaY = b.sumY / b.count;
+    const blendWeight = Math.min(1, b.count / CALIBRATION_MIN_RELIABLE_BIN_N);
+    const blendedY = blendWeight * pavaY + (1 - blendWeight) * knotX;
+    return { x: knotX, y: blendedY };
+  });
+
+  // Anchor extremes (exempt from floor — represent domain bounds, not training data).
   if (knots[0].x > 0) knots.unshift({ x: 0, y: knots[0].y });
   if (knots[knots.length - 1].x < 1) knots.push({ x: 1, y: knots[knots.length - 1].y });
   return knots;

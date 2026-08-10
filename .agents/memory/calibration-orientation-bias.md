@@ -103,6 +103,23 @@ Live #8010: raw 69.6% for Pegula. General at x=0.6963 interpolates between right
 direction. Pegula won. Right-tail knots near 100% are inflated because model-correctly-favours
 player1 compounds with Sackmann-stores-winner-as-player1.
 
+## Step 1 implementation (2026-08-10)
+
+Added to `calibration.ts`:
+- `WINNER_ALWAYS_PLAYER1_PROVIDERS = Set(['sackmann', 'tennis-data-co-uk'])` — 100% player1=winner by convention
+- `isWinnerAlwaysPlayer1Provider(provider)` helper
+- `CALIBRATION_MIN_RELIABLE_BIN_N = 50` reliability floor threshold
+- Reliability floor in `pavaFit`: thin PAVA blocks blend toward identity (`y = blend * pavaY + (1-blend) * x`)
+
+New `calibrationRefitFromExisting.ts`: fast refit from existing evaluation_predictions rows (seconds,
+not 2-3 hours). The walk-forward skips already-scored matches; this path reads existing rows directly,
+applies the orientation transform, fits, activates if quality gates pass. Endpoint:
+`POST /api/evaluation/calibration-refit-from-existing/run` (admin-gated). Returns per-provider
+breakdown + reference case outputs before/after.
+
+**Must call this endpoint** to get the first correctly-oriented active calibration model.
+All 302 invariant tests pass after Step 1; swap-invariance calibrated sum = 99.90pp.
+
 ## Walk-Forward Refit Required
 
 The next step is triggering a walk-forward run to generate a correctly-oriented

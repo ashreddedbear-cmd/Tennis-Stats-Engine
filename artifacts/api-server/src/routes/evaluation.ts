@@ -87,6 +87,7 @@ import { getLatestPatternAnalysis } from "../services/evaluation/patternAnalysis
 import { getLatestThresholdEvaluation } from "../services/evaluation/thresholdEvaluation";
 import { getOptimizerAccuracySummary } from "../services/evaluation/optimizerSummary";
 import { runCalibrationRefitJob, checkRefitCooldown } from "../jobs/runCalibrationRefitJob";
+import { refitCalibrationFromExistingEvaluationData } from "../services/evaluation/calibrationRefitFromExisting";
 import { computeRecommendation, type Recommendation } from "../services/predictionEngine/recommendation";
 import { enforceEntitlement } from "../lib/entitlements";
 import { requireAdmin } from "../lib/adminAuth";
@@ -187,6 +188,34 @@ router.post("/evaluation/walk-forward/run", async (req, res): Promise<void> => {
     ...(hasStart ? { startDate: dateRangeRaw.startDate as string, endDate: dateRangeRaw.endDate as string } : {}),
   });
   res.json(StartWalkForwardResponse.parse(result));
+});
+
+/**
+ * POST /evaluation/calibration-refit-from-existing/run
+ *
+ * Step 1 (2026-08-10): Fast calibration refit from existing evaluation_predictions data.
+ * Does NOT need a walk-forward run — reads all validation-segment rows already in the DB,
+ * joins to historical_matches to get the source provider, applies the predicted-winner
+ * orientation fix (including WINNER_ALWAYS_PLAYER1_PROVIDERS: sackmann, tennis-data-co-uk),
+ * fits a new calibration model, and activates it if it passes the quality gates.
+ *
+ * Runs synchronously (~3-10 seconds). Returns a full diagnostic report including:
+ *   - Per-provider row counts and contamination flags
+ *   - Fit method, holdout log-loss, sample sizes
+ *   - Whether the new model was activated and why/why not
+ *   - Reference case outputs before and after (Kostyuk, Rinderknech, Pegula)
+ *
+ * Requires admin access — this writes to calibration_models and may deactivate the current model.
+ */
+router.post("/evaluation/calibration-refit-from-existing/run", requireAdmin, async (_req, res): Promise<void> => {
+  try {
+    const report = await refitCalibrationFromExistingEvaluationData();
+    res.json(report);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error({ err }, "calibration-refit-from-existing: failed");
+    res.status(500).json({ error: message });
+  }
 });
 
 router.post("/evaluation/calibration-refit/run", async (_req, res): Promise<void> => {

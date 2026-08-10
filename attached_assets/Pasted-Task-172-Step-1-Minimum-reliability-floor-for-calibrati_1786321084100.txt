@@ -1,0 +1,53 @@
+Task #172 Step 1 — Minimum-reliability floor for calibration
+
+Item 1's finding changes the fix: the flat-region bug isn't caused by
+missing training data (6,073 rows exist there) — it's caused by folds
+243-245 injecting a perverse signal, since Sackmann-format rows store
+player1 as the winner 100% of the time by construction. PAVA can't
+distinguish "real underdog win rate" from "labeling artifact," so it
+pools the whole region into one flat block.
+
+Implement Step 1 as follows:
+
+1. IDENTIFY CONTAMINATED ROWS
+   Flag training rows sourced from folds/data origins where the
+   winner label is structurally fixed (Sackmann-format rows, folds
+   243-245, and any other fold with the same property — check for
+   more, don't assume it's only these three).
+
+2. FIX AT THE SOURCE, NOT JUST THE OUTPUT
+   Before fitting PAVA, either:
+   (a) Exclude contaminated rows from the calibration training set
+       entirely, or
+   (b) Re-orient them using the same player1/player2-independent
+       logic as Task #175's applyCalibrationOriented, so "winner"
+       reflects actual match outcome rather than slot position.
+   State which approach you're taking and why — (a) is simpler but
+   shrinks the training set; (b) is more correct if those rows have
+   real signal once de-artifacted.
+
+3. ADD A GENUINE RELIABILITY FLOOR (defense in depth)
+   Even after the fix in step 2, any bin with low *effective* sample
+   size (post-exclusion/re-orientation) should blend its PAVA output
+   toward the raw ensemble probability rather than fully trusting a
+   thin or still-noisy fit. Define "effective sample size" explicitly
+   — don't reuse the old raw row-count check, since that's what
+   produced the wrong "zero support" diagnosis in Item 1.
+
+4. VALIDATE AGAINST THE THREE REFERENCE CASES
+   Refit and report calibrated outputs for:
+   - Kostyuk/Swiatek (original Task #172 finding)
+   - Rinderknech/Nakashima, prediction #8006 (Item 2 case)
+   - Pegula/Shnaider, prediction #8010 (Item 3 case — confirm this
+     one is unaffected/improves via #175's orientation fix, not #172)
+   Report raw ensemble, per-calibrator output, and final blended
+   probability for each, before and after.
+
+5. RE-VERIFY GATES
+   Run swapInvariance.test.ts (already in place from Task #175) and
+   confirm no regression. Report per-bin training counts and
+   effective-sample-size numbers the same way Item 1 did — cite
+   actual data, not inference.
+
+Write findings to
+artifacts/api-server/docs/audit-task172-step1-implementation.md.

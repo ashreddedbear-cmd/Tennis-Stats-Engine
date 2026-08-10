@@ -53,7 +53,7 @@ const PLACEHOLDER_SPECIALIST_CALIBRATION: { x: number; y: number }[] = [
 
 // ─── Helper: build a player profile ──────────────────────────────────────────
 function makePlayer(id: string, name: string, rank: number): PlayerProfile {
-  return { id, name, currentRank: rank, age: 28, plays: "Right-Handed", fullName: name };
+  return { id, name, currentRank: rank, age: 28, plays: "Right-Handed", fullName: name, countryCode: null, tour: "ATP" };
 }
 
 // ─── Helper: build match records ──────────────────────────────────────────────
@@ -72,7 +72,7 @@ function makeMatch(
     tournamentName: "Test Open",
     tournamentLevel: "ATP250",
     round: "R32",
-    matchFormat: "Bo3",
+    matchFormat: "BestOf3",
     surface,
     indoor: false,
     opponentId,
@@ -106,7 +106,7 @@ function buildInput(player1: PlayerProfile, player2: PlayerProfile, p1Matches: M
     player2Matches: p2Matches,
     headToHead: h2h,
     surface: "Hard",
-    matchFormat: "Bo3",
+    matchFormat: "BestOf3",
     activeCalibration: PLACEHOLDER_GENERAL_CALIBRATION,
     segment: {
       segmentKey: "ATP-Hard",
@@ -188,7 +188,7 @@ test("swap-invariance swapped: same matchup reversed — assert symmetry ≤ 2pp
     player2Matches: weakMatches,
     headToHead: h2hSwapped,
     surface: "Hard",
-    matchFormat: "Bo3",
+    matchFormat: "BestOf3",
     activeCalibration: PLACEHOLDER_GENERAL_CALIBRATION,
     segment: {
       segmentKey: "ATP-Hard",

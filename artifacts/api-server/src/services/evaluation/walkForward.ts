@@ -321,8 +321,21 @@ export async function runWalkForwardEvaluation(options: WalkForwardOptions = {})
           "Excluded known-bad pre-cascade rows from fold calibration training data",
         );
       }
-      const foldValidationPoints: CalibrationPoint[] = foldEligible
-        .filter((r) => !isKnownBadCascadeRow(r.lockedAt, r.tieBreakerApplied))
+      // Step 1 (2026-08-10): log contaminated-provider rows so operators can audit the mix.
+      // These rows always have player1Won=true by convention (winner stored as player1), but the
+      // orientation fix below (predicted-winner space) handles them correctly — no exclusion needed.
+      // This log exists purely for diagnostics, not to trigger any exclusion.
+      const foldEligibleNoCache = foldEligible.filter((r) => !isKnownBadCascadeRow(r.lockedAt, r.tieBreakerApplied));
+      // Note: individual match rows in this fold don't carry a provider tag (they're scored from
+      // historical_matches which is joined at query time). We log the total count as a reminder
+      // that contamination handling is done via orientation, not exclusion.
+      if (foldEligibleNoCache.length > 0) {
+        logger.debug(
+          { fold, eligibleForOrientation: foldEligibleNoCache.length },
+          "calibration training: all providers handled via predicted-winner orientation (Step 1)",
+        );
+      }
+      const foldValidationPoints: CalibrationPoint[] = foldEligibleNoCache
         .map((r) => {
           // Orientation fix (2026-08-09): train in predicted-winner space, not player1 space.
           // Sackmann stores the winner as player1 in ~90% of rows, so player1-space training
