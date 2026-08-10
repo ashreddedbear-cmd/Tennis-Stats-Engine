@@ -44,7 +44,9 @@ import {
   computeMarketEdgeSummary,
 } from "../services/evaluation/metrics";
 import { computeEliteTierBacktest } from "../services/evaluation/eliteTierBacktest";
-import { getActiveSpecialistSegments } from "../services/evaluation/specialistWeights";
+import { getActiveSpecialistSegments, computeAndStoreSpecialistSegments } from "../services/evaluation/specialistWeights";
+import { applyCalibration } from "../services/evaluation/calibration";
+import type { CalibrationKnot } from "../services/evaluation/types";
 import { validateAndStoreSimulator } from "../services/evaluation/simulatorValidation";
 import { predictionSettingsTable, simulatorValidationTable } from "@workspace/db";
 import { startAblationJob, getAblationJobStatus } from "../services/evaluation/ablationJob";
@@ -231,6 +233,119 @@ router.post("/evaluation/calibration-refit-from-existing/run", requireAdmin, asy
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error({ err }, "calibration-refit-from-existing: failed");
+    res.status(500).json({ error: message });
+  }
+});
+
+/**
+ * POST /evaluation/specialist-segments/refit
+ *
+ * Admin-only: re-runs computeAndStoreSpecialistSegments using the current active general
+ * calibration model and the evaluation_predictions rows already in the DB. No walk-forward
+ * run needed — completes in ~1 minute.
+ *
+ * ?dryRun=true — computes all segments but does NOT write to specialist_models. Returns
+ * the same before/after comparison so an admin can inspect proposed changes before committing.
+ *
+ * Returns per-segment: segmentKey, label, before (prior DB state), after (newly computed),
+ * each with accuracy, logLoss, weight, meetsThreshold, validationSampleSize, maxGapVsGeneral.
+ * `maxGapVsGeneral` is the maximum absolute difference (in percentage points) between the
+ * specialist calibration curve and the general model, sampled across x ∈ [0.50, 0.90].
+ */
+router.post("/evaluation/specialist-segments/refit", requireAdmin, async (req, res): Promise<void> => {
+  try {
+    const dryRun = req.query["dryRun"] === "true";
+
+    // Fetch active general calibration model — required as input to computeAndStoreSpecialistSegments.
+    const [activeCalibration] = await db
+      .select({
+        id: calibrationModelsTable.id,
+        mapping: calibrationModelsTable.mapping,
+        method: calibrationModelsTable.method,
+        fittedAt: calibrationModelsTable.fittedAt,
+        validationSampleSize: calibrationModelsTable.validationSampleSize,
+      })
+      .from(calibrationModelsTable)
+      .where(eq(calibrationModelsTable.active, true))
+      .limit(1);
+
+    if (!activeCalibration) {
+      res.status(422).json({
+        error: "No active calibration model found. Run POST /evaluation/calibration-refit-from-existing/run first.",
+      });
+      return;
+    }
+
+    const generalMapping = activeCalibration.mapping as CalibrationKnot[];
+
+    // Capture before state (may be empty if no walk-forward has run yet).
+    const beforeSegments = await getActiveSpecialistSegments();
+
+    // Run the refit (skips DB writes in dry-run mode — uses skipWrite, the Task #198 option name).
+    const afterSegments = await computeAndStoreSpecialistSegments(generalMapping, { skipWrite: dryRun });
+
+    // Build per-segment before/after comparison including maxGapVsGeneral.
+    // Sample x-values span the full predicted-winner confidence range a live prediction uses.
+    const SAMPLE_X = [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90];
+
+    function computeMaxGapVsGeneral(calibrationMapping: CalibrationKnot[]): number | null {
+      if (!calibrationMapping || calibrationMapping.length === 0) return null;
+      let maxGap = 0;
+      for (const x of SAMPLE_X) {
+        const specialistY = applyCalibration(calibrationMapping, x);
+        const generalY = applyCalibration(generalMapping, x);
+        maxGap = Math.max(maxGap, Math.abs(specialistY - generalY));
+      }
+      // Return as percentage-point gap, rounded to 2 decimal places.
+      return Math.round(maxGap * 10_000) / 100;
+    }
+
+    const beforeByKey = new Map(beforeSegments.map((s) => [s.segmentKey, s]));
+
+    const results = afterSegments.map((after) => {
+      const before = beforeByKey.get(after.segmentKey) ?? null;
+      return {
+        segmentKey: after.segmentKey,
+        label: after.label,
+        before: before
+          ? {
+              accuracy: before.accuracy,
+              logLoss: before.logLoss,
+              weight: before.weight,
+              meetsThreshold: before.meetsThreshold,
+              validationSampleSize: before.validationSampleSize,
+              maxGapVsGeneral: computeMaxGapVsGeneral(before.calibrationMapping as CalibrationKnot[]),
+              computedAt: before.computedAt.toISOString(),
+            }
+          : null,
+        after: {
+          accuracy: after.accuracy,
+          logLoss: after.logLoss,
+          weight: after.weight,
+          meetsThreshold: after.meetsThreshold,
+          validationSampleSize: after.validationSampleSize,
+          maxGapVsGeneral: computeMaxGapVsGeneral(after.calibrationMapping as CalibrationKnot[]),
+        },
+      };
+    });
+
+    logger.info(
+      { dryRun, segmentsRefit: afterSegments.length, generalCalibrationId: activeCalibration.id },
+      "specialist-segments/refit completed",
+    );
+
+    res.json({
+      dryRun,
+      generalCalibrationId: activeCalibration.id,
+      generalCalibrationMethod: activeCalibration.method,
+      generalCalibrationFittedAt: activeCalibration.fittedAt.toISOString(),
+      generalCalibrationSampleSize: activeCalibration.validationSampleSize,
+      segmentsRefit: afterSegments.length,
+      results,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error({ err }, "specialist-segments/refit: failed");
     res.status(500).json({ error: message });
   }
 });

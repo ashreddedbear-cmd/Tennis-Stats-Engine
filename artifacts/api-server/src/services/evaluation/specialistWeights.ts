@@ -148,6 +148,8 @@ export type SpecialistComputedData = Omit<SpecialistModelRow, "id" | "computedAt
  *   the same pre-insert data that would have been written. Used by the require-approval
  *   walk-forward path (Task #198) so results can be stored as JSONB in
  *   `calibration_models.pending_specialist_data` and written only when an admin activates.
+ *   Also used by POST /evaluation/specialist-segments/refit with ?dryRun=true so an admin
+ *   can inspect proposed changes before committing.
  */
 export async function computeAndStoreSpecialistSegments(
   generalMapping: CalibrationKnot[],
