@@ -758,6 +758,20 @@ router.post("/evaluation/walk-forward/score-unscored", requireAdmin, async (_req
   res.json(result);
 });
 
+/**
+ * Admin-only trigger for a FULL walk-forward: scores all currently unscored matches AND
+ * refits the general calibration model + all specialist segments in predicted-winner space.
+ *
+ * Bypasses the subscription entitlement gate — identical to POST /evaluation/walk-forward/run
+ * with evaluationOnly=false but accessible to the owner regardless of payment status.
+ *
+ * Poll GET /evaluation/walk-forward/status to track progress.
+ */
+router.post("/evaluation/walk-forward/full-refit", requireAdmin, async (_req, res): Promise<void> => {
+  const result = startWalkForwardJob({ evaluationOnly: false });
+  res.json(result);
+});
+
 router.get("/evaluation/calibration-refit/job-runs", async (req, res): Promise<void> => {
   const parsed = ListCalibrationRefitJobRunsQueryParams.safeParse(req.query);
   if (!parsed.success) {
