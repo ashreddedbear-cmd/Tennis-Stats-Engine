@@ -2128,3 +2128,110 @@ describe("__TEST_computeAccuracyByDecision — KEEP > BORDERLINE invariant", () 
     assert.strictEqual(stats.invariantMet, true);
   });
 });
+
+// ── thin-data risk floor confirmation (Task #63) ─────────────────────────────
+//
+// Proves the floor fires and raises riskScore when thin-data players (< 5 matches)
+// happen to accumulate enough favorable signals that raw risk would fall below the
+// floor value. Derived from the __TEST_computeScoring risk formula:
+//
+//   base(35) + sel_thin(12) + opp_thin(12) − agreement(8) − market(12) − ranking(8) = 31
+//   thinDataRiskFloor(2) = 45 > 31  →  floor fires  →  riskScore = 45
+//
+// Real live call (E. King, 2 DB matches): riskScore=70 — floor was evaluated
+// but masked by high structural penalties from poor data coverage. This unit test
+// uses the isolated scoring function to prove the floor CAN raise a score in the
+// specific edge case it guards against.
+
+describe("thin-data risk floor — riskScore raised when favorable signals push raw risk below floor", () => {
+  const daysAgo = (n: number): Date => new Date(Date.now() - n * 86_400_000);
+
+  /** Baseline thin-data PlayerStats (2 matches, all neutral). Override per-test. */
+  function thinStats(overrides: Partial<PlayerStats>): PlayerStats {
+    return {
+      total: 2,
+      winRate: 0.5,
+      winRateConfidence: 0,         // gate win-rate closeness — absence of signal, not real closeness
+      surfaceTotal: 0,
+      surfaceWinRate: 0.5,
+      surfaceWinRateConfidence: 0,
+      recentWinRate: 0.5,
+      recentWinRateConfidence: 0,
+      avgOppRank: 200,
+      surfaceAvgOppRank: 200,
+      retirementRate: 0,
+      lastMatchDate: null,
+      currentRank: null,
+      tournamentWinRate: 0.5,
+      tournamentTotal: 0,
+      quarterWinRates: [],
+      ...overrides,
+    };
+  }
+
+  it("floor fires: riskScore raised to THIN_DATA_RISK_FLOOR(45) when raw risk is 31", () => {
+    // Five opinionated sources all agree → agreementRate=100%, available=5:
+    //   recentForm(sel 1.0 vs opp 0.0)   → supportsSelected=true  [weight 5.8pp]
+    //   headToHead(sel wins 2/2)          → supportsSelected=true  [weight 7.5pp]
+    //   rankingTrend(sel #1 vs opp #200)  → supportsSelected=true  [weight 10.5pp]
+    //   marketConsensus(1.2 odds → 83%)   → supportsSelected=true  [weight 5.0pp]
+    //   travelFatigue(sel 3d vs opp 0d)   → supportsSelected=true  [weight 5.0pp]
+    //
+    // Risk bonuses applied: −12(market>60%), −8(ranking gap), −8(agreement≥5sources)
+    // dataCoverage = 86% (utr/holdBreak are structural unavailables → not penalised)
+    // → raw risk = 35 + 12 + 12 − 12 − 8 − 8 = 31
+    // → closenessScore = 17 (market + ranking both non-close) → closenessRiskFloor(17) = 0
+    // → postClosenessRisk = max(31, 0) = 31
+    // → thinDataRiskFloor(2) = 45 > 31  →  floor fires  →  riskScore = 45
+
+    const sel = thinStats({
+      recentWinRate: 1.0,        // all wins  → recentForm strongly supports sel
+      currentRank: 1,            // #1 ranked → rankingTrend supports sel
+      lastMatchDate: daysAgo(3), // 3 days rest → travelFatigue supports sel (restScore=1.0)
+    });
+    const opp = thinStats({
+      recentWinRate: 0.0,        // no wins → recentForm against opp
+      currentRank: 200,          // #200 ranked
+      lastMatchDate: daysAgo(0), // played today (restScore=0.3) → travelFatigue favours sel
+    });
+
+    const result = __TEST_computeScoring(sel, opp, {
+      selResolvedId: "sel-id",
+      marketOdds:    1.2,        // 83% implied >60% → −12 risk; marketConsensus supports sel
+      h2hMatches: [              // sel wins both → headToHead supports sel
+        { winner_id: "sel-id" },
+        { winner_id: "sel-id" },
+      ],
+    });
+
+    assert.strictEqual(
+      result.riskScore, THIN_DATA_RISK_FLOOR,
+      `Expected floor to raise riskScore from 31 to ${THIN_DATA_RISK_FLOOR} (thin-data floor), got ${result.riskScore}`,
+    );
+  });
+
+  it("floor does NOT fire in typical neutral thin-data case: raw risk (59) already exceeds floor (45)", () => {
+    // Without favorable signal bonuses, structural thin-data penalties alone:
+    //   base(35) + sel_thin(12) + opp_thin(12) = 59 > 45
+    // No −8/−12/−8 bonuses apply (no market odds, no rankings, no strong agreement).
+    const sel = thinStats({ recentWinRate: 0.5, lastMatchDate: null, currentRank: null });
+    const opp = thinStats({ recentWinRate: 0.5, lastMatchDate: null, currentRank: null });
+    const result = __TEST_computeScoring(sel, opp, {});
+
+    assert.ok(
+      result.riskScore > THIN_DATA_RISK_FLOOR,
+      `Expected neutral thin-data riskScore (${result.riskScore}) to exceed the floor (${THIN_DATA_RISK_FLOOR}) — floor should not fire`,
+    );
+  });
+
+  it("thinDataRiskFloor ramp: floor decreases as match count increases toward 5", () => {
+    // Walk-forward calibration values from the THIN_DATA_RISK_FLOOR comment:
+    assert.strictEqual(thinDataRiskFloor(0), 45, "n=0: full floor");
+    assert.strictEqual(thinDataRiskFloor(1), 45, "n=1: full floor");
+    assert.strictEqual(thinDataRiskFloor(2), 45, "n=2: full floor (= THIN_DATA_RISK_FLOOR)");
+    assert.strictEqual(thinDataRiskFloor(3), 30, "n=3: partial floor (round(45*2/3)=30)");
+    assert.strictEqual(thinDataRiskFloor(4), 15, "n=4: light floor   (round(45*1/3)=15)");
+    assert.strictEqual(thinDataRiskFloor(5),  0, "n=5: no floor      (≥5 matches)");
+    assert.strictEqual(thinDataRiskFloor(10), 0, "n=10: no floor     (well-established)");
+  });
+});

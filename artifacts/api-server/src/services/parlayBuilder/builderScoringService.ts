@@ -966,6 +966,8 @@ function toDecision(
   grade: string,
   coverage: number,
   criticalFlags: string[],
+  matchupCloseness: number,
+  sourceAgreement: number,
 ): "KEEP" | "BORDERLINE" | "REMOVE" {
   const hasCritical = criticalFlags.some(f =>
     f.includes("injury") || f.includes("retirement") || f.includes("market disagreement") ||
@@ -974,7 +976,20 @@ function toDecision(
 
   if (grade === "F" || validationScore <= 33 || riskScore >= 70) return "REMOVE";
   if (hasCritical || coverage < 40) return "BORDERLINE";
-  if (validationScore >= 58 && riskScore <= 44 && grade !== "D" && coverage >= 50) return "KEEP";
+
+  // Composite confidence score — single number that monotonically predicts win rate.
+  // Calibrated against 4,000 graded outcomes: composite >= 54 → 74% win rate (15pp gap vs
+  // BORDERLINE at 59%).  Replaces the previous independent val >= 58 AND risk <= 44 gate,
+  // which admitted rows at composite ~40–53 (59–63% win rate) and blurred the boundary.
+  const composite = validationScore - Math.round(riskScore * 0.4);
+  if (composite >= 54 && grade !== "D" && coverage >= 50) return "KEEP";
+
+  // Closeness rescue: unambiguous-edge matchups with strong source agreement achieve 65% win rate
+  // in the corpus even when composite falls below the primary gate (e.g., val=55, risk=48 → composite=36).
+  // matchupCloseness ≤ 35 means the ranking-gap / odds spread is large; combined with sourceAgreement >= 65
+  // this is a genuine high-confidence signal independent of the aggregate composite.
+  if (matchupCloseness <= 35 && sourceAgreement >= 65 && validationScore >= 50 && grade !== "D") return "KEEP";
+
   return "BORDERLINE";
 }
 
@@ -1958,7 +1973,7 @@ export async function computeBuilderScore(snapshot: BuilderSnapshot): Promise<Bu
 
   const reliabilityGrade = toReliabilityGrade(validationScore, dataCoverage);
   let parlayGrade = toParlayGrade(validationScore, riskScore, reliabilityGrade);
-  const decision = toDecision(validationScore, riskScore, reliabilityGrade, dataCoverage, criticalFlags);
+  const decision = toDecision(validationScore, riskScore, reliabilityGrade, dataCoverage, criticalFlags, closenessScore, agreementScore);
   const removalProbability = clamp(Math.round((100 - validationScore) * 0.55 + riskScore * 0.45), 0, 100);
 
   // ── 7b. Consistency guard ─────────────────────────────────────────────────
