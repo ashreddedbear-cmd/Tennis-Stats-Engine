@@ -1,0 +1,21 @@
+That message is still the old version — it's missing the ASC change we just agreed on. If you send it as-is, the agent will "fix" the NULL-id bug but keep grading on the *most recent* validation, which is the opposite of what you just told me you want. Here's the corrected version to send instead:
+
+---
+
+**Correction to the DISTINCT ON approach for #214:**
+
+Grade accuracy on the **first** validation per fixture, not the most recent. Change the ordering:
+
+```sql
+ORDER BY historical_match_id, created_at ASC   -- first validation, not last
+```
+
+Re-validations still get written as new rows (full audit trail preserved), but only the earliest call on a fixture counts toward accuracy — that's the fairest test of the model, since it has the least information and can't benefit from odds/news that arrived closer to match time.
+
+**Also fix, same query:** the current draft has `WHERE historical_match_id IS NOT NULL` filtering the whole CTE, which silently drops every unresolvable-fixture row (`included_in_accuracy = false`) from `total_abstained`. Union in a separate branch for the NULL-id rows so they're counted, not discarded — decide whether that branch needs its own dedup (by player pair + scheduled date) so a fixture that never resolves doesn't inflate `total_abstained` across repeat validations.
+
+**Task #215:** the FK from `historical_match_id → evaluation_predictions(id)` needs an explicit `ON DELETE` behavior — nullable column, default is `RESTRICT`, which will block deletes on `evaluation_predictions` rows that have graded builder log entries pointing at them. Confirm `ON DELETE SET NULL` is what you want (row survives, just loses its match link) before this ships.
+
+---
+
+One thing to settle before the agent implements: for the abstained/NULL-id branch, do you also want "first attempt only" semantics — i.e., if a fixture never resolves and gets abstained-tagged on validation 1, 2, and 3, should `total_abstained` count it once or three times? Given the "first validation locks in" rule you just set, once seems consistent, but worth stating explicitly so it's not left to the agent's judgment.
