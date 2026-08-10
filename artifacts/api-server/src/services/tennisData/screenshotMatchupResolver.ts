@@ -533,6 +533,53 @@ function wordsMatch(a: string, b: string): boolean {
 }
 
 /**
+ * Checks whether a set of normalized player name word arrays forms an unambiguous
+ * initial-equivalent group that can safely be collapsed to a single resolved player.
+ *
+ * The group collapses when ALL of the following hold:
+ *   1. Every candidate has the same full surname part (every word after the first word).
+ *      "G. Castro" (→ surname "castro") and "Goncalo Da Rosa Castro"
+ *      (→ surname "da rosa castro") have DIFFERENT surname parts and must NOT collapse.
+ *   2. At least one candidate has a single-character first name (an initial).
+ *      Two full-name candidates like "Gonzalo Castro" + "Geraldo Castro" are genuinely
+ *      different players; they have no initial to act as a shared abbreviation.
+ *   3. There is exactly ONE distinct full first name (length > 1) in the group.
+ *      "G. Kravchenko" + "Georgii Kravchenko" + "Goncalo Kravchenko" has TWO distinct
+ *      full first names, so the initial is still ambiguous; must remain "ambiguous".
+ *   4. Every single-character first name equals the first character of that full first
+ *      name. This is a strict string equality check — NOT the OCR/transliteration
+ *      tolerance in wordsMatch — to prevent false collapses from OCR misreads.
+ *
+ * Exported for unit testing; not part of the public API surface.
+ */
+export function isInitialEquivalentGroup(normWordArrays: readonly string[][]): boolean {
+  if (normWordArrays.length < 2) return false;
+  // Every candidate must have at least a first word and a surname part
+  if (normWordArrays.some((w) => w.length < 2)) return false;
+
+  // Rule 1: all must share the same full surname part (every word after the first)
+  const surnamePart = normWordArrays[0]!.slice(1).join(" ");
+  if (!normWordArrays.every((w) => w.slice(1).join(" ") === surnamePart)) return false;
+
+  const firstWords = normWordArrays.map((w) => w[0]!);
+
+  // Rule 2: at least one single-char initial present
+  if (firstWords.every((f) => f.length > 1)) return false;
+
+  // Rule 3: exactly one distinct full first name
+  const distinctFullFirstNames = new Set(firstWords.filter((f) => f.length > 1));
+  if (distinctFullFirstNames.size === 0) return false; // only initials — nothing to expand to
+  if (distinctFullFirstNames.size > 1) return false;   // multiple expansions — genuinely ambiguous
+
+  // Rule 4: every initial must equal the first character of the single full first name
+  // (strict equality — no OCR/transliteration tolerance)
+  const fullFirstName = [...distinctFullFirstNames][0]!;
+  return firstWords.every(
+    (f) => f === fullFirstName || (f.length === 1 && f === fullFirstName[0]),
+  );
+}
+
+/**
  * Greedy bijective match: every needle consumes exactly one distinct haystack slot.
  *
  * This prevents the "C. Castro" false positive against "Goncalo Da Rosa Castro":
@@ -801,6 +848,31 @@ async function resolvePlayerMatch(
       })[0]!;
       return { match: { recognizedName, player: best }, status: "resolved" };
     }
+
+    // Initial-equivalent collapse: "G. Kravchenko" (abbreviated, historical DB) and
+    // "Georgii Kravchenko" (full name, backfill row) are the same player.
+    // See isInitialEquivalentGroup for the precise predicate and its safety guards.
+    const normWordArrays = confident.map((c) => normalizeName(c.name).split(" ").filter(Boolean));
+    if (isInitialEquivalentGroup(normWordArrays)) {
+      const best = confident.slice().sort((a, b) => {
+        // Prefer full names over abbreviated (longer normalized name = more detail)
+        const aLen = normalizeName(a.name).length;
+        const bLen = normalizeName(b.name).length;
+        if (aLen !== bLen) return bLen - aLen;
+        // Prefer live standings over historical-match records
+        const aLive = a.source !== "historical-match" ? 0 : 1;
+        const bLive = b.source !== "historical-match" ? 0 : 1;
+        if (aLive !== bLive) return aLive - bLive;
+        // Prefer ranked players
+        const aR = a.currentRank != null ? 0 : 1;
+        const bR = b.currentRank != null ? 0 : 1;
+        if (aR !== bR) return aR - bR;
+        if (a.currentRank != null && b.currentRank != null) return a.currentRank - b.currentRank;
+        return 0;
+      })[0]!;
+      return { match: { recognizedName, player: best }, status: "resolved" };
+    }
+
     // Fixture-context tie-break: when multiple genuinely distinct players share the
     // matched name (e.g. two different "Jordan Lee"s), check whether exactly one of
     // them is scheduled in today's fixtures for the screenshot's tournament. This

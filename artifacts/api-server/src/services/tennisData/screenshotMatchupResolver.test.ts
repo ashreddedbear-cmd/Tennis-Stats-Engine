@@ -1,12 +1,69 @@
-// Unit tests for the screenshot-import surface fallback: a screenshot only ever has OCR'd event
-// text, never a real tournament_key, so Challenger/ITF events (deliberately excluded from the
-// name-only regex table -- see surfaceMap.ts) must fall back to a real name search against the
-// provider's own tournament data instead of being left surface-less every time.
+// Unit tests for the screenshot-import surface fallback and name-resolution helpers.
 // Run with: pnpm --filter @workspace/api-server run test:tennisData
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolveScreenshotMatchup } from "./screenshotMatchupResolver";
+import { resolveScreenshotMatchup, isInitialEquivalentGroup } from "./screenshotMatchupResolver";
 import type { PlayerSummary, TennisDataProvider } from "./types";
+
+// ── isInitialEquivalentGroup unit tests ────────────────────────────────────
+// These are pure-function tests with no DB or provider dependency.
+// They directly verify the collapse predicate covers its four safety rules.
+
+test("isInitialEquivalentGroup: collapses abbreviated + full name sharing same surname", () => {
+  // "G. Kravchenko" and "Georgii Kravchenko" are the same player
+  const g   = ["g", "kravchenko"];
+  const full = ["georgii", "kravchenko"];
+  assert.equal(isInitialEquivalentGroup([g, full]), true);
+  // Order-independent
+  assert.equal(isInitialEquivalentGroup([full, g]), true);
+});
+
+test("isInitialEquivalentGroup: does NOT collapse when multiple distinct full first names share same initial", () => {
+  // "G. Kravchenko" could be Georgii OR Goncalo — genuine ambiguity
+  const initial  = ["g",       "kravchenko"];
+  const georgii  = ["georgii", "kravchenko"];
+  const goncalo  = ["goncalo", "kravchenko"];
+  assert.equal(isInitialEquivalentGroup([initial, georgii, goncalo]), false);
+});
+
+test("isInitialEquivalentGroup: does NOT collapse two full names with the same surname", () => {
+  // "Gonzalo Castro" and "Geraldo Castro" — no initial, genuinely different players
+  assert.equal(
+    isInitialEquivalentGroup([["gonzalo", "castro"], ["geraldo", "castro"]]),
+    false,
+  );
+});
+
+test("isInitialEquivalentGroup: does NOT collapse when surname parts differ (multi-word surname)", () => {
+  // "G. Castro" (surname part "castro") vs "Goncalo Da Rosa Castro" (surname part "da rosa castro")
+  const gCastro   = ["g",       "castro"];
+  const fullCastro = ["goncalo", "da", "rosa", "castro"];
+  assert.equal(isInitialEquivalentGroup([gCastro, fullCastro]), false);
+});
+
+test("isInitialEquivalentGroup: does NOT collapse fuzzy near-names (no single-char initial present)", () => {
+  // "Geor Kravchenko" vs "Georgii Kravchenko" — looks similar but neither is an initial
+  assert.equal(
+    isInitialEquivalentGroup([["geor", "kravchenko"], ["georgii", "kravchenko"]]),
+    false,
+  );
+});
+
+test("isInitialEquivalentGroup: does NOT collapse when initial does not match full first name", () => {
+  // "K. Kravchenko" cannot be an initial of "Georgii Kravchenko" — wrong letter
+  assert.equal(
+    isInitialEquivalentGroup([["k", "kravchenko"], ["georgii", "kravchenko"]]),
+    false,
+  );
+});
+
+test("isInitialEquivalentGroup: handles three candidates with one abbreviation correctly", () => {
+  // "G. Kravchenko" (id=10071) and "G. Kravchenko" (id=28099) plus "Georgii Kravchenko" — all same player
+  const g1   = ["g", "kravchenko"];
+  const g2   = ["g", "kravchenko"];
+  const full = ["georgii", "kravchenko"];
+  assert.equal(isInitialEquivalentGroup([g1, g2, full]), true);
+});
 
 function makeProvider(overrides: Partial<TennisDataProvider> = {}): TennisDataProvider {
   return {
@@ -115,12 +172,19 @@ test("resolveScreenshotMatchup returns matchups array with multiple entries when
 });
 
 test("resolveScreenshotMatchup never auto-selects a player when multiple confident candidates exist", async () => {
+  // Use two non-abbreviated full names that both match the OCR input "G. Castro" via
+  // initial expansion ("gonzalo" ↔ "g", "geraldo" ↔ "g") — but they are genuinely
+  // different players, so the initial-equivalent collapse must NOT fire (different first
+  // names that aren't mutual initials of each other) and the result must be ambiguous.
+  // Abbreviated names like "G. Castro" are filtered out of live-provider results by
+  // searchKnownPlayers (prevents duplicate abbreviated/full collisions), so the test
+  // must use full-name candidates to exercise the multi-confident ambiguity path.
   const provider = makeProvider({
     searchPlayers: async (query: string) => {
       if (query.toLowerCase().includes("castro")) {
         return [
-          { id: "p-castro-a", name: "G. Castro", countryCode: "PT", currentRank: 100, tour: "ATP" },
-          { id: "p-castro-b", name: "Goncalo Da Rosa Castro", countryCode: "PT", currentRank: 120, tour: "ATP" },
+          { id: "p-castro-a", name: "Gonzalo Castro", countryCode: "PT", currentRank: 100, tour: "ATP" },
+          { id: "p-castro-b", name: "Geraldo Castro", countryCode: "BR", currentRank: 120, tour: "ATP" },
         ];
       }
       if (query.toLowerCase().includes("testington")) {

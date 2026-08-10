@@ -31,6 +31,23 @@ function normalizeTournamentNameForSearch(name: string): string {
     .trim();
 }
 
+/**
+ * Derives a tier-filter RegExp from an OCR event name so that surface lookup can narrow
+ * to only rows matching that tier. Returns null when no recognisable tier marker is present
+ * (caller should leave candidates unfiltered in that case).
+ *
+ * Examples:
+ *   "ATP CHALLENGER HAMBURG"  → /challenger/i
+ *   "ITF W25 BOGOTÁ"          → /itf/i
+ *   "ATP500 HAMBURG"          → null  (no filter; unmodified behaviour)
+ */
+function deriveTierFilter(ocrName: string): RegExp | null {
+  const lower = ocrName.toLowerCase();
+  if (lower.includes("challenger")) return /challenger/i;
+  if (lower.includes("itf")) return /itf/i;
+  return null;
+}
+
 const BASE_URL = "https://api.api-tennis.com/tennis/";
 const STANDINGS_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const FIXTURES_TTL_MS = 5 * 60 * 1000; // 5 minutes
@@ -516,11 +533,24 @@ export class ApiTennisProvider implements TennisDataProvider {
     const recognizedWords = new Set(normalizeTournamentNameForSearch(name).split(" ").filter(Boolean));
     if (recognizedWords.size === 0) return null;
 
-    const candidates = rows.filter((row) => {
+    // Derive a tier filter from the OCR event name so that "ATP CHALLENGER HAMBURG" only
+    // considers Hamburg Challenger rows, not historical ATP500 Hamburg rows that carry a
+    // different surface and would otherwise force a null return due to surface ambiguity.
+    const tierFilter = deriveTierFilter(name);
+
+    let candidates = rows.filter((row) => {
       const rowWords = normalizeTournamentNameForSearch(row.tournament_name ?? "").split(" ").filter(Boolean);
       return rowWords.length > 0 && rowWords.every((w) => recognizedWords.has(w));
     });
     if (candidates.length === 0) return null;
+
+    // Apply tier filter when OCR name contains a recognisable tier marker. Only narrow
+    // when the filter actually matches at least one row; otherwise fall through to the
+    // full candidate set (graceful degradation for unrecognised tier markers).
+    if (tierFilter !== null) {
+      const tiered = candidates.filter((row) => tierFilter.test(row.event_type_type ?? ""));
+      if (tiered.length > 0) candidates = tiered;
+    }
 
     const surfaces = new Set(candidates.map((row) => normalizeProviderSurface(row.tournament_sourface)).filter((s) => s !== null));
     if (surfaces.size > 1) return null; // genuinely ambiguous across matching rows -- never guess which one
