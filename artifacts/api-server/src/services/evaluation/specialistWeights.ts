@@ -11,6 +11,79 @@ import type { SegmentSpecialistInput } from "../predictionEngine/types";
 import type { Surface } from "../tennisData/types";
 
 /**
+ * Task #182: X-axis threshold above which the specialist calibration curve is fully trusted
+ * (blend factor = 1.0). Below this, the specialist is blended toward the general model to
+ * counteract selection-bias steepness induced by cascade-exclusion filtering.
+ *
+ * Set at 0.75 because the cascade-excluded "hard/close" ATP matches lived almost entirely in
+ * the 0.50–0.65 confidence band — above 0.75, the specialist corpus is not materially skewed
+ * and its curve deserves full trust. "Full trust" here means the stored knot equals the
+ * raw PAVA/Platt output with no general-model correction applied.
+ */
+export const SPECIALIST_FULL_TRUST_X = 0.75;
+
+/**
+ * Task #182: Constrain specialist calibration knots by blending toward the general model at
+ * moderate predicted-winner confidence (x near 0.5), ramping to full specialist trust at
+ * `SPECIALIST_FULL_TRUST_X`.
+ *
+ * Root cause: `isKnownBadCascadeRow` strips pre-cutoff tie-breaker rows from specialist training
+ * data, and these rows are disproportionately "hard/ambiguous" ATP matches (where the model's
+ * 55-65% confidence inputs were genuinely close calls). PAVA then fits an anomalously steep
+ * curve on the remaining easy-match-skewed corpus — technically correct for those filtered rows
+ * but overconfident against the full live match distribution (e.g., 55% input → ~78% output).
+ *
+ * Fix (approach c — reliability-floor blend): after fitting, rewrite each stored knot so it
+ * cannot deviate far from the general model in the low-confidence band:
+ *
+ *   specialistTrust = clamp((x - 0.5) / (SPECIALIST_FULL_TRUST_X - 0.5), 0, 1)
+ *   blendedY        = specialistTrust × specialistY + (1 − specialistTrust) × generalY
+ *
+ * At x=0.50: trust=0 → blendedY = generalY (full convergence at the uncertainty boundary).
+ * At x=0.75: trust=1 → blendedY = specialistY (raw specialist, no correction).
+ * At x=0.55: trust≈0.20 → at most ~20% of any specialist overconfidence leaks through.
+ *
+ * The constrained knots are the ones stored to `specialist_models` and used live — not the
+ * raw PAVA output — so all downstream metrics (logLoss, weight, blended probability) reflect
+ * what actually gets deployed. No change is needed at inference time.
+ */
+export function constrainSpecialistKnotsToGeneral(
+  specialistKnots: CalibrationKnot[],
+  generalMapping: CalibrationKnot[],
+): CalibrationKnot[] {
+  // Step 1: apply the x-varying convergence blend at each stored knot.
+  // Trust ramps from 0 at x≤0.5 to 1 at x≥SPECIALIST_FULL_TRUST_X.
+  // Knots below 0.5 (e.g., the anchor at x=0) get full general-model correction.
+  const blended = specialistKnots.map((knot) => {
+    const specialistTrust = Math.min(1, Math.max(0, (knot.x - 0.5) / (SPECIALIST_FULL_TRUST_X - 0.5)));
+    const generalY = applyCalibration(generalMapping, knot.x);
+    const blendedY = specialistTrust * knot.y + (1 - specialistTrust) * generalY;
+    return { x: knot.x, y: blendedY };
+  });
+
+  // Step 2: restore monotonicity via a forward running-max pass.
+  // Blending two individually monotonic curves with an x-varying trust coefficient does NOT
+  // guarantee a monotonic result when the curves diverge in opposite directions. Example:
+  //   general maps 0.50→0.70, 0.55→0.71   (general ABOVE specialist in this band)
+  //   specialist maps 0.50→0.50, 0.55→0.51
+  //   At trust=0   (x=0.50): blended = 0.70
+  //   At trust=0.20 (x=0.55): blended = 0.20×0.51 + 0.80×0.71 = 0.670
+  //   Without fix: 0.70→0.67 is a backward step.
+  //
+  // A forward running-max pass (the L∞ isotonic projection for non-decreasing sequences)
+  // corrects backward steps without moving knot x-positions, preserving the linear
+  // interpolation semantics `applyCalibration` relies on. The correction is applied at
+  // fit time so the stored knots are already monotone; no change is needed at inference time.
+  const monotone: CalibrationKnot[] = [];
+  let runningMax = -Infinity;
+  for (const knot of blended) {
+    runningMax = Math.max(runningMax, knot.y);
+    monotone.push({ x: knot.x, y: runningMax });
+  }
+  return monotone;
+}
+
+/**
  * A segment needs at least this many real historical matches (Phase 3 coverage, regardless of
  * whether they were ever scored) before it's even considered for a dedicated specialist. Below
  * this, a segment-specific calibration curve would be fit on noise -- the general model's much
@@ -210,7 +283,16 @@ async function computeOneSegment(segment: SegmentDefinition, generalMapping: Cal
   // on every call (Task #135, still open), so running it just to satisfy this check would trade a
   // small verification gap for a much bigger, unrelated one. See the audit doc for the follow-up.
   const fitResult = fitBestCalibration(points);
-  const segmentMapping = fitResult.knots;
+  // Task #182: apply convergence-blend to constrain the raw PAVA/Platt specialist knots toward
+  // the general model at moderate confidence (x < SPECIALIST_FULL_TRUST_X). The cascade-exclusion
+  // filter disproportionately strips hard/close ATP matches from training data, leaving an
+  // easy-match-skewed corpus that produces anomalously steep curves (e.g. 55% → ~78%). The blend
+  // ramps specialist trust from 0 at x=0.5 to 1 at x=SPECIALIST_FULL_TRUST_X=0.75, so any
+  // selection-bias overconfidence in the moderate-confidence band is absorbed by the general model's
+  // more representative estimate. The constrained knots are the ones stored to specialist_models and
+  // applied live -- so ALL downstream scoring (logLoss, accuracy, brier, weight) uses them, keeping
+  // the stored metrics honest about what actually gets deployed.
+  const segmentMapping = constrainSpecialistKnotsToGeneral(fitResult.knots, generalMapping);
 
   // Score against the SAME held-out slice `fitBestCalibration` used to pick its method -- never
   // the points the curve was fit on, so this reported accuracy/logLoss/brier (and the weight

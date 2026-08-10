@@ -14,10 +14,206 @@ import {
   computeAndStoreSpecialistSegments,
   resolveSegmentSpecialistInput,
   computeSpecialistWeight,
+  constrainSpecialistKnotsToGeneral,
+  SPECIALIST_FULL_TRUST_X,
   MIN_HISTORICAL_MATCHES_FOR_SEGMENT,
   MIN_VALIDATION_SAMPLES_FOR_SEGMENT,
   MAX_LOGOSS_DEGRADATION,
 } from "./specialistWeights";
+import { applyCalibration } from "./calibration";
+import type { CalibrationKnot } from "./types";
+
+// ── Task #182: constrainSpecialistKnotsToGeneral — pure unit tests (no DB) ───────────────────────
+
+test("Task #182: constrainSpecialistKnotsToGeneral keeps specialist within 10pp of general model at x=0.55 (anomalous ATP curve regression)", () => {
+  // Reproduces the anomalous ATP Hard specialist curve confirmed in production:
+  // cascade-exclusion strips hard/close matches → PAVA fits steep curve → 55% input maps to ~78%.
+  const steepSpecialistKnots: CalibrationKnot[] = [
+    { x: 0, y: 0 },
+    { x: 0.5, y: 0.5 },
+    { x: 0.55, y: 0.78 }, // The problematic steep mapping from production DB inspection
+    { x: 0.65, y: 0.90 },
+    { x: 0.75, y: 0.95 },
+    { x: 1, y: 1 },
+  ];
+
+  // Realistic general model (well-calibrated, moderate slope)
+  const generalMapping: CalibrationKnot[] = [
+    { x: 0, y: 0 },
+    { x: 0.5, y: 0.50 },
+    { x: 0.55, y: 0.57 },
+    { x: 0.65, y: 0.67 },
+    { x: 0.75, y: 0.76 },
+    { x: 1, y: 1 },
+  ];
+
+  const constrained = constrainSpecialistKnotsToGeneral(steepSpecialistKnots, generalMapping);
+
+  const specialistAt055 = applyCalibration(constrained, 0.55);
+  const generalAt055 = applyCalibration(generalMapping, 0.55);
+
+  // Core requirement from task: specialist output at x=0.55 must be within 10pp of general.
+  const gap = Math.abs(specialistAt055 - generalAt055);
+  assert.ok(
+    gap <= 0.10,
+    `Constrained specialist at x=0.55 (${(specialistAt055 * 100).toFixed(1)}%) must be within 10pp of general (${(generalAt055 * 100).toFixed(1)}%), gap=${(gap * 100).toFixed(1)}pp`,
+  );
+});
+
+test("Task #182: constrainSpecialistKnotsToGeneral fully trusts specialist at x >= SPECIALIST_FULL_TRUST_X (no blend above threshold)", () => {
+  const steepSpecialistKnots: CalibrationKnot[] = [
+    { x: 0, y: 0 },
+    { x: 0.5, y: 0.5 },
+    { x: 0.55, y: 0.78 },
+    { x: 0.75, y: 0.95 },
+    { x: 1, y: 1 },
+  ];
+  const generalMapping: CalibrationKnot[] = [
+    { x: 0, y: 0 },
+    { x: 0.5, y: 0.50 },
+    { x: 0.75, y: 0.76 },
+    { x: 1, y: 1 },
+  ];
+
+  const constrained = constrainSpecialistKnotsToGeneral(steepSpecialistKnots, generalMapping);
+
+  // At x = SPECIALIST_FULL_TRUST_X the trust factor is exactly 1.0 → blendedY = specialistY
+  const constrainedAtThreshold = applyCalibration(constrained, SPECIALIST_FULL_TRUST_X);
+  const rawSpecialistAtThreshold = applyCalibration(steepSpecialistKnots, SPECIALIST_FULL_TRUST_X);
+  assert.ok(
+    Math.abs(constrainedAtThreshold - rawSpecialistAtThreshold) < 1e-9,
+    `At x=SPECIALIST_FULL_TRUST_X (${SPECIALIST_FULL_TRUST_X}) the constrained curve must equal the raw specialist (trust=1.0), ` +
+      `constrained=${constrainedAtThreshold.toFixed(4)}, raw=${rawSpecialistAtThreshold.toFixed(4)}`,
+  );
+});
+
+test("Task #182: constrainSpecialistKnotsToGeneral fully applies general model at x=0.5 (trust=0 at uncertainty boundary)", () => {
+  const steepSpecialistKnots: CalibrationKnot[] = [
+    { x: 0, y: 0 },
+    { x: 0.5, y: 0.65 }, // Specialist claims 65% at the uncertainty boundary — clearly wrong
+    { x: 1, y: 1 },
+  ];
+  const generalMapping: CalibrationKnot[] = [
+    { x: 0, y: 0 },
+    { x: 0.5, y: 0.52 },
+    { x: 1, y: 1 },
+  ];
+
+  const constrained = constrainSpecialistKnotsToGeneral(steepSpecialistKnots, generalMapping);
+
+  // At x=0.5: trust=0 → blendedY must equal generalY exactly
+  const constrainedAt05 = applyCalibration(constrained, 0.5);
+  const generalAt05 = applyCalibration(generalMapping, 0.5);
+  assert.ok(
+    Math.abs(constrainedAt05 - generalAt05) < 1e-9,
+    `At x=0.5 the constrained curve must equal the general model (trust=0), ` +
+      `constrained=${constrainedAt05.toFixed(4)}, general=${generalAt05.toFixed(4)}`,
+  );
+});
+
+test("Task #182: constrainSpecialistKnotsToGeneral produces monotonically non-decreasing y values when curves diverge in opposite directions (reviewer counter-example)", () => {
+  // Reviewer's exact counter-example: two individually monotonic curves where the general model
+  // is ABOVE the specialist in the 0.50-0.55 band. Without the running-max fix, the blend at
+  // trust=0 (x=0.50) yields 0.70 and at trust=0.20 (x=0.55) yields 0.20×0.51+0.80×0.71=0.670,
+  // which is a backward step — violating the core isotonic-calibration invariant.
+  const specialistKnots: CalibrationKnot[] = [
+    { x: 0, y: 0 },
+    { x: 0.5, y: 0.50 },
+    { x: 0.55, y: 0.51 },
+    { x: 0.75, y: 0.80 },
+    { x: 1, y: 1 },
+  ];
+  const generalMapping: CalibrationKnot[] = [
+    { x: 0, y: 0 },
+    { x: 0.5, y: 0.70 },
+    { x: 0.55, y: 0.71 },
+    { x: 0.75, y: 0.76 },
+    { x: 1, y: 1 },
+  ];
+
+  const constrained = constrainSpecialistKnotsToGeneral(specialistKnots, generalMapping);
+
+  // Core: every stored knot must be non-decreasing in y (monotonicity invariant).
+  for (let i = 1; i < constrained.length; i++) {
+    assert.ok(
+      constrained[i].y >= constrained[i - 1].y - 1e-12,
+      `Constrained knots must be non-decreasing: y[${i}]=${constrained[i].y.toFixed(6)} < y[${i - 1}]=${constrained[i - 1].y.toFixed(6)} at x=${constrained[i].x}`,
+    );
+  }
+
+  // The 10pp bound must also hold — the fix must not trade monotonicity for inflation.
+  const specialistAt055 = applyCalibration(constrained, 0.55);
+  const generalAt055 = applyCalibration(generalMapping, 0.55);
+  const gap = Math.abs(specialistAt055 - generalAt055);
+  assert.ok(
+    gap <= 0.10,
+    `Constrained specialist at x=0.55 (${(specialistAt055 * 100).toFixed(1)}%) must be within 10pp of general (${(generalAt055 * 100).toFixed(1)}%), gap=${(gap * 100).toFixed(1)}pp`,
+  );
+});
+
+test("Task #182: constrainSpecialistKnotsToGeneral produces monotonically non-decreasing y values for the anomalous steep-ATP curve (steep-up case)", () => {
+  // The original motivating case: steep specialist (55%→78%) with a moderate general model.
+  // The blend produces values below the steep specialist in the moderate band — verify the
+  // output is still monotone even when the blend is pulling y DOWN from a steep curve.
+  const steepSpecialistKnots: CalibrationKnot[] = [
+    { x: 0, y: 0 },
+    { x: 0.5, y: 0.5 },
+    { x: 0.55, y: 0.78 },
+    { x: 0.65, y: 0.90 },
+    { x: 0.75, y: 0.95 },
+    { x: 1, y: 1 },
+  ];
+  const generalMapping: CalibrationKnot[] = [
+    { x: 0, y: 0 },
+    { x: 0.5, y: 0.50 },
+    { x: 0.55, y: 0.57 },
+    { x: 0.65, y: 0.67 },
+    { x: 0.75, y: 0.76 },
+    { x: 1, y: 1 },
+  ];
+
+  const constrained = constrainSpecialistKnotsToGeneral(steepSpecialistKnots, generalMapping);
+
+  for (let i = 1; i < constrained.length; i++) {
+    assert.ok(
+      constrained[i].y >= constrained[i - 1].y - 1e-12,
+      `Constrained knots must be non-decreasing: y[${i}]=${constrained[i].y.toFixed(6)} < y[${i - 1}]=${constrained[i - 1].y.toFixed(6)} at x=${constrained[i].x}`,
+    );
+  }
+});
+
+test("Task #182: constrainSpecialistKnotsToGeneral is a no-op for a well-calibrated specialist (curve stays intact)", () => {
+  // A specialist that matches the general model almost exactly should pass through unchanged.
+  const wellCalibratedKnots: CalibrationKnot[] = [
+    { x: 0, y: 0 },
+    { x: 0.5, y: 0.50 },
+    { x: 0.55, y: 0.57 },
+    { x: 0.65, y: 0.67 },
+    { x: 0.75, y: 0.76 },
+    { x: 1, y: 1 },
+  ];
+  const generalMapping: CalibrationKnot[] = [
+    { x: 0, y: 0 },
+    { x: 0.5, y: 0.50 },
+    { x: 0.55, y: 0.57 },
+    { x: 0.65, y: 0.67 },
+    { x: 0.75, y: 0.76 },
+    { x: 1, y: 1 },
+  ];
+
+  const constrained = constrainSpecialistKnotsToGeneral(wellCalibratedKnots, generalMapping);
+
+  // Every constrained knot should be essentially identical to the original since the specialist
+  // and general model agree — the blend cannot push them apart.
+  for (const knot of constrained) {
+    const originalY = applyCalibration(wellCalibratedKnots, knot.x);
+    assert.ok(
+      Math.abs(knot.y - originalY) < 1e-9,
+      `Well-calibrated specialist knot at x=${knot.x} should not be altered by convergence blend, ` +
+        `original=${originalY.toFixed(4)}, constrained=${knot.y.toFixed(4)}`,
+    );
+  }
+});
 
 // ── Task #68: computeSpecialistWeight gate — pure unit tests (no DB) ─────────────────────────────
 
