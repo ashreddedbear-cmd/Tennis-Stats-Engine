@@ -12,7 +12,13 @@ import { Router, type IRouter } from "express";
 import { requireAdmin } from "../lib/adminAuth";
 import { pool } from "@workspace/db";
 import { logger } from "../lib/logger.js";
-import { computeBuilderScore, type BuilderSnapshot } from "../services/parlayBuilder/builderScoringService.js";
+import {
+  computeBuilderScore,
+  computeBuilderAccuracyStats,
+  gradeBuilderDecisions,
+  writeBuilderDecisionLog,
+  type BuilderSnapshot,
+} from "../services/parlayBuilder/builderScoringService.js";
 import { fetchMarketOdds } from "../services/oddsData";
 
 const router: IRouter = Router();
@@ -500,6 +506,49 @@ router.post("/admin/parlay/validate", requireAdmin, async (req, res): Promise<vo
       logger.error({ err, sessionId, legCount: results.length },
         "CALIBRATION DATA LOSS: failed to insert parlay_leg_outcomes — outcome tracking interrupted"
       );
+    }
+
+    // ── Builder Decision Log — request-critical write (awaited before response) ─
+    //
+    // Each leg decision is persisted BEFORE res.json() so the write is guaranteed
+    // to complete within the request lifecycle. Fire-and-forget (void async) was
+    // intentionally removed: in long-lived server processes the write was likely to
+    // complete anyway, but it was not guaranteed and failures were completely silent.
+    //
+    // A failure here logs a warn but does not fail the response — accuracy tracking
+    // is additive, not critical to the caller's use-case. The await ensures the
+    // failure is at least observed and logged before the response is flushed.
+    //
+    // historical_match_id: null when the match cannot be resolved — row is still
+    // written and excluded from accuracy calculations (included_in_accuracy=false).
+    // Fixture identity: scheduledStart ± 1-day window. "Nearest to now" heuristic
+    // is intentionally NOT used — it can cross-pair different meetings of the same
+    // two players. If scheduledStart is unknown, historical_match_id stays null.
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      const leg = legs[i];
+      const r = result as typeof result & {
+        builderPickedPlayerId?: string;
+        builderCalibratedProbability?: number;
+        decision?: string;
+        callerAgreesWithEngine?: boolean;
+      };
+      if (!r.builderPickedPlayerId) continue; // DATA_UNAVAILABLE path — skip (no meaningful pick)
+      const scheduledAt = leg.scheduledStart instanceof Date ? leg.scheduledStart : null;
+      try {
+        await writeBuilderDecisionLog({
+          selectedPlayerId: leg.selectedPlayerId,
+          opponentId: leg.opponentId,
+          scheduledAt,
+          builderPickedPlayerId: r.builderPickedPlayerId,
+          builderCalibratedProbability: r.builderCalibratedProbability ?? 50,
+          decision: r.decision ?? "BORDERLINE",
+          callerAgreesWithEngine: r.callerAgreesWithEngine ?? true,
+        });
+      } catch (err) {
+        logger.warn({ err, selectedPlayerName: leg.selectedPlayerName },
+          "builder_decision_log insert failed — accuracy tracking skipped for this leg");
+      }
     }
 
     res.json({
@@ -1034,6 +1083,30 @@ router.get("/admin/parlay/history", requireAdmin, async (req, res): Promise<void
     res.json({ legs: rows, total: parseInt(countRow?.count ?? "0") });
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : "Failed" });
+  }
+});
+
+// ── GET /admin/parlay/builder-accuracy ───────────────────────────────────────
+// Returns accuracy stats from builder_decision_log. Coverage < 30% triggers a mandatory label.
+router.get("/admin/parlay/builder-accuracy", requireAdmin, async (_req, res): Promise<void> => {
+  try {
+    const stats = await computeBuilderAccuracyStats();
+    res.json(stats);
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : "Failed to compute accuracy" });
+  }
+});
+
+// ── POST /admin/parlay/grade-decisions ────────────────────────────────────────
+// Idempotent grading pass: fills actual_winner_id + included_in_accuracy for every
+// builder_decision_log row that can be graded from settled evaluation_predictions rows.
+// Safe to call repeatedly.
+router.post("/admin/parlay/grade-decisions", requireAdmin, async (_req, res): Promise<void> => {
+  try {
+    const result = await gradeBuilderDecisions();
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    res.status(500).json({ error: e instanceof Error ? e.message : "Grading failed" });
   }
 });
 

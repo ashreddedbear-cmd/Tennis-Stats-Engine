@@ -588,6 +588,40 @@ const STATEMENTS: string[] = [
     session_payload JSONB NOT NULL DEFAULT '{}'::jsonb
   )
   `,
+
+  // ── Builder Decision Log ───────────────────────────────────────────────────
+  // One row per computeBuilderScore call (live validate). Grading job fills
+  // actual_winner_id and included_in_accuracy when the match settles.
+  // Rows with null historical_match_id are excluded from accuracy calculations
+  // (match was unresolvable) but are never discarded.
+  //
+  // player_one_id / player_two_id / match_scheduled_at: stable fixture identity
+  // stored at log time so the grading job can cross-reference settled matches
+  // without relying on nearest-to-now heuristics.
+  `
+  CREATE TABLE IF NOT EXISTS builder_decision_log (
+    id                             SERIAL PRIMARY KEY,
+    historical_match_id            INTEGER,
+    player_one_id                  TEXT NOT NULL DEFAULT '',
+    player_two_id                  TEXT NOT NULL DEFAULT '',
+    match_scheduled_at             TIMESTAMPTZ,
+    builder_picked_player_id       TEXT NOT NULL,
+    builder_calibrated_probability REAL NOT NULL,
+    builder_decision               TEXT NOT NULL,
+    caller_selected_player_id      TEXT NOT NULL,
+    caller_agrees_with_engine      BOOLEAN NOT NULL,
+    actual_winner_id               TEXT,
+    included_in_accuracy           BOOLEAN,
+    created_at                     TIMESTAMPTZ NOT NULL DEFAULT now()
+  )
+  `,
+  // Add new columns if the table already exists (idempotent ALTER TABLE guards).
+  `ALTER TABLE builder_decision_log ADD COLUMN IF NOT EXISTS player_one_id TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE builder_decision_log ADD COLUMN IF NOT EXISTS player_two_id TEXT NOT NULL DEFAULT ''`,
+  `ALTER TABLE builder_decision_log ADD COLUMN IF NOT EXISTS match_scheduled_at TIMESTAMPTZ`,
+  `CREATE INDEX IF NOT EXISTS builder_decision_log_created_at_idx ON builder_decision_log (created_at)`,
+  `CREATE INDEX IF NOT EXISTS builder_decision_log_historical_match_id_idx ON builder_decision_log (historical_match_id)`,
+  `CREATE INDEX IF NOT EXISTS builder_decision_log_players_idx ON builder_decision_log (player_one_id, player_two_id)`,
 ];
 
 let ensured = false;

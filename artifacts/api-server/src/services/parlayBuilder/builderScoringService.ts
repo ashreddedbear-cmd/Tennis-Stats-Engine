@@ -11,6 +11,7 @@
  */
 
 import { pool } from "@workspace/db";
+import { logger } from "../../lib/logger.js";
 import {
   getCachedPlayerIdentityIndex,
   canonicalizePlayerId,
@@ -26,6 +27,12 @@ import {
 } from "./builderProviderFetch.js";
 import { researchPlayerMatchup } from "./webResearchService.js";
 import { scrapeMatchstatPlayer, type MatchstatPlayerData } from "./matchstatScraper.js";
+import type { MatchRecord, Surface } from "../tennisData/types.js";
+import type { CalibrationKnot } from "../evaluation/types.js";
+import { computeSurfaceEloModule } from "../predictionEngine/surfaceElo.js";
+import { computeServeReturnModule } from "../predictionEngine/serveReturn.js";
+import { applyCalibrationOriented } from "../evaluation/calibration.js";
+import { getActiveCalibration } from "../evaluation/calibrationCache.js";
 
 export const BUILDER_VERSION = "1.0.0";
 
@@ -151,6 +158,14 @@ export interface BuilderResult {
    *               when no pre-match odds were ever captured.
    */
   matchStatus: "pre-match" | "live";
+  /** The player the engine independently selected as more likely to win. */
+  builderPickedPlayerId: string;
+  /** Engine's calibrated win probability for builderPickedPlayerId (0–100). */
+  builderCalibratedProbability: number;
+  /** Raw validationScore before calibration was applied. */
+  rawValidationScore: number;
+  /** True when the engine's independent pick agrees with the caller's selectedPlayerId. */
+  callerAgreesWithEngine: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,13 +187,14 @@ export interface BuilderResult {
 //   - Held-out KEEP tier accuracy: 71.0%  (n=372 held-out legs)
 // ---------------------------------------------------------------------------
 const DEFAULT_WEIGHTS: Record<string, number> = {
-  overallAdvantage:      0.182,  // +17.7pp edge (n=784) — strongest signal
+  surfaceElo:            0.130,  // Elo-based win probability (computeSurfaceEloModule) — primary signal
+  overallAdvantage:      0.052,  // raw rank-adjusted win rate — secondary (split from prior 0.182)
   surfaceAdvantage:      0.101,  // +13.2pp edge (n=946)
   utr:                   0.100,  // no public API — unavailable (spec weight kept)
   surfaceRecord:         0.081,  // +13.0pp edge (n=990)
   recentForm:            0.068,  // +5.8pp edge (n=1154) — reduced from 0.10 by normalization
-  serveAdvantage:        0.060,  // not in historical_matches — unavailable (spec weight kept)
-  returnAdvantage:       0.060,  // not in historical_matches — unavailable (spec weight kept)
+  serveAdvantage:        0.060,  // computeServeReturnModule (was unavailable; now computed)
+  returnAdvantage:       0.060,  // computeServeReturnModule (was unavailable; now computed)
   sourceAgreement:       0.061,  // +10.0pp edge (n=2130) — meta-factor, consensus signal
   holdBreak:             0.050,  // not in historical_matches — unavailable (spec weight kept)
   strengthOfSchedule:    0.051,  // +9.3pp edge (n=707)
@@ -194,14 +210,16 @@ const DEFAULT_WEIGHTS: Record<string, number> = {
 };
 
 const STRUCTURALLY_UNAVAILABLE = new Set([
-  "utr", "serveAdvantage", "returnAdvantage", "holdBreak",
+  "utr", "holdBreak",
   // injuryRisk removed: now computed via Gemini web research (Tier 5)
+  // serveAdvantage + returnAdvantage removed: now computed by computeServeReturnModule
 ]);
 
 // Sum of weights for factors that are permanently unavailable for ALL matches (no API or
 // data source exists that could ever populate them). Used to normalise dataCoverage so the
-// permanently-absent 27% doesn't cap every match at 73% and prevent Grade A.
-// utr(0.10) + serveAdvantage(0.06) + returnAdvantage(0.06) + holdBreak(0.05) = 0.27
+// permanently-absent weight doesn't cap every match and prevent Grade A.
+// utr(0.10) + holdBreak(0.05) = 0.15
+// (serveAdvantage and returnAdvantage removed from structural set — now computed by module)
 const STRUCTURAL_MAX_UNAVAIL_WEIGHT = Array.from(STRUCTURALLY_UNAVAILABLE).reduce(
   (sum, key) => sum + (DEFAULT_WEIGHTS[key] ?? 0),
   0,
@@ -221,6 +239,7 @@ const STRUCTURAL_MAX_UNAVAIL_WEIGHT = Array.from(STRUCTURALLY_UNAVAILABLE).reduc
 //   excluded from decisiveFacters, so they can never appear in opinionated set
 // ---------------------------------------------------------------------------
 const AGREEMENT_EDGE_WEIGHTS: Record<string, number> = {
+  surfaceElo:            18.0,  // Elo-based win probability — primary signal, strong edge
   overallAdvantage:      17.7,
   surfaceAdvantage:      13.2,
   surfaceRecord:         13.0,
@@ -228,6 +247,8 @@ const AGREEMENT_EDGE_WEIGHTS: Record<string, number> = {
   strengthOfSchedule:     9.3,
   historicalConsistency:  8.0,
   headToHead:             7.5,
+  serveAdvantage:         7.0,  // serve/return module — estimated from real match rows
+  returnAdvantage:        7.0,  // serve/return module — estimated from real match rows
   tournamentExperience:   6.9,
   recentForm:             5.8,
   marketConsensus:        5.0,  // live-only in backfill — conservative default
@@ -334,6 +355,9 @@ export function thinDataRiskFloor(minMatches: number): number {
 // DB row types
 // ---------------------------------------------------------------------------
 
+/** One row of `{ player1Games, player2Games }` per set, stored in `historical_matches.game_margins_player1`. */
+type GameMarginRow = { player1Games: number; player2Games: number };
+
 interface MatchRow {
   player1_id: string;
   player2_id: string;
@@ -345,6 +369,8 @@ interface MatchRow {
   scheduled_start_at: Date | null;
   retired: boolean | null;
   walkover: boolean | null;
+  /** Set-score game margins from historical_matches.game_margins_player1 (player1-perspective). */
+  game_margins_player1: GameMarginRow[] | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -399,7 +425,8 @@ function buildHistorySQL(idCount: number, startParam = 1, asOfDateParamIdx?: num
     : `AND scheduled_start_at > NOW() - INTERVAL '2 years'`;
   return `
     SELECT player1_id, player2_id, winner_id, player1_rank, player2_rank,
-           surface, tournament_name, scheduled_start_at, retired, walkover
+           surface, tournament_name, scheduled_start_at, retired, walkover,
+           game_margins_player1
     FROM historical_matches
     WHERE (player1_id IN (${ids}) OR player2_id IN (${ids}))
       AND (cancelled IS NULL OR cancelled = false)
@@ -447,7 +474,7 @@ function isStaleResult(rows: MatchRow[]): boolean {
 }
 
 /** Convert provider MatchRecord[] (player-perspective) into MatchRow[] for scoring. */
-function matchRecordsToRows(records: import("../tennisData/types.js").MatchRecord[], playerId: string): MatchRow[] {
+function matchRecordsToRows(records: MatchRecord[], playerId: string): MatchRow[] {
   return records.map(rec => ({
     player1_id: playerId,
     player2_id: rec.opponentId,
@@ -459,7 +486,85 @@ function matchRecordsToRows(records: import("../tennisData/types.js").MatchRecor
     scheduled_start_at: rec.date ? new Date(rec.date) : null,
     retired: rec.retired,
     walkover: rec.walkover,
+    // Provider-fetched MatchRecord rows carry setGameMargins in player-perspective:
+    //   { playerGames: target player's games, opponentGames: opponent's games }
+    // matchRecordsToRows sets player1_id = playerId (target player), so the MatchRow
+    // "player1" slot corresponds to the target player.  The conversion is therefore:
+    //   player1Games = m.playerGames, player2Games = m.opponentGames
+    // matchRowToMatchRecord will later flip these back correctly when isP1=true (playerId=player1).
+    game_margins_player1: rec.setGameMargins.length > 0
+      ? rec.setGameMargins.map(m => ({ player1Games: m.playerGames, player2Games: m.opponentGames }))
+      : null,
   }));
+}
+
+// ---------------------------------------------------------------------------
+// Surface-type helpers for module interop
+// ---------------------------------------------------------------------------
+
+/** Map a raw surface string (from DB / fixture) to the typed Surface used by prediction-engine modules. */
+function toBuilderSurface(surface: string | null): Surface | null {
+  if (!surface) return null;
+  const s = surface.trim().toLowerCase().replace(/\s+/g, "");
+  if (s === "hard") return "Hard";
+  if (s === "clay") return "Clay";
+  if (s === "grass") return "Grass";
+  if (s === "indoorhard" || s === "indoor") return "IndoorHard";
+  return null;
+}
+
+/**
+ * Convert a builder MatchRow (DB row shape) to the MatchRecord type consumed by
+ * computeSurfaceEloModule and computeServeReturnModule.
+ *
+ * `setGameMargins` is populated from `game_margins_player1` (player1-perspective storage):
+ * - When `playerId` is player1: playerGames = player1Games, opponentGames = player2Games
+ * - When `playerId` is player2: flip the perspective (player2 is the target)
+ *
+ * This gives `computeServeReturnModule` real set-score data for the proxy path.
+ * Rows without game_margins_player1 (null or empty) produce empty setGameMargins,
+ * which is handled correctly by the module (those rows contribute zero samples).
+ */
+function matchRowToMatchRecord(row: MatchRow, playerId: string): MatchRecord {
+  const isP1 = row.player1_id === playerId;
+  const rawMargins = row.game_margins_player1 ?? [];
+  const setGameMargins = rawMargins
+    .filter(m => m.player1Games > 0 || m.player2Games > 0) // strip trailing padded zeros
+    .map(m => ({
+      playerGames: isP1 ? m.player1Games : m.player2Games,
+      opponentGames: isP1 ? m.player2Games : m.player1Games,
+    }));
+
+  return {
+    id: `${row.player1_id}vs${row.player2_id}-${row.scheduled_start_at?.getTime() ?? 0}`,
+    date: row.scheduled_start_at?.toISOString().slice(0, 10) ?? "",
+    tournamentName: row.tournament_name,
+    tournamentLevel: null,
+    round: null,
+    matchFormat: null,
+    surface: toBuilderSurface(row.surface),
+    indoor: null,
+    opponentId: isP1 ? row.player2_id : row.player1_id,
+    opponentName: "",
+    opponentRank: isP1 ? row.player2_rank : row.player1_rank,
+    result: row.winner_id === playerId ? "W" : "L",
+    score: null,
+    retired: row.retired ?? false,
+    walkover: row.walkover ?? false,
+    stats: null,
+    opponentStats: null,
+    setGameMargins,
+  };
+}
+
+/**
+ * Filter a MatchRow array to rows strictly before the given ceiling date.
+ * Rows with null scheduled_start_at are kept (date unknown → cannot confirm future → include).
+ * Exported for unit tests.
+ * @internal — never import in production code.
+ */
+export function __TEST_filterRowsByCeiling(rows: MatchRow[], ceiling: Date): MatchRow[] {
+  return rows.filter(r => r.scheduled_start_at == null || r.scheduled_start_at < ceiling);
 }
 
 // ---------------------------------------------------------------------------
@@ -487,6 +592,7 @@ async function applyStalenessSupplementIfNeeded(
   playerName: string,
   asOfDate: Date | undefined,
   fetchFn: typeof fetchPlayerMatchesFromProviders = fetchPlayerMatchesFromProviders,
+  ceiling?: Date,
 ): Promise<PlayerResolution> {
   // Backfill mode: never call live providers.
   if (asOfDate != null) return dbResult;
@@ -495,7 +601,11 @@ async function applyStalenessSupplementIfNeeded(
 
   const fetchResult = await fetchFn(playerName);
   if (fetchResult.records.length > 0 && fetchResult.resolvedPlayerId) {
-    const freshRows = matchRecordsToRows(fetchResult.records, fetchResult.resolvedPlayerId);
+    let freshRows = matchRecordsToRows(fetchResult.records, fetchResult.resolvedPlayerId);
+    // Gap 1 post-filter: discard provider rows on or after the ceiling date.
+    if (ceiling != null) {
+      freshRows = freshRows.filter(r => r.scheduled_start_at == null || r.scheduled_start_at < ceiling);
+    }
     const supplementedDiag: LiveFetchDiagnostics = {
       ...fetchResult.diagnostics,
       outcome: "CACHE_HIT_SUPPLEMENTED",
@@ -521,6 +631,7 @@ async function resolvePlayerMatchRows(
   playerName: string,
   index: PlayerIdentityIndex,
   asOfDate?: Date,
+  ceiling?: Date,
 ): Promise<PlayerResolution> {
   // ── Layers 1–4: DB-only resolution ───────────────────────────────────────
   //
@@ -659,7 +770,7 @@ async function resolvePlayerMatchRows(
 
   // ── Layer 4b: staleness supplement ───────────────────────────────────────
   if (dbResult) {
-    dbResult = await applyStalenessSupplementIfNeeded(dbResult, playerName, asOfDate);
+    dbResult = await applyStalenessSupplementIfNeeded(dbResult, playerName, asOfDate, fetchPlayerMatchesFromProviders, ceiling);
     return dbResult;
   }
 
@@ -680,7 +791,11 @@ async function resolvePlayerMatchRows(
   // (non-blocking) so the NEXT request for the same player hits Layer 1.
   const fetchResult = await fetchPlayerMatchesFromProviders(playerName);
   if (fetchResult.records.length > 0 && fetchResult.resolvedPlayerId) {
-    const rows = matchRecordsToRows(fetchResult.records, fetchResult.resolvedPlayerId);
+    let rows = matchRecordsToRows(fetchResult.records, fetchResult.resolvedPlayerId);
+    // Gap 1 post-filter: discard provider rows on or after the ceiling date.
+    if (ceiling != null) {
+      rows = rows.filter(r => r.scheduled_start_at == null || r.scheduled_start_at < ceiling);
+    }
     return {
       rows,
       resolvedId: fetchResult.resolvedPlayerId,
@@ -912,6 +1027,16 @@ export async function computeBuilderScore(snapshot: BuilderSnapshot): Promise<Bu
   const scheduledStart = snapshot.scheduledStart ?? null;
   const matchIsLive = scheduledStart != null && new Date() > scheduledStart;
 
+  // ── Gap 2 fix: derive effectiveCeiling for live scoring ──────────────────
+  //
+  // In live mode (asOfDate is null), we still need an upper bound so that rows
+  // from after the current match cannot reach Elo or Serve/Return modules.
+  // Use the match's scheduled start when known; otherwise use the current time.
+  // This ceiling is passed to resolvePlayerMatchRows so provider rows are also
+  // post-filtered (Gap 1 fix), and used directly to post-filter DB rows before
+  // passing to any module (Gap 2 fix).
+  const effectiveCeiling: Date = asOfDate ?? (scheduledStart ?? new Date());
+
   // ── 1. Resolve both players' match history with multi-source fallback ────────
   //
   // The identity index + alias expansion + name search ensure that even when
@@ -936,9 +1061,12 @@ export async function computeBuilderScore(snapshot: BuilderSnapshot): Promise<Bu
   // If no pre-match odds were ever captured before the match went live, suppliedMarketOdds
   // will be null, fetchedMarketOdds will be null, and marketOdds falls through to the
   // existing "No market odds provided" neutral path (score 50) — never a live-score number.
+  //
+  // effectiveCeiling is passed so provider-fetched rows (Layer 5 and 4b supplement) are
+  // date-filtered after fetch, closing Gap 1.
   const [selResolution, oppResolution, webResearch, fetchedMarketOdds] = await Promise.all([
-    resolvePlayerMatchRows(selectedPlayerId, selectedPlayerName, index, asOfDate),
-    resolvePlayerMatchRows(opponentId, opponentName, index, asOfDate),
+    resolvePlayerMatchRows(selectedPlayerId, selectedPlayerName, index, asOfDate, effectiveCeiling),
+    resolvePlayerMatchRows(opponentId, opponentName, index, asOfDate, effectiveCeiling),
     asOfDate == null
       ? researchPlayerMatchup(selectedPlayerName, opponentName).catch(() => null)
       : Promise.resolve(null),
@@ -954,8 +1082,21 @@ export async function computeBuilderScore(snapshot: BuilderSnapshot): Promise<Bu
 
   const selResolvedId = selResolution.resolvedId;
   const oppResolvedId = oppResolution.resolvedId;
-  const selMatches = selResolution.rows;
-  const oppMatches = oppResolution.rows;
+
+  // ── Ceiling applied to ALL rows, not just module inputs ──────────────────────
+  //
+  // Every downstream factor (computePlayerStats, H2H, fatigue, module records) must
+  // use the same ceiling-bounded row set so no future-dated match can contaminate
+  // any factor in any code path.  The filter is applied here once, not re-applied
+  // per-consumer, so there is a single source of truth.
+  //
+  // Row with null scheduled_start_at → kept (date unknown, cannot confirm future).
+  const selMatches = selResolution.rows.filter(
+    r => r.scheduled_start_at == null || r.scheduled_start_at < effectiveCeiling
+  );
+  const oppMatches = oppResolution.rows.filter(
+    r => r.scheduled_start_at == null || r.scheduled_start_at < effectiveCeiling
+  );
 
   // Matchstat enrichment — scraped aggregate surface/form data from matchstat.com.
   // Only attempted in live mode (not backfill) when a player has sparse match history.
@@ -982,14 +1123,17 @@ export async function computeBuilderScore(snapshot: BuilderSnapshot): Promise<Bu
   const selIN = selH2hIds.map((_, i) => `$${i + 1}`).join(", ");
   const oppIN = oppH2hIds.map((_, i) => `$${s + i + 1}`).join(", ");
 
-  // In backfill mode exclude H2H matches on or after the target match date.
-  const h2hDateParamIdx = asOfDate != null ? h2hParams.length + 1 : null;
-  const h2hQueryParams: unknown[] = asOfDate != null ? [...h2hParams, asOfDate] : h2hParams;
-  const h2hDateCond = h2hDateParamIdx != null ? `AND scheduled_start_at < $${h2hDateParamIdx}` : "";
+  // Always bound H2H by effectiveCeiling (backfill = asOfDate, live = scheduledStart or now()).
+  // The old pattern (only apply when asOfDate != null) left live-mode H2H unbounded, so a
+  // future match result could leak into the H2H factor during live scoring.
+  const h2hDateParamIdx = h2hParams.length + 1;
+  const h2hQueryParams: unknown[] = [...h2hParams, effectiveCeiling];
+  const h2hDateCond = `AND scheduled_start_at < $${h2hDateParamIdx}`;
 
   const h2hRawRes = await pool.query<MatchRow>(`
     SELECT player1_id, player2_id, winner_id, player1_rank, player2_rank,
-           surface, tournament_name, scheduled_start_at, retired, walkover
+           surface, tournament_name, scheduled_start_at, retired, walkover,
+           game_margins_player1
     FROM historical_matches
     WHERE ((player1_id IN (${selIN}) AND player2_id IN (${oppIN}))
         OR (player1_id IN (${oppIN}) AND player2_id IN (${selIN})))
@@ -1120,11 +1264,38 @@ export async function computeBuilderScore(snapshot: BuilderSnapshot): Promise<Bu
       dataSourceDiagnostics,
       builderVersion: BUILDER_VERSION,
       matchStatus: matchIsLive ? "live" : "pre-match",
+      builderPickedPlayerId: selectedPlayerId,
+      builderCalibratedProbability: 0,
+      rawValidationScore: 0,
+      callerAgreesWithEngine: true,
     };
   }
 
   const sel = computePlayerStats(selMatches, selResolvedId, surface, tournamentName);
   const opp = computePlayerStats(oppMatches, oppResolvedId, surface, tournamentName);
+
+  // ── Module pre-computation: ceiling-bounded row sets for Elo + Serve/Return ────
+  //
+  // selMatches / oppMatches are already ceiling-filtered (applied immediately after
+  // resolution, before any factor computation).  Module records are a direct alias so
+  // that the canRunModules guard and module calls use the same bounded set as every
+  // other factor.  No second filter needed.
+  const selMatchesForModules = selMatches;
+  const oppMatchesForModules = oppMatches;
+
+  // Convert MatchRow arrays to MatchRecord format used by prediction-engine modules.
+  const builderSurface = toBuilderSurface(surface);
+  // Minimum 3 rows per player required before passing to Elo/ServeReturn modules.
+  const canRunModules = builderSurface != null &&
+    selMatchesForModules.length >= 3 &&
+    oppMatchesForModules.length >= 3;
+
+  let selModuleRecords: MatchRecord[] = [];
+  let oppModuleRecords: MatchRecord[] = [];
+  if (canRunModules) {
+    selModuleRecords = selMatchesForModules.map(r => matchRowToMatchRecord(r, selResolvedId));
+    oppModuleRecords = oppMatchesForModules.map(r => matchRowToMatchRecord(r, oppResolvedId));
+  }
 
   // ── 2. Compute factor scores ──────────────────────────────────────────────
 
@@ -1157,7 +1328,27 @@ export async function computeBuilderScore(snapshot: BuilderSnapshot): Promise<Bu
     });
   }
 
-  // Factor: Overall Advantage (rank-adjusted win rate, proxy for Elo)
+  // Factor: Surface Elo (primary Elo-based win probability)
+  // Uses the same computeSurfaceEloModule the Prediction Engine uses, fed with date-bounded rows.
+  if (canRunModules) {
+    const eloResult = computeSurfaceEloModule(selModuleRecords, oppModuleRecords, builderSurface!);
+    // eloWinProbabilityPlayer1 is already in 0–100 percentage space (Percentage branded type)
+    const eloScore = clamp(Math.round(eloResult.eloWinProbabilityPlayer1 as unknown as number), 5, 95);
+    const eloLabel = eloScore > 55 ? "favors" : eloScore < 45 ? "favors opponent over" : "is neutral for";
+    addFactor("surfaceElo", "Surface Elo",
+      eloScore,
+      `Surface Elo: ${selectedPlayerName} ${eloResult.player1SurfaceElo} vs ${opponentName} ${eloResult.player2SurfaceElo} — Elo ${eloLabel} ${selectedPlayerName} (win prob ${Math.round(eloResult.eloWinProbabilityPlayer1 as unknown as number)}%, reliability ${eloResult.reliability}%)`
+    );
+  } else {
+    addFactor("surfaceElo", "Surface Elo", 50,
+      !builderSurface
+        ? "No surface specified — Elo module requires surface"
+        : `Insufficient match data for Elo (${selectedPlayerName}: ${selMatchesForModules.length}, ${opponentName}: ${oppMatchesForModules.length} date-bounded rows; need ≥3 each)`,
+      true
+    );
+  }
+
+  // Factor: Overall Advantage (rank-adjusted win rate, secondary signal)
   if (sel.total >= 5 && opp.total >= 5) {
     // Rank-adjust: lower avg opp rank (harder SOS) boosts win rate
     const sosBoostSel = sel.avgOppRank < 80 ? 0.04 : sel.avgOppRank < 150 ? 0.02 : 0;
@@ -1247,9 +1438,55 @@ export async function computeBuilderScore(snapshot: BuilderSnapshot): Promise<Bu
     addFactor("surfaceRecord", "Surface Record", 50, "Insufficient surface data", true);
   }
 
-  // Factors: Serve, Return, Hold/Break — no data
-  addUnavailable("serveAdvantage", "Serve Advantage");
-  addUnavailable("returnAdvantage", "Return Advantage");
+  // Factors: Serve and Return — computed from match rows via computeServeReturnModule.
+  // The module uses set-score game margins (populated from game_margins_player1) as the proxy path.
+  //
+  // When `srResult.defaulted` is true, neither player has any set-score margin data — the module
+  // cannot produce a meaningful rating. In that case we mark the factors UNAVAILABLE (excluded
+  // from the weighted blend) rather than LIMITED (which would add neutral 50 at full weight with
+  // no real evidence behind it).
+  //
+  // Hold/Break still unavailable — no point-level data available from historical_matches.
+  if (canRunModules) {
+    const srResult = computeServeReturnModule(selModuleRecords, oppModuleRecords, builderSurface!);
+    if (srResult.defaulted) {
+      // No set-score margin data available for at least one player → genuinely unavailable,
+      // not a neutral guess. Weight redistributes to other available factors.
+      addUnavailable("serveAdvantage", "Serve Advantage");
+      addUnavailable("returnAdvantage", "Return Advantage");
+    } else {
+      // player1ServeRating / returnRating are 0–100, 50 = tour average
+      const serveScore = clamp(
+        Math.round(50 + (srResult.player1ServeRating - srResult.player2ServeRating) / 2),
+        5, 95
+      );
+      const retScore = clamp(
+        Math.round(50 + (srResult.player1ReturnRating - srResult.player2ReturnRating) / 2),
+        5, 95
+      );
+      const serveLabel = serveScore > 55 ? "better server" : serveScore < 45 ? "weaker server" : "similar serve";
+      const retLabel = retScore > 55 ? "better returner" : retScore < 45 ? "weaker returner" : "similar return";
+      addFactor("serveAdvantage", "Serve Advantage", serveScore,
+        `Serve rating: ${selectedPlayerName} ${srResult.player1ServeRating} vs ${opponentName} ${srResult.player2ServeRating} — ${selectedPlayerName} is the ${serveLabel}`,
+      );
+      addFactor("returnAdvantage", "Return Advantage", retScore,
+        `Return rating: ${selectedPlayerName} ${srResult.player1ReturnRating} vs ${opponentName} ${srResult.player2ReturnRating} — ${selectedPlayerName} is the ${retLabel}`,
+      );
+    }
+  } else {
+    addFactor("serveAdvantage", "Serve Advantage", 50,
+      !builderSurface
+        ? "No surface specified — Serve/Return module requires surface"
+        : `Insufficient match data for Serve/Return (${selectedPlayerName}: ${selMatchesForModules.length}, ${opponentName}: ${oppMatchesForModules.length} rows; need ≥3 each)`,
+      true
+    );
+    addFactor("returnAdvantage", "Return Advantage", 50,
+      !builderSurface
+        ? "No surface specified — Serve/Return module requires surface"
+        : `Insufficient match data for Serve/Return (${selectedPlayerName}: ${selMatchesForModules.length}, ${opponentName}: ${oppMatchesForModules.length} rows; need ≥3 each)`,
+      true
+    );
+  }
   addUnavailable("holdBreak", "Hold/Break Statistics");
 
   // Factor: Strength of Schedule
@@ -1483,10 +1720,11 @@ export async function computeBuilderScore(snapshot: BuilderSnapshot): Promise<Bu
   );
 
   // Coverage % normalised against achievable maximum.
-  // Structurally-unavailable factors (utr, serveAdvantage, returnAdvantage, holdBreak) can
-  // never have data regardless of match — their combined 27% weight must not suppress the
-  // coverage ceiling.  dataCoverage = 100 when only structural gaps are missing; genuine
-  // variable-data gaps (no market odds, thin history, etc.) still drag coverage down.
+  // Structurally-unavailable factors (utr, holdBreak) can never have data regardless of match.
+  // serveAdvantage/returnAdvantage are now computable — they only appear as "unavailable" when
+  // surface is missing or match rows are too thin. Their combined 15% weight (utr + holdBreak)
+  // must not suppress the coverage ceiling when they are absent.
+  // dataCoverage = 100 when only structural gaps are missing; genuine variable-data gaps still drag it down.
   const unavailWeight = factors.filter(f => f.status === "unavailable").reduce((s, f) => s + f.weight, 0);
   const variableUnavailWeight = Math.max(0, unavailWeight - STRUCTURAL_MAX_UNAVAIL_WEIGHT);
   const dataCoverage = clamp(
@@ -1750,6 +1988,29 @@ export async function computeBuilderScore(snapshot: BuilderSnapshot): Promise<Bu
 
   const reasons = generateReasons(factors, sel, opp, surface);
 
+  // ── 9. Calibration + independent winner selection ─────────────────────────
+  //
+  // Apply the same calibration function the Prediction Engine uses to convert the
+  // raw validation score (a weighted average) into a calibrated probability.
+  // If no active calibration model exists, fall back to the raw score.
+  const rawValidationScore = validationScore;
+  let builderCalibratedProbability = validationScore; // fallback: raw score
+  try {
+    const { mapping } = await getActiveCalibration();
+    if (mapping && mapping.length > 0) {
+      const knots = mapping as CalibrationKnot[];
+      const calibrated01 = applyCalibrationOriented(knots, validationScore / 100);
+      builderCalibratedProbability = Math.round(calibrated01 * 100);
+    }
+  } catch {
+    // Calibration cache unavailable — raw score is the fallback
+  }
+
+  // Independent winner selection: the engine picks the player it favors on its own,
+  // independently of the caller's selection. Used to measure engine accuracy over time.
+  const builderPickedPlayerId = builderCalibratedProbability >= 50 ? selectedPlayerId : opponentId;
+  const callerAgreesWithEngine = builderPickedPlayerId === selectedPlayerId;
+
   return {
     validationScore,
     riskScore,
@@ -1768,6 +2029,10 @@ export async function computeBuilderScore(snapshot: BuilderSnapshot): Promise<Bu
     dataSourceDiagnostics,
     builderVersion: BUILDER_VERSION,
     matchStatus: matchIsLive ? "live" : "pre-match",
+    builderPickedPlayerId,
+    builderCalibratedProbability,
+    rawValidationScore,
+    callerAgreesWithEngine,
   };
 }
 
@@ -1777,6 +2042,286 @@ export function computeCrossEngineAgreement(
   if (builderDecision === "KEEP" || builderDecision === "BORDERLINE") return true;
   if (builderDecision === "REMOVE") return false;
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Builder accuracy stats (reads from builder_decision_log table)
+// ---------------------------------------------------------------------------
+
+export interface BuilderAccuracyStats {
+  totalEligible: number;
+  totalPicked: number;
+  coveragePct: number;
+  correctPicks: number;
+  accuracyPct: number;
+  totalAbstained: number;
+  coverageWarning: string | null;
+}
+
+/**
+ * Compute accuracy statistics from the builder_decision_log table.
+ * Returns coverage and accuracy figures; labels coverage < 30% with a mandatory warning.
+ * Returns zeroed stats when the table does not yet exist or has no graded rows.
+ */
+export async function computeBuilderAccuracyStats(): Promise<BuilderAccuracyStats> {
+  try {
+    const result = await pool.query<{
+      total_eligible: string;
+      total_picked: string;
+      correct_picks: string;
+      total_abstained: string;
+    }>(`
+      SELECT
+        COUNT(*) FILTER (WHERE actual_winner_id IS NOT NULL)::text AS total_eligible,
+        COUNT(*) FILTER (WHERE included_in_accuracy = true)::text AS total_picked,
+        COUNT(*) FILTER (WHERE included_in_accuracy = true AND builder_picked_player_id = actual_winner_id)::text AS correct_picks,
+        COUNT(*) FILTER (WHERE included_in_accuracy = false)::text AS total_abstained
+      FROM builder_decision_log
+    `);
+    const row = result.rows[0];
+    if (!row) return emptyAccuracyStats();
+    const totalEligible = parseInt(row.total_eligible) || 0;
+    const totalPicked = parseInt(row.total_picked) || 0;
+    const correctPicks = parseInt(row.correct_picks) || 0;
+    const totalAbstained = parseInt(row.total_abstained) || 0;
+    const coveragePct = totalEligible > 0 ? Math.round((totalPicked / totalEligible) * 100) : 0;
+    const accuracyPct = totalPicked > 0 ? Math.round((correctPicks / totalPicked) * 100) : 0;
+    const coverageWarning = coveragePct < 30
+      ? "COVERAGE_WARNING: below minimum threshold"
+      : null;
+    return { totalEligible, totalPicked, coveragePct, correctPicks, accuracyPct, totalAbstained, coverageWarning };
+  } catch {
+    // Table may not exist yet or DB error — return empty stats
+    return emptyAccuracyStats();
+  }
+}
+
+function emptyAccuracyStats(): BuilderAccuracyStats {
+  return { totalEligible: 0, totalPicked: 0, coveragePct: 0, correctPicks: 0, accuracyPct: 0, totalAbstained: 0, coverageWarning: "COVERAGE_WARNING: below minimum threshold" };
+}
+
+// ---------------------------------------------------------------------------
+// Builder decision log — request-critical write helper
+// ---------------------------------------------------------------------------
+//
+// Extracted as a standalone async function with an injectable DB parameter so it
+// can be unit-tested without a real database connection. The production call-site
+// (adminParlay.ts) awaits this BEFORE sending the HTTP response so the write is
+// request-critical — it will not be silently dropped when the handler exits.
+//
+// A failure here logs a warning but does not fail the response (accuracy tracking
+// is additive, not critical to the caller's use-case). However, the await guarantees
+// the failure is at least observed before the response is flushed, and the try/catch
+// is explicit (not swallowed by fire-and-forget).
+
+/** Minimal DB interface required by writeBuilderDecisionRow (injectable for tests). */
+export interface MinimalDb {
+  query<T extends Record<string, unknown>>(sql: string, params: unknown[]): Promise<{ rows: T[] }>;
+}
+
+export interface WriteBuilderDecisionOpts {
+  selectedPlayerId: string | undefined;
+  opponentId: string | undefined;
+  scheduledAt: Date | null;
+  builderPickedPlayerId: string;
+  builderCalibratedProbability: number;
+  decision: string;
+  callerAgreesWithEngine: boolean;
+}
+
+export interface WriteBuilderDecisionResult {
+  inserted: boolean;
+  historicalMatchId: number | null;
+}
+
+/**
+ * Write one row to builder_decision_log. DB is injectable for unit tests.
+ *
+ * Stable fixture identity: uses scheduledAt ± 1 day to find the matching
+ * evaluation_predictions row. If scheduledAt is null (match date unknown),
+ * historical_match_id stays null and the row is marked excluded from accuracy.
+ * Does NOT use a nearest-to-now heuristic — that can cross-pair unrelated meetings
+ * between the same two players.
+ *
+ * @internal exported as __TEST_writeBuilderDecisionRow for unit tests.
+ */
+export async function __TEST_writeBuilderDecisionRow(
+  db: MinimalDb,
+  opts: WriteBuilderDecisionOpts
+): Promise<WriteBuilderDecisionResult> {
+  let historicalMatchId: number | null = null;
+  if (opts.selectedPlayerId && opts.opponentId && opts.scheduledAt != null) {
+    const matchRes = await db.query<{ id: number }>(
+      `SELECT id FROM evaluation_predictions
+       WHERE ((player1_id = $1 AND player2_id = $2) OR (player1_id = $2 AND player2_id = $1))
+         AND scheduled_start_at >= $3::timestamptz - INTERVAL '1 day'
+         AND scheduled_start_at <= $3::timestamptz + INTERVAL '1 day'
+       ORDER BY ABS(EXTRACT(EPOCH FROM (scheduled_start_at - $3::timestamptz))) ASC
+       LIMIT 1`,
+      [opts.selectedPlayerId, opts.opponentId, opts.scheduledAt.toISOString()]
+    );
+    historicalMatchId = matchRes.rows[0]?.id ?? null;
+  }
+  await db.query(
+    `INSERT INTO builder_decision_log
+       (historical_match_id, player_one_id, player_two_id, match_scheduled_at,
+        builder_picked_player_id, builder_calibrated_probability,
+        builder_decision, caller_selected_player_id, caller_agrees_with_engine)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [
+      historicalMatchId,
+      opts.selectedPlayerId ?? "",
+      opts.opponentId ?? "",
+      opts.scheduledAt?.toISOString() ?? null,
+      opts.builderPickedPlayerId,
+      opts.builderCalibratedProbability,
+      opts.decision,
+      opts.selectedPlayerId ?? "",
+      opts.callerAgreesWithEngine,
+    ]
+  );
+  return { inserted: true, historicalMatchId };
+}
+
+/**
+ * Production entry-point: same as __TEST_writeBuilderDecisionRow but uses the real pool.
+ * Must be awaited before the HTTP response is sent (request-critical, not fire-and-forget).
+ */
+export async function writeBuilderDecisionLog(opts: WriteBuilderDecisionOpts): Promise<WriteBuilderDecisionResult> {
+  return __TEST_writeBuilderDecisionRow(pool, opts);
+}
+
+// ---------------------------------------------------------------------------
+// Grading decision — pure logic (exported for unit tests)
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute what a grading pass should write for a single builder_decision_log row.
+ *
+ * Pure function — no DB access. The DB layer calls this for each ungraded row.
+ *
+ * @param row               - The ungraded builder_decision_log row
+ * @param settlement        - The settled match record from evaluation_predictions,
+ *                            or null if the match has not yet settled
+ * @returns                   Grading update to apply, or null when no update is needed yet
+ *
+ * Rules:
+ * - historical_match_id IS NULL → included_in_accuracy = false, actual_winner_id = null
+ *   (match was unresolvable at log time; excluded from accuracy, never discarded)
+ * - historical_match_id IS NOT NULL but settlement is null → no update (match pending)
+ * - historical_match_id IS NOT NULL, settlement found → grade it:
+ *     included_in_accuracy = true
+ *     actual_winner_id = settlement.actual_winner_id
+ *
+ * @internal exported as __TEST_computeGradingDecision
+ */
+export function __TEST_computeGradingDecision(
+  row: { historical_match_id: number | null; builder_picked_player_id: string },
+  settlement: { actual_winner_id: string } | null,
+): { included_in_accuracy: boolean; actual_winner_id: string | null } | null {
+  if (row.historical_match_id === null) {
+    // Unresolvable at log time — mark excluded, never graded
+    return { included_in_accuracy: false, actual_winner_id: null };
+  }
+  if (settlement === null) {
+    // Match has not settled yet — nothing to write
+    return null;
+  }
+  // Match settled — grade the pick
+  return {
+    included_in_accuracy: true,
+    actual_winner_id: settlement.actual_winner_id,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Grading job (reads builder_decision_log, cross-references evaluation_predictions)
+// ---------------------------------------------------------------------------
+
+export interface GradingResult {
+  graded: number;        // rows that received actual_winner_id + included_in_accuracy=true
+  markedAbstained: number; // rows that received included_in_accuracy=false (null match_id)
+  skipped: number;       // rows skipped (match not yet settled)
+  errors: number;
+}
+
+/**
+ * Idempotent grading pass: fills actual_winner_id + included_in_accuracy for every
+ * builder_decision_log row that can now be graded.
+ *
+ * - Rows with historical_match_id IS NOT NULL and actual_winner_id IS NULL:
+ *     join evaluation_predictions by ID; if settled, write actual_winner_id + included_in_accuracy=true
+ * - Rows with historical_match_id IS NULL and included_in_accuracy IS NULL:
+ *     mark included_in_accuracy=false (unresolvable at log time, excluded from accuracy)
+ *
+ * Safe to call repeatedly — idempotent by design (only touches rows where IS NULL guards pass).
+ */
+export async function gradeBuilderDecisions(): Promise<GradingResult> {
+  const result: GradingResult = { graded: 0, markedAbstained: 0, skipped: 0, errors: 0 };
+  try {
+    // Step 1: mark unresolvable rows as abstained (included_in_accuracy = false)
+    const abstainRes = await pool.query<{ count: string }>(`
+      UPDATE builder_decision_log
+         SET included_in_accuracy = false
+       WHERE historical_match_id IS NULL
+         AND included_in_accuracy IS NULL
+    `);
+    result.markedAbstained = abstainRes.rowCount ?? 0;
+
+    // Step 2: grade resolvable rows that have a settled match
+    const pending = await pool.query<{
+      id: number;
+      historical_match_id: number;
+      builder_picked_player_id: string;
+    }>(`
+      SELECT bdl.id, bdl.historical_match_id, bdl.builder_picked_player_id
+        FROM builder_decision_log bdl
+       WHERE bdl.historical_match_id IS NOT NULL
+         AND bdl.actual_winner_id IS NULL
+         AND bdl.included_in_accuracy IS NULL
+    `);
+
+    if (pending.rows.length === 0) return result;
+
+    // Batch-fetch all settlement records in one query (avoid N+1)
+    const matchIds = pending.rows.map(r => r.historical_match_id);
+    const settlements = await pool.query<{ id: number; actual_winner_id: string | null }>(`
+      SELECT id, actual_winner_id
+        FROM evaluation_predictions
+       WHERE id = ANY($1::int[])
+         AND actual_winner_id IS NOT NULL
+    `, [matchIds]);
+    const settlementMap = new Map(settlements.rows.map(r => [r.id, r.actual_winner_id!]));
+
+    for (const row of pending.rows) {
+      const settledWinnerId = settlementMap.get(row.historical_match_id) ?? null;
+      const update = __TEST_computeGradingDecision(
+        { historical_match_id: row.historical_match_id, builder_picked_player_id: row.builder_picked_player_id },
+        settledWinnerId ? { actual_winner_id: settledWinnerId } : null,
+      );
+      if (update === null) {
+        // Match not yet settled
+        result.skipped++;
+        continue;
+      }
+      try {
+        await pool.query(
+          `UPDATE builder_decision_log
+              SET actual_winner_id = $2, included_in_accuracy = $3
+            WHERE id = $1`,
+          [row.id, update.actual_winner_id, update.included_in_accuracy]
+        );
+        result.graded++;
+      } catch (err) {
+        logger.warn({ err, rowId: row.id }, "gradeBuilderDecisions: failed to update row");
+        result.errors++;
+      }
+    }
+  } catch (err) {
+    logger.error({ err }, "gradeBuilderDecisions: outer query failed");
+    result.errors++;
+  }
+  return result;
 }
 
 // ---------------------------------------------------------------------------
@@ -1879,6 +2424,9 @@ export function __TEST_computeScoring(
     factors.push({ key, label, score: 50, weight: DEFAULT_WEIGHTS[key] ?? 0.01, status: "unavailable", supportsSelected: null, detail: "" });
   };
 
+  // Surface Elo — neutral placeholder in test mode (no real match records available here)
+  _addFactor("surfaceElo", "Surface Elo", 50, "Surface Elo not computed in test mode (neutral placeholder)", true);
+
   // Overall Advantage
   if (sel.total >= 5 && opp.total >= 5) {
     const sosBoostSel = sel.avgOppRank < 80 ? 0.04 : sel.avgOppRank < 150 ? 0.02 : 0;
@@ -1917,6 +2465,10 @@ export function __TEST_computeScoring(
     _addFactor("surfaceRecord", "Surface Record", 50, "Insufficient surface data", true);
   }
 
+  // serveAdvantage/returnAdvantage — computed from game_margins_player1 in production.
+  // In test mode no real match rows are supplied, so the module would return defaulted=true.
+  // Treat them as UNAVAILABLE here (matching production defaulted-path behaviour) rather than
+  // neutral limited, so tests reflect real behaviour and don't inflate the weighted blend.
   _addUnavailable("serveAdvantage", "Serve Advantage");
   _addUnavailable("returnAdvantage", "Return Advantage");
   _addUnavailable("holdBreak", "Hold/Break Statistics");
