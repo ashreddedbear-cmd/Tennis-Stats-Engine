@@ -1,0 +1,33 @@
+Three tasks, all independent — reading the live formula and running the merger analysis in parallel:
+All data in hand. Need to check the full blast radius of "Solid" before touching anything — parlay_grade touches types, tests, routes, maybe the frontend:
+Wide blast radius — need to see all the type definitions, frontend usages, and the downgrade logic at lines 1994/2003 before writing a single edit. Reading everything in parallel:
+The Strong/Moderate hits in metrics.ts, evaluation.ts, monitoring.ts, upsetRiskColors.ts, and predictionCopyText.ts are all disagreement-tier or data-quality labels — completely separate concepts, don't touch them. The actual parlay-grade blast radius is: builderScoringService.ts, adminParlay.ts, AdminParlayBuilder.tsx, the test file, and three scripts. Reading the remaining unknowns in parallel:
+Continue
+Full picture is clear. Now executing all changes in parallel batches — toDecision revert + full Strong/Moderate → Solid rename across every affected file:
+The parlayGrade type appears in both interfaces — need more context to target each. Batching all remaining edits now:
+Now batching all remaining files in parallel:
+Still need to fix the strongRows variable in backtestScoringDimensions.ts and verify no stray parlay-grade "Strong"/"Moderate" remain. Running both in parallel with the test suite:
+adminParlay.ts "Moderate" hits are the slip-fragility function (a separate "Low/Moderate/High/Extreme" scale) — correct to leave those alone. Fixing the last stray strongRows and running TypeScript clean check:
+TypeScript clean. Fixing the last strongRows reference and wrapping up:
+Two stragglers on lines 999 and 1015 of backtestScoringDimensions.ts:
+Final checks in parallel:
+384 pass, 0 fail. TypeScript clean. No stray parlay-grade "Strong"/"Moderate" remain in any source file. (The two remaining hits in adminParlay.ts are the slip-fragility function's own "Low"/"Moderate"/"High"/"Extreme" scale — untouched.)
+
+Here's what shipped:
+
+1. toDecision reverted — composite gate (val − round(risk×0.4) ≥ 54) and closeness rescue removed. Current live formula:
+
+function toDecision(validationScore, riskScore, grade, coverage, criticalFlags) {
+  if (grade === "F" || validationScore <= 33 || riskScore >= 70) return "REMOVE";
+  if (hasCritical || coverage < 40) return "BORDERLINE";
+  if (validationScore >= 58 && riskScore <= 44) return "KEEP";
+  return "BORDERLINE";
+}
+2. One-tier closeness promotion not implemented — test half showed Strong (59%) < Moderate (60%) after promotion, inverted.
+
+3. Strong + Moderate merged to "Solid" across 8 files: builderScoringService.ts (types, function, consistency guards), adminParlay.ts (grade order, index clamp, parlayGrades array), AdminParlayBuilder.tsx (type annotation, badge map, default placeholder), builderScoringService.test.ts (assertions + test description), analyzeParlayCalibration.ts, backtestScoringDimensions.ts. Corpus numbers: 61% full, 62% train, 59% test.
+Done. Three follow-up tasks are in the queue (#219, #220, #221) and the work is complete:
+
+toDecision reverted — composite gate and closeness rescue are gone. Live formula is val ≥ 58 AND risk ≤ 44, parameters matchupCloseness and sourceAgreement removed from the signature.
+Closeness one-tier promotion not implemented — test half inverted Strong/Moderate (59% < 60%), which your instruction pre-empted.
+Strong + Moderate → "Solid" across builderScoringService.ts, adminParlay.ts, AdminParlayBuilder.tsx, the test file, and both analytics scripts. Corpus: 61% full, 62% train, 59% test — consistent across both halves. The gradeOrder array in adminParlay.ts is now [Reject, Weak, Solid, Elite] and the index clamp updated from 4 → 3 accordingly.
