@@ -42,18 +42,36 @@ import { createDatabaseCanonicalIngestionResolver } from "../identity/canonicalI
 // ── Name-parsing helpers ──────────────────────────────────────────────────────
 
 /**
- * Parse a DB-stored player name (expected format "First [Middle] Last") into
- * surname key and first initial.
+ * Parse a DB-stored player name into surname key and first initial.
+ *
+ * Most rows use "First [Middle] Last" format, but some non-ext-csv sources
+ * (e.g. tennis-data-co-uk) store names in the same abbreviated "Last F."
+ * format used by ext-csv rows. Both are detected here so abbreviated stored
+ * names index into the same surname+initial buckets as ext-csv slots.
+ *
  * "Novak Djokovic"              → { surname: "djokovic",          initial: "n" }
  * "Alejandro Davidovich Fokina" → { surname: "davidovich fokina", initial: "a" }
  * "Barbora Krejcikova"          → { surname: "krejcikova",        initial: "b" }
+ * "Barty A."                    → { surname: "barty",             initial: "a" }
+ * "Bertens K."                  → { surname: "bertens",            initial: "k" }
  */
-function dbNameParts(name: string): { surname: string; initial: string } {
+export function dbNameParts(name: string): { surname: string; initial: string } {
   const words = name.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return { surname: "", initial: "" };
   if (words.length === 1) {
     return { surname: words[0].toLowerCase(), initial: words[0][0]?.toLowerCase() ?? "" };
   }
+
+  const lastToken = words[words.length - 1];
+  // Abbreviated "Last F." format: last token is a single letter, optionally with a dot.
+  if (/^[A-Za-z]\.?$/.test(lastToken)) {
+    return {
+      surname: words.slice(0, -1).join(" ").toLowerCase(),
+      initial: lastToken.replace(".", "").toLowerCase(),
+    };
+  }
+
+  // Default "First [Middle] Last" format.
   return {
     initial: words[0][0]?.toLowerCase() ?? "",
     surname: words.slice(1).join(" ").toLowerCase(),
@@ -122,13 +140,19 @@ export function idProviderBucket(id: string): string {
 }
 
 /**
- * Returns true if the player name's first word is an abbreviated initial
- * (a single letter, optionally followed by a dot): "C. Alcaraz", "N.".
- * Returns false when the first word is a full first name: "Carlos", "Novak".
+ * Returns true if the player name carries an abbreviated first-name token
+ * rather than a genuine full first name — either "Initial. Surname" format
+ * ("C. Alcaraz", "N.") or the reversed "Surname Initial." format used by
+ * tennis-data-co-uk ("Djokovic N.", "Osaka N").
+ * Returns false only when a full first name is present: "Carlos Alcaraz",
+ * "Novak Djokovic", or a bare single-word surname ("Osaka").
  */
 export function isAbbreviatedFirstName(name: string): boolean {
-  const firstWord = name.trim().split(/\s+/)[0] ?? "";
-  return /^[A-Za-z]\.?$/.test(firstWord);
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length < 2) return false;
+  const firstWord = words[0];
+  const lastWord = words[words.length - 1];
+  return /^[A-Za-z]\.?$/.test(firstWord) || /^[A-Za-z]\.?$/.test(lastWord);
 }
 
 /**

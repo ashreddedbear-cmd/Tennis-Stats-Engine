@@ -10,6 +10,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   csvNameParts,
+  dbNameParts,
   resolveCsvPlayerToRealId,
   collapseByInitialDuplicates,
   idProviderBucket,
@@ -60,6 +61,46 @@ describe("csvNameParts", () => {
   });
 });
 
+// ── dbNameParts ───────────────────────────────────────────────────────────────
+
+describe("dbNameParts", () => {
+  it("parses standard First Last format", () => {
+    const r = dbNameParts("Novak Djokovic");
+    assert.equal(r.surname, "djokovic");
+    assert.equal(r.initial, "n");
+  });
+
+  it("parses compound-surname First Last format", () => {
+    const r = dbNameParts("Alejandro Davidovich Fokina");
+    assert.equal(r.surname, "davidovich fokina");
+    assert.equal(r.initial, "a");
+  });
+
+  it("detects abbreviated 'Last F.' format (tennis-data-co-uk style)", () => {
+    const r = dbNameParts("Barty A.");
+    assert.equal(r.surname, "barty");
+    assert.equal(r.initial, "a");
+  });
+
+  it("detects abbreviated 'Last F' format without trailing dot", () => {
+    const r = dbNameParts("Bertens K");
+    assert.equal(r.surname, "bertens");
+    assert.equal(r.initial, "k");
+  });
+
+  it("detects abbreviated format with compound surname", () => {
+    const r = dbNameParts("Davidovich Fokina A.");
+    assert.equal(r.surname, "davidovich fokina");
+    assert.equal(r.initial, "a");
+  });
+
+  it("handles single-word names", () => {
+    const r = dbNameParts("Osaka");
+    assert.equal(r.surname, "osaka");
+    assert.equal(r.initial, "o");
+  });
+});
+
 // ── idProviderBucket ──────────────────────────────────────────────────────────
 
 describe("idProviderBucket", () => {
@@ -97,6 +138,10 @@ describe("isAbbreviatedFirstName", () => {
   it("returns false for single-word names (whole name is surname)", () => {
     assert.equal(isAbbreviatedFirstName("Osaka"), false);
   });
+  it("detects reversed 'Last F.' abbreviated format", () => {
+    assert.equal(isAbbreviatedFirstName("Djokovic N."), true);
+    assert.equal(isAbbreviatedFirstName("Barty A"), true);
+  });
 });
 
 // ── collapseByInitialDuplicates ───────────────────────────────────────────────
@@ -125,9 +170,10 @@ describe("collapseByInitialDuplicates", () => {
   it("Rule A: collapses to sackmann when no numeric ID present", () => {
     // "N. Osaka" (API-Tennis abbreviated, initial.surname format)
     // + "Naomi Osaka" (sackmann full name)
-    // Note: "Osaka N." (last.initial format from tennis-data-co-uk) would be
-    // indexed under a garbage key "wta:n.|o" by dbNameParts, so it never
-    // appears in the "WTA:osaka|n" bucket — only "Initial. Surname" entries do.
+    // "Osaka N." (last.initial format from tennis-data-co-uk) is now also
+    // correctly indexed into the "WTA:osaka|n" bucket by dbNameParts, and
+    // isAbbreviatedFirstName recognizes it as abbreviated (not a full name),
+    // so it does not interfere with Rule A's identity-verification count.
     const byInitial = new Map([
       [
         "WTA:osaka|n",
