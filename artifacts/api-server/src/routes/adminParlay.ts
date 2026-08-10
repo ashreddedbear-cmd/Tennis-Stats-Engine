@@ -912,6 +912,31 @@ router.post("/admin/parlay/backfill", requireAdmin, (req, res): void => {
              result.matchupCloseness ?? null, result.removalProbability]
           );
           inserted++;
+
+          // Write to builder_decision_log so accuracy stats are seeded from historical data
+          // rather than requiring 6-12 months of live /validate calls to accumulate.
+          // included_in_accuracy = true is set directly: actual_winner_id is already known
+          // at backfill time so the grading job step has nothing left to do.
+          // player_one_id = selectedPlayerId (the model's pick) — deterministic per row since
+          // the model pick is derived from calibrated_probability, so ordering is stable on re-run.
+          const { rows: decisionDup } = await client.query(
+            `SELECT 1 FROM builder_decision_log WHERE historical_match_id = $1 LIMIT 1`,
+            [match.id]
+          );
+          if (decisionDup.length === 0) {
+            await client.query(
+              `INSERT INTO builder_decision_log
+                 (historical_match_id, player_one_id, player_two_id, match_scheduled_at,
+                  builder_picked_player_id, builder_calibrated_probability,
+                  builder_decision, caller_selected_player_id, caller_agrees_with_engine,
+                  actual_winner_id, included_in_accuracy)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true)`,
+              [match.id, selectedPlayerId, opponentId, asOfDate.toISOString(),
+               result.builderPickedPlayerId, result.builderCalibratedProbability,
+               result.decision, selectedPlayerId, result.callerAgreesWithEngine,
+               match.actual_winner_id]
+            );
+          }
         } catch (err) {
           logger.warn({ matchId: match.id, err }, "Parlay backfill row error");
           errors++;
