@@ -1,0 +1,25 @@
+It landed — running the invariants suite now to get the real output against those four assertions.
+The invariants log pre-dates the merge. Need to run the suite fresh against the merged code.
+Suite is still running — let me pull the full log to find the #223 tests specifically.
+The compositeProvider suite hasn't printed yet — the log is still mid-run. Let me pull the full file to see where it's at.
+Suite is still in progress — the compositeProvider tests run after the monte carlo file. Let me wait for it to finish and pull the complete output.
+Workflow finished — let me get the fresh complete output now.
+The suite finished clean — but I don't see the compositeProvider tests in the output. The invariants workflow only scans src/services/predictionEngine/** and builderScoringService.test.ts. If the task agent placed the new tests in src/services/tennisData/, they weren't picked up. Let me check.
+The new test file is compositeProvider.tier5.test.ts — not under predictionEngine/, so it wasn't picked up. Let me read it and run it directly in parallel.
+Three of the four tests pass cleanly. Here's the precise picture against each assertion:
+
+Test 1 — warning fires, prior:0, db:0, no throw ✔
+Confirmed: logger.warn fired with prior:0, db:0, playerId:"player-new", empty array returned, no exception.
+
+Test 2 — warning fires at db:3, 3 rows returned ✔
+Confirmed: warn fired with prior:0, db:3, result length 3.
+
+Test 3 — warning silent at db:20 ✔
+Confirmed: 20 rows returned, zero tier-5 warn calls.
+
+Test 4 — prediction output degrades honestly (selectedPlayerStatus, riskScore ≥ 45, grade not Elite, decision not KEEP) ✗
+Missing. The task agent only implemented the three warning-log tests. The end-to-end scoring assertion — the one you specifically added this turn — was not implemented. The file is 191 lines and contains exactly one describe block with three it calls.
+
+Additionally: compositeProvider.tier5.test.ts lives under src/services/tennisData/ and is not picked up by the invariants workflow (which only scans src/services/predictionEngine/ and the two explicitly named files). It ran fine in isolation but would be invisible to CI after any future regression.
+
+Two things need fixing before this can be closed: the missing Test 4, and the workflow gap. I can implement both — the Test 4 scoring assertion in builderScoringService.test.ts (where that infrastructure already lives) and add compositeProvider.tier5.test.ts to the invariants workflow command. Say the word.

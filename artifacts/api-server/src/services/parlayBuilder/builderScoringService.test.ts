@@ -2277,3 +2277,66 @@ describe("builderScoringService — #97 thin-data floor constant regression guar
     );
   });
 });
+
+// ─── #223 First-time player output degradation ────────────────────────────────
+//
+// Closes the loop from "warning fires" (compositeProvider.tier5.test.ts Tests 1–3)
+// to "the prediction output reflects the thin-data state honestly".
+//
+// When compositeProvider.getPlayerMatches returns 0 records (first-time player
+// during an outage), total=0 in the stats object. The scoring path must:
+//   (a) not crash
+//   (b) derive selectedPlayerStatus="player_not_found" from total=0
+//   (c) apply the thin-data risk floor (riskScore ≥ THIN_DATA_RISK_FLOOR)
+//   (d) demote any Elite grade (inconsistency guard at ~builderScoringService.ts:1978)
+//   (e) produce decision≠KEEP (toDecision requires risk≤44; floor makes that impossible)
+//
+// We use makeStats({total:0}) so __TEST_computeScoring derives the status naturally
+// via toPlayerStatus(sel.total) — no explicit override, proving the real code path.
+describe("builderScoringService — #223 first-time player output degradation", () => {
+  it(
+    "zero-record player: no crash, full thin-data floor applied, parlayGrade not Elite, KEEP mathematically impossible",
+    () => {
+      // Simulate compositeProvider returning 0 matches for the selected player
+      // (first appearance in a fixture during API-Tennis + BSD outage window).
+      // Use total:0 so __TEST_computeScoring derives selectedPlayerStatus naturally
+      // as "player_not_found" via toPlayerStatus(sel.total) at ~line 2940 —
+      // no explicit status override, proving the real code path.
+      const zeroStats = makeStats({ total: 0, winRate: 0.5, recentWinRate: 0.5 });
+      const normalOpp = makeStats({ total: 20, winRate: 0.5, recentWinRate: 0.5 });
+
+      // Contract (a): scoring completes without throwing
+      const result = __TEST_computeScoring(zeroStats, normalOpp);
+
+      // Contract (b+c): thin-data floor applied at full strength — behavioral proof
+      // that player_not_found status was derived from total=0.
+      // thinDataRiskFloor(0) === THIN_DATA_RISK_FLOOR (45): the full floor, not the ramp.
+      // No lower riskScore is possible when the selected player has zero match history.
+      assert.ok(
+        result.riskScore >= THIN_DATA_RISK_FLOOR,
+        `riskScore ${result.riskScore} must be ≥ THIN_DATA_RISK_FLOOR (${THIN_DATA_RISK_FLOOR}) — ` +
+        `full floor must fire when total=0 (player_not_found)`,
+      );
+
+      // Contract (d): parlayGrade must not be Elite.
+      // The inconsistency guard demotes Elite → Solid when selectedPlayerStatus
+      // is player_not_found or insufficient_data (builderScoringService.ts ~line 2956).
+      assert.notEqual(
+        result.parlayGrade,
+        "Elite",
+        `parlayGrade must not be Elite when selected player has 0 matches; got "${result.parlayGrade}"`,
+      );
+
+      // Contract (e): decision cannot be KEEP.
+      // toDecision gate: validationScore ≥ 62 AND riskScore ≤ 44.
+      // The thin-data floor for total=0 guarantees riskScore ≥ 45, making KEEP
+      // impossible regardless of validationScore. Assert the risk constraint directly
+      // since toDecision is not a test-exported function.
+      assert.ok(
+        result.riskScore > 44,
+        `riskScore ${result.riskScore} must be > 44 so toDecision cannot return KEEP ` +
+        `(KEEP gate: validationScore ≥ 62 AND riskScore ≤ 44)`,
+      );
+    },
+  );
+});

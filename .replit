@@ -29,7 +29,7 @@ isValidation = true
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd artifacts/api-server && pnpm exec tsx --test $(find src/services/predictionEngine -name '*.test.ts') src/services/parlayBuilder/builderScoringService.test.ts && cd ../tennis-predictor && pnpm exec tsx --test src/lib/monteCarloHeadline.test.ts"
+args = "cd artifacts/api-server && pnpm exec tsx --test $(find src/services/predictionEngine -name '*.test.ts') src/services/parlayBuilder/builderScoringService.test.ts src/services/tennisData/compositeProvider.tier5.test.ts && cd ../tennis-predictor && pnpm exec tsx --test src/lib/monteCarloHeadline.test.ts"
 
 [agent]
 stack = "PNPM_WORKSPACE"
