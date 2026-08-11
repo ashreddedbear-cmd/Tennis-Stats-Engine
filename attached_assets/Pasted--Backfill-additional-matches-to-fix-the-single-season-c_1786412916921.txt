@@ -1,0 +1,23 @@
+---
+
+Backfill additional matches to fix the single-season confound found in #221 — specifically, the current 4,000-row corpus is one Jan–Jun 2022 window, so no threshold has been checked against a different season, year, or surface mix.
+
+**Priority for what to add, in order:**
+
+1. **Complete 2022 first** — backfill Jul–Dec 2022 (the second half of the year the corpus is missing). This adds the US Open, the fall Asian hard-court swing, and year-end events, and gives a full-year baseline before reaching into other years.
+2. **Add a second full year, non-adjacent if possible** — 2024 over 2023, to get more distance from 2022 and reduce the chance that whatever was true in 2022 alone (player form, ranking landscape) just happens to repeat in the immediately following year.
+3. **Within whatever window is pulled, make sure all four Grand Slams and all three surfaces (hard/clay/grass) are represented** — not just proportionally by month, but confirm explicitly, since the MC≥77 confound came from grass being entirely absent from one half. A backfill that's technically "more matches" but still surface-lopsided doesn't fix the actual problem.
+
+**Instructions for the agent:**
+
+---
+
+Extend the corpus backfill (same process used for #216) to add:
+1. Jul–Dec 2022 (completing the year already partially covered)
+2. Full-year 2024
+
+Before running it, report the surface and Slam breakdown you expect to get from these windows (roughly how many grass/clay/hard matches, whether all four Slams are included) — confirm it's not lopsided before committing to the pull.
+
+After backfilling, re-run the #221 grid (VS × MC, coarse 3×2) with the expanded corpus, split chronologically the same way, and report whether the previously-supported boundary (VS≥66 + MC<60) still holds, and whether the MC≥77 seasonal confound reappears or was specific to the original window.
+
+Also flag: does this expanded corpus give enough separation in time/season to re-check the Elite threshold (adj≥58) and KEEP gate (val≥62) against a genuinely different sample, not just a different slice of the same season? If yes, don't re-implement anything yet — just report whether those thresholds still hold on the new data or drift.
