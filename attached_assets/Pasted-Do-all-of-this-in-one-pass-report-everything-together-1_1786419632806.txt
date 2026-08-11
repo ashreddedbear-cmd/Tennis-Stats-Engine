@@ -1,0 +1,23 @@
+Do all of this in one pass, report everything together:
+
+1. Ablation corpus check (report only)
+Confirm whether the Aug 1 ablation (auditParlayFactorWeights.ts, 3,031 legs) ran against the narrow 2022-only corpus or the expanded one. Just report it — this determines step 2’s urgency, doesn’t block it.
+
+2. Remove dead weight, redistribute now — decided, not proposed
+Delete utr (0.100) and holdBreak (0.050) as factors entirely. Redistribute their combined 0.150 proportionally across the remaining 17 live factors, in proportion to each factor’s current spec weight (i.e. scale every remaining weight by 1 / (1 - 0.150) so they still sum to 1.00). This is the decision — don’t propose alternatives, implement this exact method. Show the before/after weight table for all 17 factors.
+
+If step 1 shows the ablation ran on the narrow 2022 corpus: re-run the same leave-one-out ablation against the expanded 37,913-row corpus after the redistribution, and report whether any factor’s directional edge changes meaningfully. If it ran on the broad corpus already, skip the re-run.
+
+3. Fix rankingTrend’s mislabeling — decided
+Either compute an actual trend (e.g. rank now vs. rank 90 days ago) or rename the factor to reflect what it actually measures (current rank only). Implement whichever is a smaller, safer change — your call on that specific implementation detail, not on whether to fix it.
+
+4. Tournament tier — hold, do not add as a factor yet
+Do not add tournament tier as a new scoring input in this pass. It’s a real gap, but adding an untested factor with an arbitrary weight would break the same rule as the composite-formula mistake earlier — no formula change ships without holdout validation, and a brand-new factor has no ablation history yet. Log it as a separate future task requiring its own leave-one-out validation before any weight is assigned.
+
+5. #221 ITF fix — implement now
+Exclude ITF from the VS≥66+MC<60 boundary (Challenger rows stay eligible, per your earlier finding). Show the resulting tour+Challenger-only win rate across all four years, confirming the boundary holds without the ITF drag.
+
+6. Live dashboard number
+Pull the actual current KEEP-grade accuracy figure from the real API endpoint (not the code path) and report it — confirm whether it already reflects ~65% current-conditions reality or is showing a stale ~70% figure.
+
+Standard, as always: real numbers, real output, tests passing, no step skipped or summarized as “done” without evidence shown.
