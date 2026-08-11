@@ -152,6 +152,7 @@ const SOFASCORE_MIN_RECORDS_THRESHOLD = 5;
 
 export class CompositeTennisProvider implements TennisDataProvider {
   readonly name: string;
+
   /**
    * Caches player names keyed by player ID so the Sofascore tier-3 fallback in
    * getPlayerMatches can do a name-based search (Sofascore has no ID-based lookup).
@@ -301,16 +302,14 @@ export class CompositeTennisProvider implements TennisDataProvider {
     // the Sackmann archive rows (pre-2024) are returned alongside 2025+ api-tennis rows.
     if (records.length < SOFASCORE_MIN_RECORDS_THRESHOLD) {
       try {
-        const identityIndex = await getCachedPlayerIdentityIndex();
-        const canonicalId = identityIndex.canonicalIdById.get(playerId) ?? playerId;
-        const aliasIds = getAliasIds(identityIndex, canonicalId);
+        const aliasIds = await this.resolveAliasIds(playerId);
         // Capture prior count before potential reassignment so the warning below can
         // accurately distinguish "live providers returned nothing" from "some live data".
         const priorCount = records.length;
-        const dbRecords = await getPlayerMatchesFromDb(aliasIds.length > 1 ? aliasIds : playerId);
+        const dbRecords = await this.fetchDbHistory(aliasIds.length > 1 ? aliasIds : playerId);
         if (dbRecords.length > records.length) {
           logger.info(
-            { playerId, canonicalId, aliasCount: aliasIds.length, prior: records.length, db: dbRecords.length },
+            { playerId, aliasCount: aliasIds.length, prior: records.length, db: dbRecords.length },
             "compositeProvider: historical_matches DB tier-5 supplemented match history",
           );
           records = dbRecords;
@@ -323,7 +322,7 @@ export class CompositeTennisProvider implements TennisDataProvider {
         // visible anywhere else in the logs.
         if (priorCount === 0 && dbRecords.length < SOFASCORE_MIN_RECORDS_THRESHOLD) {
           logger.warn(
-            { playerId, canonicalId, prior: 0, db: dbRecords.length },
+            { playerId, prior: 0, db: dbRecords.length },
             "compositeProvider: no DB fallback available for this player during live-provider outage — all providers returned zero records and historical_matches has no history for this player; scoring will use thin-data path",
           );
         }
@@ -439,5 +438,23 @@ export class CompositeTennisProvider implements TennisDataProvider {
       return [];
     }
     return this.fallback.getCurrentStandings();
+  }
+
+  /**
+   * Protected so tests can override to avoid real DB/identity queries.
+   * Returns the full alias-ID group for a player (live ID + any bridged sackmann-* IDs).
+   */
+  protected async resolveAliasIds(playerId: string): Promise<string[]> {
+    const identityIndex = await getCachedPlayerIdentityIndex();
+    const canonicalId = identityIndex.canonicalIdById.get(playerId) ?? playerId;
+    return getAliasIds(identityIndex, canonicalId);
+  }
+
+  /**
+   * Protected so tests can override to return controlled match-record sets.
+   * Wraps the DB tier-5 query and is the single callsite for `getPlayerMatchesFromDb`.
+   */
+  protected async fetchDbHistory(aliasIds: string | string[]): Promise<MatchRecord[]> {
+    return getPlayerMatchesFromDb(aliasIds);
   }
 }
