@@ -19,7 +19,9 @@ The identity-index bridge (`buildPlayerIdentityIndex`) aliases a sackmann ID to 
 - DB tier-5 fallback fires only when live providers return <5 records (`compositeProvider.ts:247-302`). Active top-100 players will almost always exceed 5 records from the live API, so tier-5 never fires for them.
 - Layer 4 name-search is restricted to `NOW() - INTERVAL '2 years'` in live mode, also unreachable for pre-2016 data.
 
-**Real failure mode (narrow but not zero):** All three live providers down simultaneously AND the player has <5 live-ID rows in historical_matches from prior walk-forward runs → scoring falls to thin-data disclosure instead of reaching Sackmann career depth. The bridge gap is load-bearing only in degraded provider state.
+**Real failure mode (narrow, zero observed impact):** The bridge gap is load-bearing only when ALL of: API-Tennis + BSD simultaneously down (happens ~43 times/1.5hr during timeout windows), AND a player has <5 live-ID historical_matches rows, AND that player has sackmann data, AND the bridge is blocked. In practice the third+fourth conditions never coincide for active top-100 players — walk-forward scoring pre-populates live-ID rows for all frequently-scored players (Sinner: 137 rows, Alcaraz: 108 DB rows found by tier-5). The gap population is zero, verified by query.
+
+**IMPORTANT: tier-5 fires very frequently (~38 times/1.5hr) during API-Tennis outage windows, including for top-3 ATP players. "Tier-5 rarely fires" is false. Tier-5 fires constantly — but serves those players successfully from live-ID historical rows, so the bridge gap does not compound.**
 
 ## Production evidence (2026-08-10)
 - `aliasCount: 2` in DB-tier-5 logs: bridge fires as sackmann-to-sackmann aliases (multiple CSV variants), NOT sackmann-to-live-API aliases.

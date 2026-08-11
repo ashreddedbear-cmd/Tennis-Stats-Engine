@@ -1,0 +1,19 @@
+Good instinct to stress-test this before implementing anything — a few things don’t hold up to the same bar the rest of this session was held to.
+
+1. The “narrow/bounded” claim isn’t actually verified — it’s architecturally inferred. Every number in this doc traces to code (apiTennisProvider.ts:671, surfaceElo.ts:113-122, etc.), which is good. But the load-bearing claim — “tier-5 almost never fires for active top-100 players” — has no query behind it. Nobody counted how often tier-5 actually fires in production for top-100 players, or how many top-100 players currently have <5 live-ID rows in historical_matches. That’s the exact thing this session has insisted on everywhere else: don’t accept “should be rare” as a substitute for a real count.
+
+2. There’s a real contradiction with the earlier #51 close-out. The original “low impact” framing said “live API covers the last 3+ years for active players.” This investigation now finds API-Tennis only covers 548 days (~18 months) — BSD is the one with the 3-year window. That’s not a rounding difference; it means the original justification for closing #51 was built on a data-range claim that turns out to be wrong for one of the two live providers. Worth naming explicitly rather than letting it slide under the newer, more careful framing.
+
+3. “All three providers down simultaneously” is treated as rare without evidence. No check was run on actual provider uptime/outage overlap history. If MatchStat “throws immediately” (per the earlier table) more often than assumed, or if API-Tennis and BSD have correlated failure modes (same upstream, same network path, etc.), “all three down” could be meaningfully more common than the narrative assumes.
+
+What’s actually next, before implementing the warning log:
+
+Before implementing the #51 warning: get real numbers on the three assumptions the “narrow impact” conclusion rests on, none of which were queried:
+
+	1.	How many current top-100 players have <5 live-ID rows in historical_matches? (Direct query — this is the population the gap could affect.)
+	2.	In the last 90 days of logs, how many times did tier-5 actually fire for a top-100 player? (Not “should be rare” — an actual count.)
+	3.	Has there been any incident/window where API-Tennis, BSD, and MatchStat were all simultaneously failing? Check logs/monitoring for overlapping failure periods.
+
+If all three come back small/zero, the “narrow” framing holds and the warning-log fix (option a) is still the right, low-risk move — implement it. If any of them come back non-trivial, this needs to be treated as a live risk, not a documented limitation, and the fix scope should be reconsidered.
+
+Also: correct the record on API-Tennis’s actual window (548 days, not 3 years) in whatever documentation carries the original “low impact” claim.
