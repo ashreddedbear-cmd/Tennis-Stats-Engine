@@ -150,6 +150,25 @@ async function fetchSofascoreFixturesRange(dateStart: string, dateStop: string):
 // Minimum number of match records below which supplemental tiers are attempted.
 const SOFASCORE_MIN_RECORDS_THRESHOLD = 5;
 
+/**
+ * Union two MatchRecord arrays, deduplicating by id.
+ *
+ * Each provider uses its own id namespace (e.g. "12345" for API-Tennis,
+ * "bsd-12345" for BSD Tennis, "atp-12345" for the DB import), so cross-provider
+ * records for the same match will only collide when their id strings happen to be
+ * identical — rare in practice. Content-based dedup (opponentId + date) would
+ * require a shared canonical opponent-ID across providers, which is not yet available.
+ *
+ * Preserves the order of `a`, then appends any records from `b` not already in `a`.
+ */
+function mergeMatchRecords(a: MatchRecord[], b: MatchRecord[]): MatchRecord[] {
+  if (b.length === 0) return a;
+  if (a.length === 0) return b;
+  const seen = new Set(a.map(r => r.id));
+  const added = b.filter(r => !seen.has(r.id));
+  return added.length === 0 ? a : [...a, ...added];
+}
+
 export class CompositeTennisProvider implements TennisDataProvider {
   readonly name: string;
 
@@ -251,7 +270,7 @@ export class CompositeTennisProvider implements TennisDataProvider {
     if (records.length < SOFASCORE_MIN_RECORDS_THRESHOLD) {
       try {
         const fallbackRecords = await this.fallback.getPlayerMatches(playerId);
-        if (fallbackRecords.length > records.length) records = fallbackRecords;
+        records = mergeMatchRecords(records, fallbackRecords);
       } catch (err) {
         if (!(err instanceof ProviderUnavailableError)) throw err;
         logger.warn({ playerId, err: err.message }, "Fallback provider unavailable for getPlayerMatches — continuing to tertiary tiers");
@@ -265,13 +284,14 @@ export class CompositeTennisProvider implements TennisDataProvider {
     // and fallback are unavailable or return sparse history.
     if (records.length < SOFASCORE_MIN_RECORDS_THRESHOLD && playerName) {
       try {
+        const priorBsd = records.length;
         const bsdResult = await fetchFromBsdTennis(playerName);
-        if (bsdResult.records.length > records.length) {
+        records = mergeMatchRecords(records, bsdResult.records);
+        if (records.length > priorBsd) {
           logger.debug(
-            { playerId, playerName, prior: records.length, bsd: bsdResult.records.length, resolvedVia: bsdResult.resolvedVia ?? "rankings-cache" },
+            { playerId, playerName, prior: priorBsd, bsd: bsdResult.records.length, merged: records.length, resolvedVia: bsdResult.resolvedVia ?? "rankings-cache" },
             "compositeProvider: BSD Tennis tier-3 supplemented match history",
           );
-          records = bsdResult.records;
         }
       } catch (bsdErr) {
         logger.debug({ playerId, playerName, err: bsdErr }, "compositeProvider: BSD Tennis tier-3 failed (non-fatal)");
@@ -283,13 +303,14 @@ export class CompositeTennisProvider implements TennisDataProvider {
     // is cached (i.e. getPlayer was called first, which is the normal prediction flow).
     if (records.length < SOFASCORE_MIN_RECORDS_THRESHOLD && playerName) {
       try {
+        const priorSf = records.length;
         const sfResult = await fetchFromSofascore(playerName);
-        if (sfResult.records.length > records.length) {
+        records = mergeMatchRecords(records, sfResult.records);
+        if (records.length > priorSf) {
           logger.debug(
-            { playerId, playerName, prior: records.length, sofascore: sfResult.records.length },
+            { playerId, playerName, prior: priorSf, sofascore: sfResult.records.length, merged: records.length },
             "compositeProvider: Sofascore tier-4 supplemented match history",
           );
-          records = sfResult.records;
         }
       } catch (sfErr) {
         logger.debug({ playerId, playerName, err: sfErr }, "compositeProvider: Sofascore tier-4 failed (non-fatal)");
@@ -303,16 +324,16 @@ export class CompositeTennisProvider implements TennisDataProvider {
     if (records.length < SOFASCORE_MIN_RECORDS_THRESHOLD) {
       try {
         const aliasIds = await this.resolveAliasIds(playerId);
-        // Capture prior count before potential reassignment so the warning below can
-        // accurately distinguish "live providers returned nothing" from "some live data".
+        // Capture prior count before the merge so the warning below can accurately
+        // distinguish "live providers returned nothing" from "some live data exists".
         const priorCount = records.length;
         const dbRecords = await this.fetchDbHistory(aliasIds.length > 1 ? aliasIds : playerId);
-        if (dbRecords.length > records.length) {
+        records = mergeMatchRecords(records, dbRecords);
+        if (records.length > priorCount) {
           logger.info(
-            { playerId, aliasCount: aliasIds.length, prior: records.length, db: dbRecords.length },
+            { playerId, aliasCount: aliasIds.length, prior: priorCount, db: dbRecords.length, merged: records.length },
             "compositeProvider: historical_matches DB tier-5 supplemented match history",
           );
-          records = dbRecords;
         }
         // Warn when tier-5 is carrying the full scoring load (all live providers returned
         // zero) AND historical_matches also has no meaningful history for this player.

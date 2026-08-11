@@ -189,3 +189,61 @@ describe("CompositeTennisProvider — tier-5 DB fallback thin-data warning", () 
     );
   });
 });
+
+describe("CompositeTennisProvider — merge not replace across tiers", () => {
+  afterEach(() => {
+    mock.restoreAll();
+  });
+
+  it("merges tier-2 fallback records with tier-5 DB records instead of discarding the smaller set", async () => {
+    // Tier-2 fallback returns 2 records (below threshold of 5) — old behaviour would
+    // discard these if tier-5 DB returned more; new behaviour keeps both.
+    const fallbackProvider: TennisDataProvider = {
+      ...makeUnavailableProvider("Fallback"),
+      async getPlayerMatches(): Promise<MatchRecord[]> {
+        return [makeRecord("api-1"), makeRecord("api-2")];
+      },
+    };
+
+    // DB (tier-5) adds 3 records with different IDs.
+    const composite = new Tier5TestProvider(
+      makeUnavailableProvider("Primary"), // tier-1 → [] 
+      fallbackProvider,                   // tier-2 → [api-1, api-2]
+      [makeRecord("db-1"), makeRecord("db-2"), makeRecord("db-3")], // tier-5 adds 3
+    );
+
+    const result = await composite.getPlayerMatches("player-merge");
+
+    // Must have all 5 unique records, not just 3 (the old "take the longer" behaviour).
+    assert.equal(result.length, 5, `expected 5 merged records (2 from tier-2 + 3 from tier-5); got ${result.length}`);
+    assert.deepEqual(
+      result.map(r => r.id).sort(),
+      ["api-1", "api-2", "db-1", "db-2", "db-3"],
+    );
+  });
+
+  it("deduplicates by id — a record present in two tiers is counted once", async () => {
+    // Tier-2 and tier-5 both contain "shared-1"; the merged set should include it only once.
+    const fallbackProvider: TennisDataProvider = {
+      ...makeUnavailableProvider("Fallback"),
+      async getPlayerMatches(): Promise<MatchRecord[]> {
+        return [makeRecord("shared-1"), makeRecord("api-2")];
+      },
+    };
+
+    const composite = new Tier5TestProvider(
+      makeUnavailableProvider("Primary"),
+      fallbackProvider,
+      [makeRecord("shared-1"), makeRecord("db-2"), makeRecord("db-3")],
+    );
+
+    const result = await composite.getPlayerMatches("player-dedup");
+
+    // 2 from tier-2 + 3 from tier-5 with 1 shared id = 4 unique records.
+    assert.equal(result.length, 4, `expected 4 unique records after id-dedup; got ${result.length}`);
+    assert.deepEqual(
+      result.map(r => r.id).sort(),
+      ["api-2", "db-2", "db-3", "shared-1"],
+    );
+  });
+});
