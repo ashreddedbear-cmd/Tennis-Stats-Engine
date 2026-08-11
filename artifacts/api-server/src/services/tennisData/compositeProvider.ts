@@ -304,6 +304,9 @@ export class CompositeTennisProvider implements TennisDataProvider {
         const identityIndex = await getCachedPlayerIdentityIndex();
         const canonicalId = identityIndex.canonicalIdById.get(playerId) ?? playerId;
         const aliasIds = getAliasIds(identityIndex, canonicalId);
+        // Capture prior count before potential reassignment so the warning below can
+        // accurately distinguish "live providers returned nothing" from "some live data".
+        const priorCount = records.length;
         const dbRecords = await getPlayerMatchesFromDb(aliasIds.length > 1 ? aliasIds : playerId);
         if (dbRecords.length > records.length) {
           logger.info(
@@ -311,6 +314,18 @@ export class CompositeTennisProvider implements TennisDataProvider {
             "compositeProvider: historical_matches DB tier-5 supplemented match history",
           );
           records = dbRecords;
+        }
+        // Warn when tier-5 is carrying the full scoring load (all live providers returned
+        // zero) AND historical_matches also has no meaningful history for this player.
+        // Real risk: a player who has never been scored before — or has never appeared in
+        // a walk-forward run — has no DB fallback during an API-Tennis + BSD correlated
+        // outage. Scoring will fall through to the thin-data path without this being
+        // visible anywhere else in the logs.
+        if (priorCount === 0 && dbRecords.length < SOFASCORE_MIN_RECORDS_THRESHOLD) {
+          logger.warn(
+            { playerId, canonicalId, prior: 0, db: dbRecords.length },
+            "compositeProvider: no DB fallback available for this player during live-provider outage — all providers returned zero records and historical_matches has no history for this player; scoring will use thin-data path",
+          );
         }
       } catch (dbErr) {
         logger.debug({ playerId, err: dbErr }, "compositeProvider: DB tier-5 failed (non-fatal)");
