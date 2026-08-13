@@ -17,6 +17,7 @@ import { deriveServicePointEstimate, deriveMatchSeed, type MatchSimulationResult
 import { runMatchSimulationAsync } from "./simulatorPool.js";
 import { applyTieBreaker } from "./tieBreakers";
 import { computeEliteTier, voteFavorsPlayer1 } from "./eliteTier";
+import { ELITE_GATE, HIGH_CONFIDENCE_GATE, classifyEloSeparation } from "./classificationPolicy";
 import { checkFinalConsistency } from "./finalConsistencyCheck";
 import type { PredictionEngineInput } from "./types";
 import type { WeatherConditions } from "./weather";
@@ -222,6 +223,9 @@ export interface DecisionTrace {
         recentFormFavorsP1: boolean;
         passed: boolean;
       };
+      /** 2026-08-13 classification fix: raw surface-Elo point-gap between the players must clear
+       * the "Decisive" separation band -- see `classificationPolicy.ts`. Primary Elite gate. */
+      eloGapSeparation: { required: number; actual: number; band: string; passed: boolean };
       specialistApplied: { passed: boolean };
       noModelConflict: { passed: boolean };
       notHighDisagreement: { actual: string; passed: boolean };
@@ -250,8 +254,11 @@ function buildRecommendationTrace(
   result: string,
   tieBreakerApplied: boolean,
   coreSignalsAlign: boolean,
+  eloGapPoints: number,
 ): DecisionTrace["recommendation"] {
   const margin = Math.abs(calibratedProbability - 50);
+  const eloSeparationBand = classifyEloSeparation(eloGapPoints);
+  const hasHighConfidenceSeparation = Math.abs(eloGapPoints) >= HIGH_CONFIDENCE_GATE.ELO_GAP_MIN_POINTS;
   const rules: Array<{ rule: string; matched: boolean; decided: boolean }> = [];
 
   const r1 = dataQualityLabel === "Poor" || dataQuality < 25;
@@ -267,28 +274,30 @@ function buildRecommendationTrace(
   if (r2) return { result, margin, rulesChecked: rules };
 
   // DQ gate removed 2026-08-08 (Ticket 3): Limited DQ outperforms Excellent DQ on held-out data.
-  const r3 = margin >= 35 && modelAgreement === "Strong" && coreSignalsAlign;
-  rules.push({ rule: `margin ≥ 35 AND Strong AND coreSignalsAlign → HIGHEST_CONFIDENCE (margin=${margin.toFixed(1)}, coreSignalsAlign=${coreSignalsAlign}) [DQ gate removed — DQ=${dataQuality} logged only]`, matched: r3, decided: r3 });
+  // 2026-08-13 classification fix: HIGHEST_CONFIDENCE and HIGH_CONFIDENCE now also require real
+  // underlying player separation (Elo-gap band) -- consensus/margin alone can no longer earn them.
+  const r3 = eloSeparationBand === "Decisive" && margin >= 35 && modelAgreement === "Strong" && coreSignalsAlign;
+  rules.push({ rule: `Decisive Elo gap (≥75pt, actual=${Math.abs(eloGapPoints).toFixed(0)}) AND margin ≥ 35 AND Strong AND coreSignalsAlign → HIGHEST_CONFIDENCE (margin=${margin.toFixed(1)}, coreSignalsAlign=${coreSignalsAlign}, eloSeparation="${eloSeparationBand}") [DQ gate removed — DQ=${dataQuality} logged only]`, matched: r3, decided: r3 });
   if (r3) return { result, margin, rulesChecked: rules };
 
-  const r4 = margin >= 26 && modelAgreement === "Strong" && coreSignalsAlign;
-  rules.push({ rule: `margin ≥ 26 AND Strong AND coreSignalsAlign → HIGHEST_CONFIDENCE (margin=${margin.toFixed(1)}, agreement="${modelAgreement}") [DQ gate removed — DQ=${dataQuality} logged only]`, matched: r4, decided: r4 });
+  const r4 = eloSeparationBand === "Decisive" && margin >= 26 && modelAgreement === "Strong" && coreSignalsAlign;
+  rules.push({ rule: `Decisive Elo gap (≥75pt, actual=${Math.abs(eloGapPoints).toFixed(0)}) AND margin ≥ 26 AND Strong AND coreSignalsAlign → HIGHEST_CONFIDENCE (margin=${margin.toFixed(1)}, agreement="${modelAgreement}", eloSeparation="${eloSeparationBand}") [DQ gate removed — DQ=${dataQuality} logged only]`, matched: r4, decided: r4 });
   if (r4) return { result, margin, rulesChecked: rules };
 
-  const r5 = margin >= 20 && modelAgreement === "Strong";
-  rules.push({ rule: `margin ≥ 20 AND Strong → HIGH_CONFIDENCE (margin=${margin.toFixed(1)}, agreement="${modelAgreement}")`, matched: r5, decided: r5 });
+  const r5 = hasHighConfidenceSeparation && margin >= 20 && modelAgreement === "Strong";
+  rules.push({ rule: `Elo gap ≥50pt (actual=${Math.abs(eloGapPoints).toFixed(0)}, band="${eloSeparationBand}") AND margin ≥ 20 AND Strong → HIGH_CONFIDENCE (margin=${margin.toFixed(1)}, agreement="${modelAgreement}")`, matched: r5, decided: r5 });
   if (r5) return { result, margin, rulesChecked: rules };
 
-  const r6 = margin >= 12 && (modelAgreement === "Strong" || modelAgreement === "Moderate");
-  rules.push({ rule: `margin ≥ 12 AND (Strong|Moderate) → HIGH_CONFIDENCE (margin=${margin.toFixed(1)}, agreement="${modelAgreement}")`, matched: r6, decided: r6 });
+  const r6 = hasHighConfidenceSeparation && margin >= 12 && (modelAgreement === "Strong" || modelAgreement === "Moderate");
+  rules.push({ rule: `Elo gap ≥50pt (band="${eloSeparationBand}") AND margin ≥ 12 AND (Strong|Moderate) → HIGH_CONFIDENCE (margin=${margin.toFixed(1)}, agreement="${modelAgreement}")`, matched: r6, decided: r6 });
   if (r6) return { result, margin, rulesChecked: rules };
 
-  const r7 = margin >= 9 && modelAgreement === "Strong";
-  rules.push({ rule: `margin ≥ 9 AND Strong → HIGH_CONFIDENCE (margin=${margin.toFixed(1)}, agreement="${modelAgreement}")`, matched: r7, decided: r7 });
+  const r7 = hasHighConfidenceSeparation && margin >= 9 && modelAgreement === "Strong";
+  rules.push({ rule: `Elo gap ≥50pt (band="${eloSeparationBand}") AND margin ≥ 9 AND Strong → HIGH_CONFIDENCE (margin=${margin.toFixed(1)}, agreement="${modelAgreement}")`, matched: r7, decided: r7 });
   if (r7) return { result, margin, rulesChecked: rules };
 
-  const r8 = margin >= 40 && modelAgreement !== "Mixed" && modelAgreement !== "HighDisagreement";
-  rules.push({ rule: `margin ≥ 40 AND not Mixed/HighDisagreement → HIGH_CONFIDENCE (high-confidence guardrail, margin=${margin.toFixed(1)})`, matched: r8, decided: r8 });
+  const r8 = hasHighConfidenceSeparation && margin >= 40 && modelAgreement !== "Mixed" && modelAgreement !== "HighDisagreement";
+  rules.push({ rule: `Elo gap ≥50pt (band="${eloSeparationBand}") AND margin ≥ 40 AND not Mixed/HighDisagreement → HIGH_CONFIDENCE (high-confidence guardrail, margin=${margin.toFixed(1)})`, matched: r8, decided: r8 });
   if (r8) return { result, margin, rulesChecked: rules };
 
   const r9 = margin >= 9 && modelAgreement === "Moderate";
@@ -894,7 +903,13 @@ export async function runPredictionEngine(input: PredictionEngineInput): Promise
   const recentFormFavorsP1 = voteFavorsPlayer1(featureModels, "Recent Form");
   const coreSignalsAlign = surfaceEloFavorsP1 === serveReturnFavorsP1 && serveReturnFavorsP1 === recentFormFavorsP1;
 
-  const recommendation = computeRecommendation(calibratedProbability, dataQuality, dataQualityLabel, modelAgreement, tieBreakerGated.applied, coreSignalsAlign, tieBreakerGated.dataIncomplete);
+  // 2026-08-13 classification fix: raw surface-Elo rating-point gap between the players, computed
+  // independently of calibration/ensemble/specialist/Monte Carlo blending -- see
+  // `classificationPolicy.ts`'s module doc for the backtest evidence that this raw gap separates
+  // wins from losses far better than the final calibrated probability's margin does.
+  const eloGapPoints = Math.abs(surfaceElo.eloDifference);
+
+  const recommendation = computeRecommendation(calibratedProbability, dataQuality, dataQualityLabel, modelAgreement, tieBreakerGated.applied, coreSignalsAlign, tieBreakerGated.dataIncomplete, eloGapPoints);
 
   const favorsPlayer1 = calibratedProbability >= 50;
   const predictedWinnerId = favorsPlayer1 ? input.player1.id : input.player2.id;
@@ -973,8 +988,9 @@ export async function runPredictionEngine(input: PredictionEngineInput): Promise
 
   // Requirement 8 of the fix-the-engine spec: a strictly narrower "Elite Prediction" tier -- see
   // `eliteTier.ts` for the exact gating conditions. Extended by the 2026-07-13 spec's Elite-vs-
-  // risk consistency guardrail (Part 2E): Elite additionally requires modelAgreement not to be
-  // High Disagreement and upsetRisk not to be High/Extreme.
+  // risk consistency guardrail (Part 2E): agreement cannot create Elite on its own because the
+  // Elo-gap hard gate is mandatory, but High Disagreement can still veto Elite; High/Extreme
+  // upset risk can veto it too.
   const { isEliteTier: eliteTierBeforeGuard, reason: eliteTierReasonBeforeGuard } = computeEliteTier({
     dataQuality,
     calibratedProbability,
@@ -988,6 +1004,7 @@ export async function runPredictionEngine(input: PredictionEngineInput): Promise
     modelConflict,
     modelAgreement,
     upsetRisk,
+    eloGapPoints,
   });
 
   // A thin-sample surface-specialist tag is a coverage gap (not enough matches yet to tag a
@@ -1185,17 +1202,23 @@ export async function runPredictionEngine(input: PredictionEngineInput): Promise
       afterSimulator: calibratedProbability,
     },
     modules: moduleTraces,
-    recommendation: buildRecommendationTrace(calibratedProbability, dataQuality, dataQualityLabel, modelAgreement, recommendation, tieBreakerGated.applied, coreSignalsAlign),
+    recommendation: buildRecommendationTrace(calibratedProbability, dataQuality, dataQualityLabel, modelAgreement, recommendation, tieBreakerGated.applied, coreSignalsAlign, eloGapPoints),
     eliteTier: {
       isElite: isEliteTier,
       gates: {
-        dataQuality: { required: 55, actual: dataQuality, passed: dataQuality >= 55 },
-        calibratedMargin: { required: 5, actual: Math.round(calibratedMarginForTrace * 10) / 10, passed: calibratedMarginForTrace >= 5 },
+        dataQuality: { required: ELITE_GATE.DATA_QUALITY_MIN, actual: dataQuality, passed: dataQuality >= ELITE_GATE.DATA_QUALITY_MIN },
+        calibratedMargin: { required: ELITE_GATE.MIN_CALIBRATED_MARGIN, actual: Math.round(calibratedMarginForTrace * 10) / 10, passed: calibratedMarginForTrace >= ELITE_GATE.MIN_CALIBRATED_MARGIN },
         allCoreModelsAgree: {
           surfaceEloFavorsP1,
           serveReturnFavorsP1,
           recentFormFavorsP1,
           passed: surfaceEloFavorsP1 === serveReturnFavorsP1 && serveReturnFavorsP1 === recentFormFavorsP1,
+        },
+        eloGapSeparation: {
+          required: ELITE_GATE.ELO_GAP_MIN_POINTS,
+          actual: Math.round(eloGapPoints * 10) / 10,
+          band: classifyEloSeparation(eloGapPoints),
+          passed: Math.abs(eloGapPoints) >= ELITE_GATE.ELO_GAP_MIN_POINTS,
         },
         specialistApplied: { passed: specialistApplied },
         noModelConflict: { passed: !modelConflict },

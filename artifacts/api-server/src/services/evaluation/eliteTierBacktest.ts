@@ -64,6 +64,7 @@ function toEliteTierInputs(engine: EngineBreakdown, dataQuality: number, calibra
     modelConflict: engine.modelConflict,
     modelAgreement: engine.modelAgreement,
     upsetRisk: engine.upsetRiskBreakdown.upsetRisk,
+    eloGapPoints: Math.abs(engine.surfaceElo.eloDifference),
   };
 }
 

@@ -14,6 +14,7 @@ function baseInputs(overrides: Partial<EliteTierInputs> = {}): EliteTierInputs {
     modelConflict: false,
     modelAgreement: "Strong",
     upsetRisk: "LOW",
+    eloGapPoints: 80,
     ...overrides,
   };
 }
@@ -24,11 +25,11 @@ test("every condition satisfied, including the new consistency guardrail, earns 
   assert.match(reason, /Elite:/);
 });
 
-test("High Disagreement withholds Elite with a visible reason, without this function touching the risk label itself", () => {
-  const { isEliteTier, reason } = computeEliteTier(baseInputs({ modelAgreement: "HighDisagreement" }));
+test("High Disagreement vetoes Elite even when the Elo gap, margin, and every other positive gate qualify", () => {
+  const { isEliteTier, reason } = computeEliteTier(baseInputs({ eloGapPoints: 80, calibratedProbability: 70, modelAgreement: "HighDisagreement" }));
   assert.equal(isEliteTier, false);
   assert.match(reason, /High Disagreement/);
-  assert.match(reason, /not suppressed/);
+  assert.match(reason, /cannot create Elite on its own, but High Disagreement can still veto it/);
 });
 
 test("HIGH upset risk withholds Elite", () => {
@@ -69,4 +70,42 @@ test("a calibrated probability right at the margin floor earns Elite; just under
 
 test("the margin gate is symmetric -- a strong lean toward player2 (calibratedProbability far below 50) also earns Elite", () => {
   assert.equal(computeEliteTier(baseInputs({ calibratedProbability: 30 })).isEliteTier, true);
+});
+
+// ── 2026-08-13 classification fix: Elo-gap separation gate ──────────────────────────────────
+
+test("Elite requires a Decisive Elo-gap (>=75 points) -- a Thin gap withholds Elite even with everything else perfect", () => {
+  const { isEliteTier, reason } = computeEliteTier(baseInputs({ eloGapPoints: 20 }));
+  assert.equal(isEliteTier, false);
+  assert.match(reason, /surface-Elo point-gap/);
+  assert.match(reason, /"Thin"/);
+});
+
+test("Elite requires a Decisive Elo-gap (>=75 points) -- a Caution-band gap (25-50) withholds Elite too", () => {
+  const { isEliteTier, reason } = computeEliteTier(baseInputs({ eloGapPoints: 40 }));
+  assert.equal(isEliteTier, false);
+  assert.match(reason, /"Caution"/);
+});
+
+test("Elite requires a Decisive Elo-gap (>=75 points) -- a Modest gap (50-75) still withholds Elite", () => {
+  assert.equal(computeEliteTier(baseInputs({ eloGapPoints: 60 })).isEliteTier, false);
+});
+
+test("Elite is earned at exactly the 75-point Elo-gap floor and above", () => {
+  assert.equal(computeEliteTier(baseInputs({ eloGapPoints: 75 })).isEliteTier, true);
+  assert.equal(computeEliteTier(baseInputs({ eloGapPoints: 74.9 })).isEliteTier, false);
+});
+
+test("full 6-model agreement/consensus alone cannot earn Elite without a Decisive Elo gap -- consensus confirms strength, it does not create it", () => {
+  // Every other gate maximally satisfied (Strong agreement, coreSignalsAlign via all-true signals,
+  // LOW upset risk, specialist applied, no conflict) but the underlying player separation is thin.
+  const { isEliteTier } = computeEliteTier(
+    baseInputs({ eloGapPoints: 10, calibratedProbability: 95, modelAgreement: "Strong" }),
+  );
+  assert.equal(isEliteTier, false);
+});
+
+test("the Elo-gap gate is symmetric in sign -- a negative eloGapPoints (player2-favoring) magnitude is what's checked, not its sign", () => {
+  assert.equal(computeEliteTier(baseInputs({ eloGapPoints: -80 })).isEliteTier, true);
+  assert.equal(computeEliteTier(baseInputs({ eloGapPoints: -10 })).isEliteTier, false);
 });

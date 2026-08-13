@@ -1,6 +1,7 @@
 import type { ModelVote } from "./ensemble";
 import type { ModelAgreement } from "./disagreement";
 import type { UpsetRisk } from "./upsetRisk";
+import { ELITE_GATE, classifyEloSeparation } from "./classificationPolicy";
 
 /**
  * Task #75 re-validation: this floor was originally set to 65 (the "Strong" data-quality label
@@ -17,7 +18,7 @@ import type { UpsetRisk } from "./upsetRisk";
  * "Acceptable" floor) so Elite tier stops privileging exactly the regime the evidence says is
  * least trustworthy, while still requiring more than the weakest end of the distribution.
  */
-const ELITE_DATA_QUALITY_THRESHOLD = 55;
+const ELITE_DATA_QUALITY_THRESHOLD = ELITE_GATE.DATA_QUALITY_MIN;
 
 /**
  * Task #66 ("Fix overconfident predictions in the near-Elite group"): the original three-signal
@@ -32,7 +33,7 @@ const ELITE_DATA_QUALITY_THRESHOLD = 55;
  * produced a clean, non-marginal ECE improvement on the real backtest data while keeping the
  * sample far above `ELITE_TIER_BACKTEST_MIN_SAMPLE_SIZE`.
  */
-const ELITE_MIN_CALIBRATED_MARGIN = 5;
+const ELITE_MIN_CALIBRATED_MARGIN = ELITE_GATE.MIN_CALIBRATED_MARGIN;
 
 export interface EliteTierInputs {
   dataQuality: number;
@@ -65,6 +66,16 @@ export interface EliteTierInputs {
    */
   modelAgreement: ModelAgreement;
   upsetRisk: UpsetRisk;
+  /**
+   * Raw (non-negative) surface-Elo rating-point gap between the two players --
+   * `Math.abs(surfaceElo.eloDifference)`, computed BEFORE calibration/ensemble/specialist/Monte
+   * Carlo blending (see `classificationPolicy.ts`'s module doc for why final probability alone is
+   * not a reliable Elite gate: a 100-match backtest found this raw gap separates wins from losses
+   * far better than the final blended probability does). This is now the PRIMARY separation gate
+   * for Elite -- the 3-signal agreement check above still applies, but agreement alone can no
+   * longer manufacture Elite status without a real underlying gap to back it up.
+   */
+  eloGapPoints: number;
 }
 
 export interface EliteTierResult {
@@ -92,6 +103,11 @@ export interface NearEliteTierResult {
  *  - Calibration passing: the probability comes from the real fitted isotonic calibration (learned
  *    from actual graded outcomes), not the pre-fit heuristic fallback, and there's no model
  *    conflict between the raw evidence and the final pick.
+ *  - A genuine surface-Elo point-gap between the players ("Decisive" separation band, see
+ *    `classificationPolicy.ts`) -- added 2026-08-13 after a 100-match backtest found the final
+ *    probability + model agreement alone could not tell Elite wins from Elite losses (agreement
+ *    was 6/6 unanimous on every Elite pick, win or lose), while the raw Elo gap cleanly could.
+ *    Agreement cannot create Elite on its own, but High Disagreement can still veto it.
  */
 export function computeEliteTier(input: EliteTierInputs): EliteTierResult {
   const reasons: string[] = [];
@@ -108,17 +124,31 @@ export function computeEliteTier(input: EliteTierInputs): EliteTierResult {
     );
   }
 
+  // Root cause #1/#2 fix (2026-08-13 classification audit): the final blended probability barely
+  // separated wins from losses in the 100-match backtest (3pt gap), while the raw Elo-rating-point
+  // gap between players separated them cleanly (16pt gap). 3-signal agreement above measures
+  // consensus, not evidence strength -- in that same backtest EVERY Elite pick had 6/6 model
+  // agreement by construction, so agreement could never have discriminated a win from a loss. This
+  // gate requires genuine underlying separation (the "Decisive" Elo-gap band) as an independent,
+  // non-probability precondition -- consensus and margin can no longer manufacture Elite on their own.
+  const eloSeparationBand = classifyEloSeparation(input.eloGapPoints);
+  if (Math.abs(input.eloGapPoints) < ELITE_GATE.ELO_GAP_MIN_POINTS) {
+    reasons.push(
+      `the surface-Elo point-gap between the players (${Math.abs(input.eloGapPoints).toFixed(0)}) is below the ${ELITE_GATE.ELO_GAP_MIN_POINTS}-point floor ("${eloSeparationBand}" separation band) -- a confident-looking calibrated probability or full model agreement is not enough without a genuine underlying gap between the players`,
+    );
+  }
+
   if (!input.specialistApplied) reasons.push(`no validated segment specialist${input.segmentLabel ? ` for ${input.segmentLabel}` : ""} is backing this prediction with real historical accuracy`);
 
   if (input.modelConflict) reasons.push("calibration/specialist blending flipped the pick away from the raw evidence (model conflict) -- calibration did not pass");
 
-  if (input.modelAgreement === "HighDisagreement") reasons.push("model agreement is High Disagreement -- the risk label is not suppressed, only the Elite badge is withheld");
+  if (input.modelAgreement === "HighDisagreement") reasons.push("model agreement is High Disagreement -- agreement cannot create Elite on its own, but High Disagreement can still veto it; the risk label is not suppressed, only the Elite badge is withheld");
   if (input.upsetRisk === "HIGH" || input.upsetRisk === "EXTREME") reasons.push(`upset risk is ${input.upsetRisk} -- the risk label is not suppressed, only the Elite badge is withheld`);
 
   if (reasons.length === 0) {
     return {
       isEliteTier: true,
-      reason: `Elite: high data quality, Surface Elo/Serve & Return/Recent Form all agree with a genuine margin (${calibratedMargin.toFixed(1)} points from a coin flip), a validated segment specialist backs the call, and the calibrated pick agrees with the raw evidence (no model conflict). Elite is the engine's most selective bar, not a proven track record -- see the Accuracy dashboard's Elite Tier Backtest for real-world performance so far.`,
+      reason: `Elite: high data quality, Surface Elo/Serve & Return/Recent Form all agree with a genuine margin (${calibratedMargin.toFixed(1)} points from a coin flip), a ${Math.abs(input.eloGapPoints).toFixed(0)}-point surface-Elo gap between the players ("Decisive" separation), a validated segment specialist backs the call, and the calibrated pick agrees with the raw evidence (no model conflict). Elite is the engine's most selective bar, not a proven track record -- see the Accuracy dashboard's Elite Tier Backtest for real-world performance so far.`,
     };
   }
   return { isEliteTier: false, reason: `Not elite tier -- ${reasons.join("; ")}.` };

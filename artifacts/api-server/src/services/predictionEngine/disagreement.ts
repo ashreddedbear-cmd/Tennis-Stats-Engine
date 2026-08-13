@@ -207,6 +207,19 @@ export function computeWeightedDisagreement(models: DisagreementModelInput[]): W
 /** How near the FINAL probability sits to a coin flip -- deliberately independent of modelAgreement above. A match can be close (near 50/50) while every model agrees on direction (low disagreement, spec Part A.E), or genuinely disagree while the blended probability lands well away from 50. */
 export type MatchupCloseness = "VeryClose" | "Close" | "Moderate" | "Clear";
 
+/**
+ * Descriptive/display field only -- NEVER use as an Elite/High-Confidence gate.
+ *
+ * 2026-08-13 classification audit (see `classificationPolicy.ts`'s module doc): this is derived
+ * directly from `finalProbability` (the same calibrated probability that already drives
+ * `computeRecommendation`'s margin gates), so it cannot be an INDEPENDENT confirmation of a real
+ * evidence gap between the players -- it is just another view of the same number. A 100-match
+ * backtest found the "Close matchup" label sits at 50.0% accuracy (a coin flip) while still being
+ * labeled Elite/High-Confidence in most of those cases, precisely because nothing was gating on
+ * it. The FIX for that finding is the independent `eloGapPoints`/`classifyEloSeparation` gate in
+ * `classificationPolicy.ts` (based on the raw, pre-calibration surface-Elo point-gap) -- not this
+ * field. Keep this function as-is for the UI's "how close does the final number look" disclosure.
+ */
 export function computeMatchupCloseness(finalProbability: number): MatchupCloseness {
   const margin = Math.abs(finalProbability - 50);
   return margin < 5 ? "VeryClose" : margin < 15 ? "Close" : margin < 30 ? "Moderate" : "Clear";

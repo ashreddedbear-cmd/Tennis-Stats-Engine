@@ -354,3 +354,57 @@ test("raw-module straddle + calibrated-agree: HighDisagreement from raw module c
     `The agreement label informs the uncertainty disclosure, not the pick itself.`,
   );
 });
+
+// ── 2026-08-13 classification fix: Elo-gap separation gate ──────────────────────────────────
+// Signature (with eloGapPoints): (calibratedProbability, dataQuality, dataQualityLabel,
+// modelAgreement, tieBreakerApplied?, coreSignalsAlign?, dataIncomplete?, eloGapPoints?)
+
+test("eloGapPoints omitted (default) → identical behavior to before this fix (backward-compatible)", () => {
+  // Defaults to Infinity internally (always "Decisive"), so every pre-existing call site/test in
+  // this file that doesn't pass eloGapPoints is completely unaffected by this change.
+  assert.equal(computeRecommendation(85, 70, "Strong", "Strong", false, true), "HIGHEST_CONFIDENCE");
+  assert.equal(computeRecommendation(70, 70, "Strong", "Strong"), "HIGH_CONFIDENCE");
+});
+
+test("HIGH_CONFIDENCE is withheld without at least a Modest (>=50pt) Elo gap, even with a strong margin and Strong agreement", () => {
+  const thin = computeRecommendation(70, 70, "Strong", "Strong", false, false, false, 20);
+  assert.notEqual(thin, "HIGH_CONFIDENCE");
+  const caution = computeRecommendation(70, 70, "Strong", "Strong", false, false, false, 40);
+  assert.notEqual(caution, "HIGH_CONFIDENCE");
+});
+
+test("HIGH_CONFIDENCE is earned once the Elo gap reaches the Modest floor (50pt)", () => {
+  assert.equal(computeRecommendation(70, 70, "Strong", "Strong", false, false, false, 50), "HIGH_CONFIDENCE");
+  assert.equal(computeRecommendation(70, 70, "Strong", "Strong", false, false, false, 49.9), "MODERATE_CONFIDENCE");
+});
+
+test("HIGHEST_CONFIDENCE is withheld without a Decisive (>=75pt) Elo gap even with perfect margin/agreement/coreSignalsAlign", () => {
+  const result = computeRecommendation(90, 70, "Strong", "Strong", false, true, false, 60);
+  assert.notEqual(result, "HIGHEST_CONFIDENCE");
+});
+
+test("HIGHEST_CONFIDENCE is earned once the Elo gap reaches the Decisive floor (75pt)", () => {
+  assert.equal(computeRecommendation(90, 70, "Strong", "Strong", false, true, false, 75), "HIGHEST_CONFIDENCE");
+  assert.equal(computeRecommendation(90, 70, "Strong", "Strong", false, true, false, 74.9), "HIGH_CONFIDENCE");
+});
+
+test("root cause #2 regression guard: full model consensus + a large probability margin cannot manufacture HIGH/HIGHEST without real Elo-gap separation", () => {
+  // Mirrors the backtest finding: all 63 Elite-labeled picks had 6/6 model agreement, win or lose --
+  // agreement alone must never substitute for genuine underlying separation.
+  const result = computeRecommendation(95, 70, "Strong", "Strong", false, true, false, 10);
+  assert.equal(result, "MODERATE_CONFIDENCE");
+});
+
+test("the Caution band (25-50pt) is treated the same as Thin for gating purposes -- a backtest-confirmed dangerous middle band", () => {
+  const caution = computeRecommendation(70, 70, "Strong", "Strong", false, false, false, 35);
+  const thin = computeRecommendation(70, 70, "Strong", "Strong", false, false, false, 15);
+  assert.equal(caution, thin);
+  assert.notEqual(caution, "HIGH_CONFIDENCE");
+});
+
+test("Elo-gap gating is sign-independent -- only the magnitude of the gap matters", () => {
+  assert.equal(
+    computeRecommendation(70, 70, "Strong", "Strong", false, false, false, -80),
+    computeRecommendation(70, 70, "Strong", "Strong", false, false, false, 80),
+  );
+});
