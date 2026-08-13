@@ -791,6 +791,72 @@ router.get("/admin/parlay/calibration", requireAdmin, async (_req, res): Promise
     const backfillCount = legs.filter(l => l.source === "backfill").length;
     const liveCount = legs.filter(l => l.source !== "backfill").length;
 
+    // VS≥66 + MC<60 "market-fade" bucket: high validation score but market doesn't fully agree.
+    // market_odds > 1.667 means implied probability < 60% for selected player (MC factor score < 60).
+    // ITF exclusion: tournament_name ILIKE '%ITF%' → circuit-level; may behave differently
+    // to ATP/WTA/Challenger competition. Challenger stays eligible (no filter applied to it).
+    // Separate query because the main legs query above doesn't select market_odds/tournament_name.
+    const { rows: tcRows } = await pool.query<{
+      n: string; win_pct: string | null;
+      n_no_itf: string; win_pct_no_itf: string | null;
+      n_itf: string; win_pct_itf: string | null;
+    }>(`
+      SELECT
+        COUNT(*) AS n,
+        ROUND(100.0 * SUM(CASE WHEN actual_winner_id = selected_player_id THEN 1 ELSE 0 END)
+              / NULLIF(COUNT(*), 0), 1) AS win_pct,
+        SUM(CASE WHEN tournament_name NOT ILIKE '%ITF%' THEN 1 ELSE 0 END) AS n_no_itf,
+        ROUND(100.0 * SUM(CASE WHEN actual_winner_id = selected_player_id
+                                    AND tournament_name NOT ILIKE '%ITF%' THEN 1 ELSE 0 END)
+              / NULLIF(SUM(CASE WHEN tournament_name NOT ILIKE '%ITF%' THEN 1 ELSE 0 END), 0), 1)
+            AS win_pct_no_itf,
+        SUM(CASE WHEN tournament_name ILIKE '%ITF%' THEN 1 ELSE 0 END) AS n_itf,
+        ROUND(100.0 * SUM(CASE WHEN actual_winner_id = selected_player_id
+                                    AND tournament_name ILIKE '%ITF%' THEN 1 ELSE 0 END)
+              / NULLIF(SUM(CASE WHEN tournament_name ILIKE '%ITF%' THEN 1 ELSE 0 END), 0), 1)
+            AS win_pct_itf
+      FROM parlay_leg_outcomes
+      WHERE actual_winner_id IS NOT NULL
+        AND validation_score >= 66
+        AND (market_odds > 1.667 OR market_odds IS NULL)
+    `);
+
+    // Year-by-year breakdown for the non-ITF VS≥66+MC<60 subset
+    const { rows: tcYearRows } = await pool.query<{
+      yr: number; n: string; win_pct: string | null;
+    }>(`
+      SELECT
+        EXTRACT(YEAR FROM COALESCE(resolved_at, created_at))::int AS yr,
+        COUNT(CASE WHEN tournament_name NOT ILIKE '%ITF%' THEN 1 END) AS n,
+        ROUND(100.0 * SUM(CASE WHEN actual_winner_id = selected_player_id
+                                    AND tournament_name NOT ILIKE '%ITF%' THEN 1 ELSE 0 END)
+              / NULLIF(COUNT(CASE WHEN tournament_name NOT ILIKE '%ITF%' THEN 1 END), 0), 1)
+            AS win_pct
+      FROM parlay_leg_outcomes
+      WHERE actual_winner_id IS NOT NULL
+        AND validation_score >= 66
+        AND (market_odds > 1.667 OR market_odds IS NULL)
+      GROUP BY 1
+      ORDER BY 1
+    `);
+
+    const tcRow = tcRows[0];
+    const toughCalls = {
+      // VS≥66 + market implies <60% for selected player (market_odds > 1.667)
+      totalN: parseInt(tcRow?.n ?? "0"),
+      totalWinRate: tcRow?.win_pct != null ? parseFloat(tcRow.win_pct) : null,
+      // Challenger (and other non-ITF circuits) included; ITF excluded
+      nonItfN: parseInt(tcRow?.n_no_itf ?? "0"),
+      nonItfWinRate: tcRow?.win_pct_no_itf != null ? parseFloat(tcRow.win_pct_no_itf) : null,
+      itfN: parseInt(tcRow?.n_itf ?? "0"),
+      itfWinRate: tcRow?.win_pct_itf != null ? parseFloat(tcRow.win_pct_itf) : null,
+      byYear: tcYearRows.map(r => ({
+        year: Number(r.yr),
+        n: parseInt(r.n),
+        winRate: r.win_pct != null ? parseFloat(r.win_pct) : null,
+      })),
+    };
+
     res.json({
       summary: {
         totalLegs: total,
@@ -810,6 +876,7 @@ router.get("/admin/parlay/calibration", requireAdmin, async (_req, res): Promise
       buckets,
       decisionTiers,
       parlayGrades,
+      toughCalls,
     });
   } catch (e) {
     res.status(500).json({ error: e instanceof Error ? e.message : "Calibration query failed" });

@@ -595,8 +595,8 @@ describe("builderScoringService — coverage normalisation & same-day fatigue (T
   it("test-helper dataCoverage is 86 (not 100): serveAdv+retAdv unavailable without real match rows", () => {
     // In test-helper mode, no real MatchRecord rows are supplied to computeServeReturnModule.
     // The module returns defaulted=true → serveAdvantage and returnAdvantage are UNAVAILABLE.
-    // Unavailable factors: utr (0.10) + holdBreak (0.05) [structural] + serveAdv (0.06) + retAdv (0.06) = 0.27 total.
-    // STRUCTURAL_MAX_UNAVAIL_WEIGHT = 0.15 (utr+holdBreak only) → variableUnavailW = 0.12 → dataCoverage = 86.
+    // utr and holdBreak removed from factor set (2026-08-11); only genuinely-variable factors remain.
+    // Unavailable in test mode: serveAdv (0.071) + retAdv (0.071) = 0.142 → dataCoverage = 86.
     // 86 is still >= 80 (Grade A threshold), confirming Grade A is reachable when a real match
     // provides actual set-score margin data that resolves serveAdv/retAdv as "available".
     const selStrong = makeStats({ total: 30, winRate: 0.78, recentWinRate: 0.78, currentRank: 15, surfaceTotal: 12, surfaceWinRate: 0.75 });
@@ -619,14 +619,12 @@ describe("builderScoringService — coverage normalisation & same-day fatigue (T
   it("dataCoverage = 86 in test helper without real match rows (serveAdv+retAdv genuinely unavailable)", () => {
     // In __TEST_computeScoring, variable factors that lack data (no surface, no market odds)
     // get status "limited" — NOT "unavailable". However serveAdvantage and returnAdvantage
-    // are now "unavailable" in test-helper mode because the SR module receives no real match rows
+    // are "unavailable" in test-helper mode because the SR module receives no real match rows
     // (defaulted=true) and we correctly refuse to include neutral 50 at full weight with no evidence.
     //
-    // Unavailable in test mode: utr (0.10) + holdBreak (0.05) [structural]
-    //                         + serveAdv (0.06) + retAdv (0.06) [SR defaulted] = 0.27 total
-    // STRUCTURAL_MAX_UNAVAIL_WEIGHT = 0.15 (utr+holdBreak only)
-    // variableUnavailW = max(0, 0.27 - 0.15) = 0.12 → dataCoverage = max(0, 100 - 0.12*100) = 88
-    // (exact value is 86 due to weight normalization details)
+    // utr and holdBreak removed from factor set (2026-08-11); only genuinely-variable factors remain.
+    // Unavailable in test mode: serveAdv (0.071) + retAdv (0.071) = 0.142 total
+    // dataCoverage = round((1 - 0.142) * 100) = 86
     //
     // dataCoverage < 100 in test mode is CORRECT. In production, when real match rows supply
     // set-score margins, the SR module resolves to non-defaulted and serveAdv/retAdv become
@@ -1207,29 +1205,40 @@ describe("serveAdvantage and returnAdvantage factor wiring", () => {
       "returnAdvantage must be 'unavailable' in test helper when SR module has no real margin data");
   });
 
-  it("holdBreak remains 'unavailable' (no point-level data available)", () => {
+  it("holdBreak is NOT a factor (removed 2026-08-11 — no point-level data, weight redistributed)", () => {
     const sel = makeStats({ total: 20 });
     const opp = makeStats({ total: 20 });
     const r = __TEST_computeScoring(sel, opp);
     const hbFactor = r.factors.find(f => f.key === "holdBreak");
-    assert.ok(hbFactor, "holdBreak must be present");
-    assert.strictEqual(hbFactor!.status, "unavailable",
-      "holdBreak must remain unavailable (no historical point-level data)");
+    assert.strictEqual(hbFactor, undefined,
+      "holdBreak must not appear as a factor — it was removed from DEFAULT_WEIGHTS");
   });
 
-  it("STRUCTURAL_MAX_UNAVAIL_WEIGHT: in test helper utr+holdBreak+serveAdv+retAdv are all unavailable", () => {
-    // In test-helper mode: utr (0.10) + holdBreak (0.05) + serveAdvantage (0.06) + returnAdvantage (0.06) = 0.27.
-    // STRUCTURAL_MAX_UNAVAIL_WEIGHT (0.15) is the utr+holdBreak floor only.
-    // variableUnavailW = max(0, 0.27 - 0.15) = 0.12 → dataCoverage < 100 in test mode.
-    // This is correct: the test helper has no real match rows, so SR is genuinely unavailable.
+  it("utr is NOT a factor (removed 2026-08-11 — no public API, weight redistributed)", () => {
+    const sel = makeStats({ total: 20 });
+    const opp = makeStats({ total: 20 });
+    const r = __TEST_computeScoring(sel, opp);
+    const utrFactor = r.factors.find(f => f.key === "utr");
+    assert.strictEqual(utrFactor, undefined,
+      "utr must not appear as a factor — it was removed from DEFAULT_WEIGHTS");
+  });
+
+  it("in test-helper mode serveAdv+retAdv are unavailable; dataCoverage < 100 but >= 80", () => {
+    // After removing utr+holdBreak: only serveAdvantage (0.071) + returnAdvantage (0.071) = 0.142
+    // can be unavailable in test mode (no real match rows → SR module defaults).
+    // dataCoverage = round((1 - 0.142) * 100) = 86 — still >= 80 (Grade A reachable in prod).
     const sel = makeStats({ total: 20, winRate: 0.60 });
     const opp = makeStats({ total: 20, winRate: 0.50 });
     const r = __TEST_computeScoring(sel, opp, { surface: "Hard" });
     const unavailW = r.factors.filter(f => f.status === "unavailable").reduce((s, f) => s + f.weight, 0);
-    // The exact value doesn't matter — the key invariant is that unavailW > 0.15 in test mode
-    // (proving SR is counted as genuinely unavailable, not as neutral limited).
-    assert.ok(unavailW > 0.15,
-      `unavailableWeight (${unavailW.toFixed(3)}) must exceed 0.15 in test-helper mode (utr+holdBreak+serve+return all unavailable)`);
+    // Key invariant: unavailW is driven by serveAdv+retAdv (each 0.071) — genuinely unavailable
+    // without real set-score row data. Must exceed 0.10 to prove SR is counted as unavailable.
+    assert.ok(unavailW > 0.10,
+      `unavailableWeight (${unavailW.toFixed(3)}) must exceed 0.10 in test-helper mode (serve+return unavailable without real rows)`);
+    assert.ok(r.dataCoverage < 100,
+      `dataCoverage (${r.dataCoverage}) must be < 100 in test-helper mode`);
+    assert.ok(r.dataCoverage >= 80,
+      `dataCoverage (${r.dataCoverage}) must be >= 80 (Grade A still reachable in production)`);
   });
 });
 
@@ -1324,6 +1333,7 @@ describe("dataCoverage normalisation after structural unavail weight reduction",
       `dataCoverage must be in [80, 100) in test-helper mode (SR unavailable without real rows; got ${r.dataCoverage})`);
   });
 });
+;
 
 // ── computeBuilderAccuracyStats — unit tests ──────────────────────────────────
 
@@ -2173,12 +2183,12 @@ describe("thin-data risk floor — riskScore raised when favorable signals push 
     // Five opinionated sources all agree → agreementRate=100%, available=5:
     //   recentForm(sel 1.0 vs opp 0.0)   → supportsSelected=true  [weight 5.8pp]
     //   headToHead(sel wins 2/2)          → supportsSelected=true  [weight 7.5pp]
-    //   rankingTrend(sel #1 vs opp #200)  → supportsSelected=true  [weight 10.5pp]
+    //   currentRanking(sel #1 vs opp #200) → supportsSelected=true  [weight 10.5pp]
     //   marketConsensus(1.2 odds → 83%)   → supportsSelected=true  [weight 5.0pp]
     //   travelFatigue(sel 3d vs opp 0d)   → supportsSelected=true  [weight 5.0pp]
     //
     // Risk bonuses applied: −12(market>60%), −8(ranking gap), −8(agreement≥5sources)
-    // dataCoverage = 86% (utr/holdBreak are structural unavailables → not penalised)
+    // dataCoverage = 86% (serveAdv+retAdv unavailable in test-helper → 0.142 unavailW → 86%)
     // → raw risk = 35 + 12 + 12 − 12 − 8 − 8 = 31
     // → closenessScore = 17 (market + ranking both non-close) → closenessRiskFloor(17) = 0
     // → postClosenessRisk = max(31, 0) = 31

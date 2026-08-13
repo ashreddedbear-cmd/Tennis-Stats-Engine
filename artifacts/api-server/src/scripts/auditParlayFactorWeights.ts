@@ -42,7 +42,7 @@ const PRIOR_WEIGHTS: Record<string, number> = {
   holdBreak:             0.05,
   strengthOfSchedule:    0.05,
   marketConsensus:       0.05,
-  rankingTrend:          0.04,
+  currentRanking:        0.04,
   headToHead:            0.03,
   travelFatigue:         0.03,
   injuryRisk:            0.03,
@@ -88,9 +88,12 @@ interface AnnotatedLeg extends LegRow {
 // Scoring helpers (mirror of builderScoringService.ts)
 // ---------------------------------------------------------------------------
 
-/** Structural unavailable factors: weight counts in total but score never activates. */
-const STRUCTURAL_UNAVAILABLE = new Set(["utr", "serveAdvantage", "returnAdvantage", "holdBreak"]);
-const STRUCTURAL_MAX_UNAVAIL_WEIGHT = 0.27; // utr(0.10) + serveAdvantage(0.06) + returnAdvantage(0.06) + holdBreak(0.05)
+/** Structural unavailable factors: weight counts in total but score never activates.
+ * utr and holdBreak removed from DEFAULT_WEIGHTS 2026-08-11 — no longer tracked as structural.
+ * serveAdvantage/returnAdvantage are now computed, so they are variable (not structural) too.
+ * Empty set means all unavailability is genuine variable-data absence, not structural gaps. */
+const STRUCTURAL_UNAVAILABLE = new Set<string>([]);
+const STRUCTURAL_MAX_UNAVAIL_WEIGHT = 0.0; // no permanently-unavailable factors remain
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
@@ -137,14 +140,9 @@ function computeScoreWithout(
     ? Math.round(availF.reduce((s, f) => s + f.score * (f.weight / totalW), 0))
     : 50;
 
-  // dataCoverage
+  // dataCoverage (simplified: no structural-unavailable floor since utr/holdBreak removed)
   const unavailW = allFactors.filter(f => f.status === "unavailable").reduce((s, f) => s + f.weight, 0);
-  const variableUnavailW = Math.max(0, unavailW - STRUCTURAL_MAX_UNAVAIL_WEIGHT);
-  const dataCoverage = clamp(
-    Math.round((1 - variableUnavailW / (1 - STRUCTURAL_MAX_UNAVAIL_WEIGHT)) * 100),
-    0,
-    100,
-  );
+  const dataCoverage = clamp(Math.round((1 - unavailW) * 100), 0, 100);
 
   return { validationScore, dataCoverage };
 }
@@ -433,7 +431,7 @@ async function main(): Promise<void> {
     }
 
     // Normalize: sum of all weights = 1.0
-    // (structural weights are fixed at 0.27, so normalise the rest to sum to 0.73)
+    // (no structural-unavailable factors remain; normalise all weights to sum to 1.0)
     const structuralTotal = factorStats
       .filter(fs => fs.structural)
       .reduce((s, fs) => s + (newWeights[fs.key] ?? fs.weight), 0);
@@ -548,8 +546,7 @@ async function main(): Promise<void> {
 
       // dataCoverage (for toDecision)
       const unavailW = allF.filter(f => f.status === "unavailable").reduce((s, f) => s + f.weight, 0);
-      const varUnavailW = Math.max(0, unavailW - STRUCTURAL_MAX_UNAVAIL_WEIGHT);
-      const dc = clamp(Math.round((1 - varUnavailW / (1 - STRUCTURAL_MAX_UNAVAIL_WEIGHT)) * 100), 0, 100);
+      const dc = clamp(Math.round((1 - unavailW) * 100), 0, 100);
       return toDecision(newVS, 0 /* riskScore not re-derived here */, "B", dc);
       // Note: riskScore and reliabilityGrade are stored on the leg and don't depend on weights.
       // We access them from the leg directly in the loop below.
@@ -579,8 +576,7 @@ async function main(): Promise<void> {
           ? Math.round(availF.reduce((s, f) => s + f.score * (f.weight / totalW), 0))
           : 50;
         const unavailW = allF.filter(f => f.status === "unavailable").reduce((s, f) => s + f.weight, 0);
-        const varUnavailW = Math.max(0, unavailW - STRUCTURAL_MAX_UNAVAIL_WEIGHT);
-        const dc = clamp(Math.round((1 - varUnavailW / (1 - STRUCTURAL_MAX_UNAVAIL_WEIGHT)) * 100), 0, 100);
+        const dc = clamp(Math.round((1 - unavailW) * 100), 0, 100);
         const dec = toDecision(newVS, leg.risk_score, leg.reliability_grade, dc);
         if (dec === "KEEP") keep.push(leg);
         else if (dec === "BORDERLINE") borderline.push(leg);

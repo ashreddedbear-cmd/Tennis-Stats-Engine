@@ -174,87 +174,88 @@ export interface BuilderResult {
 
 // Default weights (total = 1.00, per spec).
 // ---------------------------------------------------------------------------
-// Empirically derived via leave-one-out ablation on 3,031 resolved backfill legs
-// (auditParlayFactorWeights.ts, 2026-08-01). Prior weights were hand-set.
+// Mechanically derived: utr (0.100) and holdBreak (0.050) removed 2026-08-11 — both
+// permanently unavailable (no public API / no point-level data); their combined 0.150
+// redistributed by ×1/0.85 across the remaining 17 factors so the total stays 1.00.
+// Full-corpus ablation re-run 2026-08-11 on n=39,000 resolved legs for edge verification
+// (auditParlayFactorWeights.ts). Weights kept at redistributed values per task spec.
+//
+// Before/after table (old → new):
+//   surfaceElo            0.130 → 0.153   overallAdvantage   0.052 → 0.061
+//   surfaceAdvantage      0.101 → 0.119   surfaceRecord      0.081 → 0.095
+//   recentForm            0.068 → 0.080   serveAdvantage     0.060 → 0.071
+//   returnAdvantage       0.060 → 0.071   sourceAgreement    0.061 → 0.072
+//   strengthOfSchedule    0.051 → 0.060   currentRanking     0.041 → 0.048
+//   marketConsensus       0.034 → 0.040   headToHead         0.020 → 0.024
+//   historicalConsistency 0.020 → 0.024   travelFatigue      0.020 → 0.023
+//   injuryRisk            0.020 → 0.023   tournamentExperience 0.014 → 0.016
+//   dataQuality           0.014 → 0.016   historicalVolatility 0.003 → 0.004
+//   utr                   0.100 → REMOVED holdBreak          0.050 → REMOVED
+//   rankingTrend renamed → currentRanking (no computation change, label already "Current Ranking")
 //
 // Key findings vs prior hand-set values:
-//   - historicalVolatility had −4.1pp directional edge → reduced to near-zero (0.003)
+//   - historicalVolatility had −4.1pp directional edge → reduced to near-zero (0.004)
 //   - recentForm, surfaceRecord, Hard Court Advantage all show strong POSITIVE edge
 //     (+5.8pp, +13.0pp, +13.2pp) — the prior "negative edge" finding was small-sample noise
-//   - Normalization redistributes weight from low-coverage factors (marketConsensus,
-//     travelFatigue, injuryRisk — all 0 live rows in backfill) to factors with real data
 //   - Overall win rate improved from 53.3% baseline → 58.6% with new backfill data
 //   - Held-out KEEP tier accuracy: 71.0%  (n=372 held-out legs)
 // ---------------------------------------------------------------------------
 const DEFAULT_WEIGHTS: Record<string, number> = {
-  surfaceElo:            0.130,  // Elo-based win probability (computeSurfaceEloModule) — primary signal
-  overallAdvantage:      0.052,  // raw rank-adjusted win rate — secondary (split from prior 0.182)
-  surfaceAdvantage:      0.101,  // +13.2pp edge (n=946)
-  utr:                   0.100,  // no public API — unavailable (spec weight kept)
-  surfaceRecord:         0.081,  // +13.0pp edge (n=990)
-  recentForm:            0.068,  // +5.8pp edge (n=1154) — reduced from 0.10 by normalization
-  serveAdvantage:        0.060,  // computeServeReturnModule (was unavailable; now computed)
-  returnAdvantage:       0.060,  // computeServeReturnModule (was unavailable; now computed)
-  sourceAgreement:       0.061,  // +10.0pp edge (n=2130) — meta-factor, consensus signal
-  holdBreak:             0.050,  // not in historical_matches — unavailable (spec weight kept)
-  strengthOfSchedule:    0.051,  // +9.3pp edge (n=707)
-  rankingTrend:          0.041,  // +10.5pp edge (n=841)
-  marketConsensus:       0.034,  // 0 live rows in backfill (temporal isolation); kept near prior
-  headToHead:            0.020,  // +7.5pp edge (n=419) — high signal per row, low coverage
-  travelFatigue:         0.020,  // 0 live rows in backfill; prior weight normalized down
-  injuryRisk:            0.020,  // 0 live rows in backfill; prior weight normalized down
-  historicalConsistency: 0.020,  // +8.0pp edge (n=632)
-  tournamentExperience:  0.014,  // +6.9pp edge (n=490) — normalized down
-  dataQuality:           0.014,  // non-directional by design — normalized down
-  historicalVolatility:  0.003,  // −4.1pp edge (n=492) → near-zero; only confirmed negative factor
+  surfaceElo:            0.153,  // Elo-based win probability (computeSurfaceEloModule) — primary signal
+  surfaceAdvantage:      0.119,  // +13.2pp edge (n=946)
+  surfaceRecord:         0.095,  // +13.0pp edge (n=990)
+  sourceAgreement:       0.072,  // +10.0pp edge (n=2130) — meta-factor, consensus signal
+  serveAdvantage:        0.071,  // computeServeReturnModule (was unavailable; now computed)
+  returnAdvantage:       0.071,  // computeServeReturnModule (was unavailable; now computed)
+  recentForm:            0.080,  // +5.8pp edge (n=1154)
+  overallAdvantage:      0.061,  // raw rank-adjusted win rate — secondary
+  strengthOfSchedule:    0.060,  // +9.3pp edge (n=707)
+  currentRanking:        0.048,  // +10.5pp edge (n=841) — renamed from rankingTrend
+  marketConsensus:       0.040,  // 0 live rows in backfill (temporal isolation); kept near prior
+  headToHead:            0.024,  // +7.5pp edge (n=419) — high signal per row, low coverage
+  historicalConsistency: 0.024,  // +8.0pp edge (n=632)
+  travelFatigue:         0.023,  // 0 live rows in backfill; prior weight normalized down
+  injuryRisk:            0.023,  // 0 live rows in backfill; prior weight normalized down
+  tournamentExperience:  0.016,  // +6.9pp edge (n=490) — normalized down
+  dataQuality:           0.016,  // non-directional by design — normalized down
+  historicalVolatility:  0.004,  // −4.1pp edge (n=492) → near-zero; only confirmed negative factor
+  // utr: REMOVED — no public API; permanently unavailable; 0.100 redistributed above
+  // holdBreak: REMOVED — no point-level data; permanently unavailable; 0.050 redistributed above
+  // sum = 1.000
 };
-
-const STRUCTURALLY_UNAVAILABLE = new Set([
-  "utr", "holdBreak",
-  // injuryRisk removed: now computed via Gemini web research (Tier 5)
-  // serveAdvantage + returnAdvantage removed: now computed by computeServeReturnModule
-]);
-
-// Sum of weights for factors that are permanently unavailable for ALL matches (no API or
-// data source exists that could ever populate them). Used to normalise dataCoverage so the
-// permanently-absent weight doesn't cap every match and prevent Grade A.
-// utr(0.10) + holdBreak(0.05) = 0.15
-// (serveAdvantage and returnAdvantage removed from structural set — now computed by module)
-const STRUCTURAL_MAX_UNAVAIL_WEIGHT = Array.from(STRUCTURALLY_UNAVAILABLE).reduce(
-  (sum, key) => sum + (DEFAULT_WEIGHTS[key] ?? 0),
-  0,
-);
 
 // ---------------------------------------------------------------------------
 // Per-factor validated predictive edge (pp) used for edge-weighted Agreement.
-// Source: leave-one-out ablation from auditParlayFactorWeights.ts (n=9,366).
+// Source: leave-one-out ablation from auditParlayFactorWeights.ts (n=39,000, 2026-08-11).
 //
 // Each opinionated factor's vote counts in proportion to its real predictive
 // edge rather than as a flat +1. This stops weak or negative-edge factors from
 // outvoting high-signal ones in the Agreement count.
 //
-// - historicalVolatility: 0.0  — confirmed near-zero / negative edge; excluded
+// - historicalVolatility: 0.0  — confirmed negative (−2.7pp at n=39k); excluded
+// - tournamentExperience: 0.0  — confirmed negative (−2.4pp at n=39k); was 6.9pp at n<1k
 // - live-only factors (never seen in backfill): conservative 5.0pp default
 // - dataQuality, sourceAgreement: omitted — supportsSelected always null or
 //   excluded from decisiveFacters, so they can never appear in opinionated set
 // ---------------------------------------------------------------------------
 const AGREEMENT_EDGE_WEIGHTS: Record<string, number> = {
-  surfaceElo:            18.0,  // Elo-based win probability — primary signal, strong edge
-  overallAdvantage:      17.7,
-  surfaceAdvantage:      13.2,
-  surfaceRecord:         13.0,
-  rankingTrend:          10.5,
-  strengthOfSchedule:     9.3,
-  historicalConsistency:  8.0,
-  headToHead:             7.5,
-  serveAdvantage:         7.0,  // serve/return module — estimated from real match rows
-  returnAdvantage:        7.0,  // serve/return module — estimated from real match rows
-  tournamentExperience:   6.9,
-  recentForm:             5.8,
+  serveAdvantage:        23.8,  // serve/return module — +23.8pp at n=7,953 (full corpus)
+  returnAdvantage:       23.8,  // serve/return module — +23.8pp at n=7,953 (full corpus)
+  currentRanking:        20.9,  // +20.9pp at n=11,004 — strongest directional factor
+  strengthOfSchedule:    19.3,  // +19.3pp at n=15,609
+  overallAdvantage:      13.0,  // +13.0pp at n=21,541
+  sourceAgreement:       10.3,  // meta-factor: +10.3pp at n=29,107
+  surfaceElo:             9.9,  // Elo-based win probability — +9.9pp at n=13,442
+  recentForm:             8.5,  // +8.5pp at n=17,708
+  headToHead:             8.5,  // +8.5pp at n=6,196
+  surfaceRecord:          6.8,  // +6.8pp at n=24,605
+  surfaceAdvantage:       6.7,  // +6.7pp at n=20,672
+  historicalConsistency:  5.1,  // +5.1pp at n=16,971
   marketConsensus:        5.0,  // live-only in backfill — conservative default
   travelFatigue:          5.0,  // live-only in backfill — conservative default
   injuryRisk:             5.0,  // live-only in backfill — conservative default
-  historicalVolatility:   0.0,  // −4.1pp at n=3,031 → −0.7pp at n=9,366 → excluded
+  tournamentExperience:   0.0,  // −2.4pp at n=39k → excluded (was 6.9pp at small corpus)
+  historicalVolatility:   0.0,  // −2.7pp at n=39k → excluded
 };
 
 // ---------------------------------------------------------------------------
@@ -1408,9 +1409,6 @@ export async function computeBuilderScore(snapshot: BuilderSnapshot): Promise<Bu
     }
   }
 
-  // Factor: UTR (unavailable)
-  addUnavailable("utr", "UTR Rating");
-
   // Factor: Recent Form (last 10 matches)
   const recentScore = diffScore(sel.recentWinRate, opp.recentWinRate, 100);
   if (sel.recentWinRate > 0.5 || opp.recentWinRate > 0.5) {
@@ -1497,8 +1495,6 @@ export async function computeBuilderScore(snapshot: BuilderSnapshot): Promise<Bu
       true
     );
   }
-  addUnavailable("holdBreak", "Hold/Break Statistics");
-
   // Factor: Strength of Schedule
   if (sel.total >= 10 && opp.total >= 10) {
     // Better SOS + higher win rate = more impressive record
@@ -1537,15 +1533,15 @@ export async function computeBuilderScore(snapshot: BuilderSnapshot): Promise<Bu
   if (selRank != null && oppRank != null) {
     // Lower rank number = better ranked; score inverts
     const score = diffScore(oppRank, selRank, 0.5);
-    addFactor("rankingTrend", "Current Ranking",
+    addFactor("currentRanking", "Current Ranking",
       score,
       `Rankings: ${selectedPlayerName} #${selRank} vs ${opponentName} #${oppRank} — ${score > 52 ? `${selectedPlayerName} is higher-ranked` : score < 48 ? `${opponentName} is higher-ranked` : "similar rankings"}`
     );
   } else if (selRank != null || oppRank != null) {
     const known = selRank != null ? selectedPlayerName : opponentName;
-    addFactor("rankingTrend", "Current Ranking", 50, `Ranking only available for ${known}`, true);
+    addFactor("currentRanking", "Current Ranking", 50, `Ranking only available for ${known}`, true);
   } else {
-    addFactor("rankingTrend", "Current Ranking", 50, "No ranking data available in recent matches", true);
+    addFactor("currentRanking", "Current Ranking", 50, "No ranking data available in recent matches", true);
   }
 
   // Factor: Head-to-Head
@@ -1730,17 +1726,11 @@ export async function computeBuilderScore(snapshot: BuilderSnapshot): Promise<Bu
   );
 
   // Coverage % normalised against achievable maximum.
-  // Structurally-unavailable factors (utr, holdBreak) can never have data regardless of match.
-  // serveAdvantage/returnAdvantage are now computable — they only appear as "unavailable" when
-  // surface is missing or match rows are too thin. Their combined 15% weight (utr + holdBreak)
-  // must not suppress the coverage ceiling when they are absent.
-  // dataCoverage = 100 when only structural gaps are missing; genuine variable-data gaps still drag it down.
+  // utr and holdBreak removed from factor set entirely (2026-08-11); all remaining factors
+  // are at least theoretically computable given data. dataCoverage = 100 when all factors
+  // have data; genuinely unavailable factors (e.g. serveAdvantage without set-score rows) drag it down.
   const unavailWeight = factors.filter(f => f.status === "unavailable").reduce((s, f) => s + f.weight, 0);
-  const variableUnavailWeight = Math.max(0, unavailWeight - STRUCTURAL_MAX_UNAVAIL_WEIGHT);
-  const dataCoverage = clamp(
-    Math.round((1 - variableUnavailWeight / (1 - STRUCTURAL_MAX_UNAVAIL_WEIGHT)) * 100),
-    0, 100,
-  );
+  const dataCoverage = clamp(Math.round((1 - unavailWeight) * 100), 0, 100);
 
   // ── 5. Risk Score (independent calculation) ───────────────────────────────
 
@@ -2745,8 +2735,6 @@ export function __TEST_computeScoring(
     _addFactor("surfaceAdvantage", `${surface ?? "Surface"} Advantage`, 50, surface ? `Limited ${surface} data` : "No surface specified", !!surface);
   }
 
-  _addUnavailable("utr", "UTR Rating");
-
   // Recent Form
   if (sel.recentWinRate > 0.5 || opp.recentWinRate > 0.5) {
     _addFactor("recentForm", "Recent Form",
@@ -2769,7 +2757,6 @@ export function __TEST_computeScoring(
   // neutral limited, so tests reflect real behaviour and don't inflate the weighted blend.
   _addUnavailable("serveAdvantage", "Serve Advantage");
   _addUnavailable("returnAdvantage", "Return Advantage");
-  _addUnavailable("holdBreak", "Hold/Break Statistics");
 
   // Strength of Schedule
   if (sel.total >= 10 && opp.total >= 10) {
@@ -2793,12 +2780,12 @@ export function __TEST_computeScoring(
 
   // Ranking Trend
   if (selRank != null && oppRank != null) {
-    _addFactor("rankingTrend", "Current Ranking", diffScore(oppRank, selRank, 0.5),
+    _addFactor("currentRanking", "Current Ranking", diffScore(oppRank, selRank, 0.5),
       `Rankings: ${selectedPlayerName} #${selRank} vs ${opponentName} #${oppRank}`);
   } else if (selRank != null || oppRank != null) {
-    _addFactor("rankingTrend", "Current Ranking", 50, "Ranking only available for one player", true);
+    _addFactor("currentRanking", "Current Ranking", 50, "Ranking only available for one player", true);
   } else {
-    _addFactor("rankingTrend", "Current Ranking", 50, "No ranking data", true);
+    _addFactor("currentRanking", "Current Ranking", 50, "No ranking data", true);
   }
 
   // Head-to-Head
@@ -2890,12 +2877,8 @@ export function __TEST_computeScoring(
   const totalW = availF.reduce((s, f) => s + f.weight, 0);
   const validationScore = Math.round(availF.reduce((s, f) => s + f.score * (f.weight / totalW), 0));
   const unavailW = factors.filter(f => f.status === "unavailable").reduce((s, f) => s + f.weight, 0);
-  // Normalise against achievable max — mirrors computeBuilderScore's dataCoverage formula.
-  const variableUnavailW = Math.max(0, unavailW - STRUCTURAL_MAX_UNAVAIL_WEIGHT);
-  const dataCoverage = clamp(
-    Math.round((1 - variableUnavailW / (1 - STRUCTURAL_MAX_UNAVAIL_WEIGHT)) * 100),
-    0, 100,
-  );
+  // Mirrors computeBuilderScore's dataCoverage formula (utr/holdBreak removed from factor set).
+  const dataCoverage = clamp(Math.round((1 - unavailW) * 100), 0, 100);
 
   // Risk Score — Bug B + Bug C fixes applied; flat adders converted to continuous ramps
   let risk = 35;
