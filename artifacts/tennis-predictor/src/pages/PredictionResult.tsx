@@ -11,9 +11,10 @@ import { asPercentage, asFraction, formatPercentage, fractionToPercentage, type 
 import { deriveMonteCarloHeadline } from "@/lib/monteCarloHeadline"
 import { buildPredictionCopyText, buildFullPredictionCopyText } from "@/lib/predictionCopyText"
 import { getRecommendationLabel } from "@/lib/recommendationLabels"
-import { Activity, ShieldAlert, CheckCircle2, XCircle, TrendingUp, AlertTriangle, ChevronRight, Dna, ActivitySquare, Database, Vote, Info, Dices, Crown, Scale, Zap, GitBranch, ChevronDown, Copy, Bookmark, BookmarkCheck, FolderOpen } from "lucide-react"
+import { Activity, ShieldAlert, CheckCircle2, XCircle, TrendingUp, AlertTriangle, ChevronRight, Dna, ActivitySquare, Database, Vote, Info, Dices, Crown, Scale, Zap, GitBranch, ChevronDown, Copy, Bookmark, BookmarkCheck, FolderOpen, FileText } from "lucide-react"
 import { useState, useEffect } from "react"
 import { useQuery } from "@tanstack/react-query"
+import { jsPDF } from "jspdf"
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "@/components/ui/tooltip"
 import { UPSET_RISK_LABEL, UPSET_RISK_SHORT, UPSET_RISK_TEXT_CLASS, upsetRiskBadgeClasses } from "@/lib/upsetRiskColors"
 import { useToast } from "@/hooks/use-toast"
@@ -192,6 +193,7 @@ export default function PredictionResultPage() {
   const [eliteExpanded, setEliteExpanded] = useState(false)
   const [forceSignalExpanded, setForceSignalExpanded] = useState(false)
   const [crossEngineExpanded, setCrossEngineExpanded] = useState(false)
+  const [pdfExporting, setPdfExporting] = useState(false)
 
   // On mount (or when prediction changes), check whether this card is already saved.
   // Initialises `saved` and `savedCardId` so the toggle starts in the correct state.
@@ -346,6 +348,71 @@ export default function PredictionResultPage() {
     }
   }
 
+  const handleExportPdf = async () => {
+    const batchParam = new URLSearchParams(searchString).get("batch")
+    const candidateIds = batchParam
+      ? batchParam
+          .split(",")
+          .map((s) => Number.parseInt(s, 10))
+          .filter((n) => Number.isFinite(n))
+      : [id]
+
+    const dedupedIds = [...new Set(candidateIds)]
+    if (!dedupedIds.length) {
+      toast({ title: "No predictions available for PDF export", variant: "destructive" })
+      return
+    }
+
+    setPdfExporting(true)
+    try {
+      const response = await fetch(api(`/api/predictions/export-batch?ids=${encodeURIComponent(dedupedIds.join(","))}`), {
+        credentials: "include",
+      })
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => null)
+        throw new Error(body?.error || `Export failed (${response.status})`)
+      }
+
+      const blob = await response.blob()
+      if (!blob || blob.size === 0) {
+        throw new Error("The PDF download was empty.")
+      }
+
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement("a")
+      const filename = response.headers.get("content-disposition")?.match(/filename="?([^";]+)"?/)?.[1] ?? `Tennis_Matrix_${dedupedIds.length}_Predictions_${new Date().toISOString().slice(0, 10)}.pdf`
+
+      link.href = url
+      link.download = filename
+      link.rel = "noopener"
+      link.style.display = "none"
+      document.body.appendChild(link)
+
+      try {
+        if (typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream) {
+          link.setAttribute("target", "_blank")
+        }
+        link.click()
+        toast({ title: "✅ PDF downloaded" })
+      } finally {
+        setTimeout(() => {
+          URL.revokeObjectURL(url)
+          link.remove()
+        }, 1000)
+      }
+    } catch (error) {
+      console.error("PDF export failed", error)
+      toast({
+        title: "PDF export failed",
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive",
+      })
+    } finally {
+      setPdfExporting(false)
+    }
+  }
+
   const methodologySections = [
     { title: "Elite Tier", text: engine.eliteTierReason ?? "Elite tier requires every strict model, data-quality, conflict, and risk gate to pass." },
     { title: "Monte Carlo Simulation", text: engine.simulatorNote ?? "The simulator is computed for transparency and only contributes after validation earns it a vote." },
@@ -415,18 +482,31 @@ export default function PredictionResultPage() {
           </div>
         )}
         {/* Top-right: admin copy button */}
-        <div className="absolute top-3 right-3 z-20 flex gap-2">
+        <div className="absolute top-3 right-3 z-20 flex items-center gap-1.5">
           {canCopy && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 px-2.5 text-xs font-mono gap-1.5 bg-background/95"
-              onClick={handleCopyPrediction}
-              title="Copy social summary"
-            >
-              <Copy className="w-3.5 h-3.5" />
-              📋 Copy
-            </Button>
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 px-2.5 text-xs font-mono gap-1.5 bg-background/95"
+                onClick={handleCopyPrediction}
+                title="Copy social summary"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                📋 Copy
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={pdfExporting}
+                className="h-8 px-2.5 text-xs font-mono gap-1.5 bg-background/95"
+                onClick={handleExportPdf}
+                title="Export this prediction run as a PDF"
+              >
+                <FileText className="w-3.5 h-3.5" />
+                {pdfExporting ? "GENERATING PDF..." : "PDF"}
+              </Button>
+            </>
           )}
         </div>
         <div className="absolute right-0 top-0 w-96 h-96 bg-primary/10 rounded-full blur-3xl -mr-32 -mt-32 pointer-events-none" />
