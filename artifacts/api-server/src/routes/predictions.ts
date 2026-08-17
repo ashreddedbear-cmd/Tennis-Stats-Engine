@@ -1,6 +1,5 @@
 import { Router, type IRouter } from "express";
 import { eq, desc, sql, inArray } from "drizzle-orm";
-import PDFDocument from "pdfkit";
 import { db, predictionsTable } from "@workspace/db";
 import {
   ListPredictionsQueryParams,
@@ -146,117 +145,6 @@ async function resolveCanonicalPlayerIdFromName(
 }
 
 const router: IRouter = Router();
-
-export function buildPredictionBatchPdfPayload(predictions: Array<Record<string, any>>, exportedAt: Date = new Date()) {
-  const seen = new Set<number>();
-  const uniquePredictions = (predictions ?? []).filter((prediction) => {
-    const id = Number(prediction?.id ?? 0);
-    if (!id || seen.has(id)) return false;
-    seen.add(id);
-    return true;
-  });
-
-  const exportDate = exportedAt.toISOString().slice(0, 10);
-  const lines: string[] = [
-    "TENNIS MATRIX AI",
-    `Export Date: ${exportDate}`,
-    `Prediction Count: ${uniquePredictions.length}`,
-    "",
-  ];
-
-  uniquePredictions.forEach((prediction, index) => {
-    const engine = prediction?.engine ?? {};
-    const p1 = String(prediction?.player1Name ?? "P1");
-    const p2 = String(prediction?.player2Name ?? "P2");
-    const winner = String(prediction?.predictedWinnerName ?? "TBD");
-    const probability = typeof prediction?.predictedWinnerProbability === "number"
-      ? Number(prediction.predictedWinnerProbability)
-      : typeof prediction?.calibratedProbability === "number"
-        ? Number(prediction.calibratedProbability)
-        : null;
-    const matchMeta = [prediction?.surface, prediction?.matchFormat, prediction?.tournamentLevel].filter(Boolean).join(" · ")
-      || "Match summary";
-
-    lines.push(`Prediction ${index + 1} of ${uniquePredictions.length}`);
-    lines.push(`${p1} vs ${p2}`);
-    lines.push(`Winner: ${winner}`);
-    lines.push(`Win Probability: ${probability == null ? "—" : `${Math.round(probability)}%`}`);
-    lines.push(`Surface / Format: ${matchMeta}`);
-    lines.push(`Tournament: ${prediction?.tournamentName ?? "—"}`);
-    lines.push(`Recommendation: ${prediction?.recommendation ?? "—"}`);
-    lines.push(`Upset Risk: ${prediction?.upsetRisk ?? "—"}`);
-    lines.push(`Data Quality: ${prediction?.dataQuality ?? "—"}`);
-    lines.push(`Set Score: ${prediction?.predictedSetScore ?? "—"}`);
-    lines.push(`Model Agreement: ${engine.modelAgreement ? String(engine.modelAgreement) : "—"}`);
-    lines.push(`Matchup Closeness: ${engine.matchupCloseness ? String(engine.matchupCloseness) : "—"}`);
-    lines.push("");
-  });
-
-  return {
-    predictionCount: uniquePredictions.length,
-    predictions: uniquePredictions,
-    exportedAt: exportDate,
-    pdfText: lines.join("\n"),
-  };
-}
-
-function renderPredictionBatchPdf(doc: PDFDocument, predictions: Array<Record<string, any>>) {
-  const pageWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
-  const yStart = 48;
-  let y = yStart;
-
-  const addHeader = (text: string, size = 12, bold = false) => {
-    if (y > 720) {
-      doc.addPage();
-      y = 48;
-    }
-    doc.fontSize(size).font(bold ? "Helvetica-Bold" : "Helvetica").text(text, { align: "left" });
-    y += size + 10;
-  };
-
-  const addText = (text: string) => {
-    const safeText = String(text ?? "—");
-    if (y > 720) {
-      doc.addPage();
-      y = 48;
-    }
-    const wrapped = doc.widthOfString(safeText, { ellipsis: true }) > pageWidth ? safeText : safeText;
-    doc.fontSize(10).font("Helvetica").text(wrapped, { width: pageWidth, continued: false });
-    y += 14;
-  };
-
-  addHeader("TENNIS MATRIX AI", 18, true);
-  addText(`Export Date: ${new Date().toISOString().slice(0, 10)}`);
-  addText(`Prediction Count: ${predictions.length}`);
-  addText("");
-
-  predictions.forEach((prediction, index) => {
-    const engine = prediction?.engine ?? {};
-    const p1 = String(prediction?.player1Name ?? "P1");
-    const p2 = String(prediction?.player2Name ?? "P2");
-    const winner = String(prediction?.predictedWinnerName ?? "TBD");
-    const probability = typeof prediction?.predictedWinnerProbability === "number"
-      ? Number(prediction.predictedWinnerProbability)
-      : typeof prediction?.calibratedProbability === "number"
-        ? Number(prediction.calibratedProbability)
-        : null;
-
-    addHeader(`Prediction ${index + 1} of ${predictions.length}: ${p1} vs ${p2}`, 13, true);
-    addText(`Winner: ${winner}`);
-    addText(`Win Probability: ${probability == null ? "—" : `${Math.round(probability)}%`}`);
-    addText(`Surface / Format: ${[prediction?.surface, prediction?.matchFormat, prediction?.tournamentLevel].filter(Boolean).join(" · ") || "Match summary"}`);
-    addText(`Tournament: ${prediction?.tournamentName ?? "—"}`);
-    addText(`Recommendation: ${prediction?.recommendation ?? "—"}`);
-    addText(`Upset Risk: ${prediction?.upsetRisk ?? "—"}`);
-    addText(`Data Quality: ${prediction?.dataQuality ?? "—"}`);
-    addText(`Set Score: ${prediction?.predictedSetScore ?? "—"}`);
-    addText(`Model Agreement: ${engine.modelAgreement ? String(engine.modelAgreement) : "—"}`);
-    addText(`Matchup Closeness: ${engine.matchupCloseness ? String(engine.matchupCloseness) : "—"}`);
-    addText("");
-  });
-
-  doc.text(`Generated by Tennis Matrix AI`, 40, 780, { align: "left" });
-}
 
 /**
  * Task #30: attaches the real historical-match-fallback disclosure (derived from this row's own
@@ -560,57 +448,6 @@ router.post("/predictions", requireClerkUser, predictionLimiter, async (req, res
     res.status(dbErr.status).json(dbErr.body);
     return;
   }
-});
-
-router.get("/predictions/export-batch", requireClerkUser, async (req, res): Promise<void> => {
-  const idsParam = typeof req.query.ids === "string" ? req.query.ids : typeof req.query.batch === "string" ? req.query.batch : "";
-  const rawIds = idsParam
-    .split(",")
-    .map((part) => Number.parseInt(part.trim(), 10))
-    .filter((n) => Number.isFinite(n));
-
-  const uniqueIds = [...new Set(rawIds)];
-  if (uniqueIds.length === 0) {
-    res.status(400).json({ error: "No prediction IDs provided for export." });
-    return;
-  }
-
-  const clerkUserId = getAuth(req).userId;
-  const isAdmin = isAdminSessionCookieValid(req.signedCookies);
-  if (!isAdmin && !clerkUserId) {
-    res.status(401).json({ error: "Authentication required" });
-    return;
-  }
-
-  const rows = await db.select().from(predictionsTable).where(inArray(predictionsTable.id, uniqueIds));
-  const rowMap = new Map(rows.map((row) => [row.id, row]));
-  const orderedRows = uniqueIds.map((id) => rowMap.get(id)).filter(Boolean) as Array<(typeof predictionsTable)['_']['inferSelect']>;
-
-  if (orderedRows.length !== uniqueIds.length) {
-    res.status(404).json({ error: "One or more predictions in this run are not available for export." });
-    return;
-  }
-
-  if (!isAdmin && clerkUserId) {
-    const unauthorized = orderedRows.some((row) => row.clerkUserId !== clerkUserId);
-    if (unauthorized) {
-      res.status(403).json({ error: "You do not have access to this prediction run." });
-      return;
-    }
-  }
-
-  if (orderedRows.length === 0) {
-    res.status(400).json({ error: "No predictions available for export." });
-    return;
-  }
-
-  const doc = new PDFDocument({ margin: 40, size: "A4", layout: "portrait" });
-  const fileName = `Tennis_Matrix_${orderedRows.length}_Predictions_${new Date().toISOString().slice(0, 10)}.pdf`;
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
-  doc.pipe(res);
-  renderPredictionBatchPdf(doc, orderedRows as Array<Record<string, any>>);
-  doc.end();
 });
 
 router.get("/predictions/:predictionId", requireClerkUser, async (req, res): Promise<void> => {

@@ -79,7 +79,6 @@
   },
   "dependencies": {
     "@clerk/react": "^6.12.7",
-    "@clerk/themes": "^2.4.57",
-    "jspdf": "^4.2.1"
+    "@clerk/themes": "^2.4.57"
   }
 }
