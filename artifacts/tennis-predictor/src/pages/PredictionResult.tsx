@@ -400,9 +400,7 @@ export default function PredictionResultPage() {
       document.body.appendChild(link)
 
       try {
-        const isIOS = typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent)
-        const hasLegacyMsStream = typeof window !== "undefined" && "MSStream" in window
-        if (isIOS && !hasLegacyMsStream) {
+        if (typeof navigator !== "undefined" && /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream) {
           link.setAttribute("target", "_blank")
         }
         link.click()

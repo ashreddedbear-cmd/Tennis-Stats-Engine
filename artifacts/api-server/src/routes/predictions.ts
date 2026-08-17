@@ -2,8 +2,6 @@ import { Router, type IRouter } from "express";
 import { eq, desc, sql, inArray } from "drizzle-orm";
 import PDFDocument from "pdfkit";
 import { db, predictionsTable } from "@workspace/db";
-
-type PDFDocumentType = InstanceType<typeof PDFDocument>;
 import {
   ListPredictionsQueryParams,
   ListPredictionsResponse,
@@ -202,7 +200,7 @@ export function buildPredictionBatchPdfPayload(predictions: Array<Record<string,
   };
 }
 
-function renderPredictionBatchPdf(doc: PDFDocumentType, predictions: Array<Record<string, any>>) {
+function renderPredictionBatchPdf(doc: PDFDocument, predictions: Array<Record<string, any>>) {
   const pageWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right;
   const yStart = 48;
   let y = yStart;
