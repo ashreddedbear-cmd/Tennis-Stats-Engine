@@ -349,19 +349,29 @@ export default function PredictionResultPage() {
   }
 
   const handleExportPdf = async () => {
+    const clickedPredictionId = Number.isFinite(id) ? id : null
     const batchParam = new URLSearchParams(searchString).get("batch")
     const candidateIds = batchParam
       ? batchParam
           .split(",")
-          .map((s) => Number.parseInt(s, 10))
-          .filter((n) => Number.isFinite(n))
-      : [id]
+          .map((s) => Number.parseInt(s.trim(), 10))
+          .filter((n) => Number.isInteger(n) && n > 0)
+      : clickedPredictionId !== null
+        ? [clickedPredictionId]
+        : []
 
     const dedupedIds = [...new Set(candidateIds)]
-    if (!dedupedIds.length) {
-      toast({ title: "No predictions available for PDF export", variant: "destructive" })
+    if (!dedupedIds.length || clickedPredictionId === null) {
+      console.error("PDF export failed: missing valid prediction/run identifier", {
+        clickedPredictionId: id,
+        batchParam,
+        searchString,
+      })
+      toast({ title: "PDF export failed", description: "Unable to identify this prediction run.", variant: "destructive" })
       return
     }
+
+    console.info("PDF EXPORT Clicked prediction:", clickedPredictionId, "Resolved run:", dedupedIds, "Predictions found:", dedupedIds.length)
 
     setPdfExporting(true)
     try {
@@ -371,7 +381,7 @@ export default function PredictionResultPage() {
 
       if (!response.ok) {
         const body = await response.json().catch(() => null)
-        throw new Error(body?.error || `Export failed (${response.status})`)
+        throw new Error(body?.error || "PDF export failed. Unable to identify this prediction run.")
       }
 
       const blob = await response.blob()
@@ -402,10 +412,14 @@ export default function PredictionResultPage() {
         }, 1000)
       }
     } catch (error) {
-      console.error("PDF export failed", error)
+      console.error("PDF export failed", {
+        clickedPredictionId,
+        dedupedIds,
+        error,
+      })
       toast({
         title: "PDF export failed",
-        description: error instanceof Error ? error.message : "Please try again.",
+        description: "Unable to identify this prediction run.",
         variant: "destructive",
       })
     } finally {

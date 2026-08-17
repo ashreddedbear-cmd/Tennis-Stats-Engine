@@ -562,16 +562,32 @@ router.post("/predictions", requireClerkUser, predictionLimiter, async (req, res
   }
 });
 
-router.get("/predictions/export-batch", requireClerkUser, async (req, res): Promise<void> => {
-  const idsParam = typeof req.query.ids === "string" ? req.query.ids : typeof req.query.batch === "string" ? req.query.batch : "";
-  const rawIds = idsParam
-    .split(",")
-    .map((part) => Number.parseInt(part.trim(), 10))
-    .filter((n) => Number.isFinite(n));
+function parsePredictionExportIds(req: { query: Record<string, any> }): number[] {
+  const rawCandidates = [
+    req.query.ids,
+    req.query.batch,
+    req.query.runId,
+    req.query.predictionId,
+  ]
+    .flatMap((value) => {
+      if (Array.isArray(value)) return value.map(String)
+      if (typeof value === "string") return value.split(",")
+      if (typeof value === "number") return [String(value)]
+      return []
+    })
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => Number(part))
+    .filter((value) => Number.isInteger(value) && value > 0)
 
-  const uniqueIds = [...new Set(rawIds)];
+  return [...new Set(rawCandidates)];
+}
+
+async function handlePredictionBatchExport(req: any, res: any): Promise<void> {
+  const uniqueIds = parsePredictionExportIds(req);
   if (uniqueIds.length === 0) {
-    res.status(400).json({ error: "No prediction IDs provided for export." });
+    logger.warn({ query: req.query }, "PDF export rejected: no valid prediction IDs/run ids provided");
+    res.status(400).json({ error: "PDF export failed. Unable to identify this prediction run." });
     return;
   }
 
@@ -587,7 +603,8 @@ router.get("/predictions/export-batch", requireClerkUser, async (req, res): Prom
   const orderedRows = uniqueIds.map((id) => rowMap.get(id)).filter(Boolean) as Array<(typeof predictionsTable)['_']['inferSelect']>;
 
   if (orderedRows.length !== uniqueIds.length) {
-    res.status(404).json({ error: "One or more predictions in this run are not available for export." });
+    logger.warn({ uniqueIds, foundCount: orderedRows.length }, "PDF export rejected: some prediction ids in the run were missing");
+    res.status(404).json({ error: "PDF export failed. Unable to identify this prediction run." });
     return;
   }
 
@@ -600,9 +617,11 @@ router.get("/predictions/export-batch", requireClerkUser, async (req, res): Prom
   }
 
   if (orderedRows.length === 0) {
-    res.status(400).json({ error: "No predictions available for export." });
+    res.status(400).json({ error: "PDF export failed. Unable to identify this prediction run." });
     return;
   }
+
+  logger.info({ clickedPredictionId: req.query.predictionId ?? null, resolvedRun: uniqueIds, predictionsFound: orderedRows.length }, "PDF EXPORT");
 
   const doc = new PDFDocument({ margin: 40, size: "A4", layout: "portrait" });
   const fileName = `Tennis_Matrix_${orderedRows.length}_Predictions_${new Date().toISOString().slice(0, 10)}.pdf`;
@@ -611,6 +630,14 @@ router.get("/predictions/export-batch", requireClerkUser, async (req, res): Prom
   doc.pipe(res);
   renderPredictionBatchPdf(doc, orderedRows as Array<Record<string, any>>);
   doc.end();
+}
+
+router.get("/predictions/export/pdf", requireClerkUser, async (req, res): Promise<void> => {
+  await handlePredictionBatchExport(req, res);
+});
+
+router.get("/predictions/export-batch", requireClerkUser, async (req, res): Promise<void> => {
+  await handlePredictionBatchExport(req, res);
 });
 
 router.get("/predictions/:predictionId", requireClerkUser, async (req, res): Promise<void> => {
